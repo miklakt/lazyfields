@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 from typing import Any, Mapping
 import pickle
 
 
 def pickle_load(path: str | Path) -> Mapping[str, Any]: return pickle.loads(Path(path).read_bytes())
+def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_text())
 
 
 def hdf5_load(path: str | Path) -> Mapping[str, Any]:
@@ -28,4 +30,5 @@ LOADERS_BY_SUFFIX = {
     ".pickle": pickle_load,
     ".h5": hdf5_load,
     ".hdf5": hdf5_load,
+    ".json": json_load,
 }
