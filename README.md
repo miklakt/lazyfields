@@ -16,11 +16,21 @@ structure. When you build a reference table:
 - the table gets a `storage_file` column pointing to the row file,
 - the table gets a `non_scalar_keys` column listing deferred fields.
 
-Importing `lazyfields` registers the `.store` pandas accessors. The accessor
-gives pandas rows and tables a mapping-like interface for retrieving persisted
-fields by key or nested path.
+Importing `lazyfields` registers the `.store` pandas accessors.
 
-## Main API
+## How It Works
+
+- `create_reference_table(...)` builds an in-memory pandas DataFrame that points
+  to the stored files.
+- `storage_file` tells pandas where each row's backing file lives.
+- `non_scalar_keys` lists the top-level fields that were left in the file
+  instead of being copied into the DataFrame.
+- `row.store["field"]` loads one field from one stored row.
+- `reference_df.store["field"]` loads that field across all rows as a pandas
+  Series.
+- `row.store["group/subkey"]` uses slash-separated path access for nested
+  values.
+- `row.store[:]` loads the full stored mapping for one row.
 
 ```python
 import lazyfields as lf
@@ -33,8 +43,6 @@ file suffix, and returns a pandas DataFrame. It will pick up `.pkl`, `.json`,
 and `.h5` rows in the same directory. Pass `file_pattern` if you want to
 narrow the scan.
 
-## Lazy Access
-
 ```python
 row = reference_df.iloc[0]
 
@@ -43,11 +51,7 @@ some_array = row.store["some_array_key"]
 all_arrays = reference_df.store["some_array_key"]
 ```
 
-- `row.store[:]` loads the full stored row
-- `row.store["field"]` loads one field from one row
-- `row.store["group/subkey"]` loads a nested field by path
-- `reference_df.store["field"]` loads one field for all rows
-- HDF5 can read a single field directly without loading the full row.
+HDF5 can read a single field directly without loading the full row.
 
 ## Minimal Example
 

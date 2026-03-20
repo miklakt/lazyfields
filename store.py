@@ -34,7 +34,10 @@ def _row_value(path: str | Path, key: str, strict: bool = False) -> Any:
         return pd.NA
 
 
-def _reference_rows(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]:
+def _reference_rows(
+    directory: str | Path = "data", 
+    columns: list[str] | None = None, *, 
+    reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]:
     for storage_path in sorted(
         path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
     ):
@@ -50,17 +53,21 @@ def _reference_rows(directory: str | Path = "data", columns: list[str] | None = 
 
         yield _reference_row(row_data, storage_path, columns=columns, reference_path=reference_path)
 
-
-def create_reference_dict(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]: return list(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern))
-
-
-def create_reference_table(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> pd.DataFrame:
+def create_reference_table(
+    directory: str | Path = "data", 
+    columns: list[str] | None = None, 
+    *, reference_path: str | Path | None = None, 
+    file_pattern: str = "*") -> pd.DataFrame:
     df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern))
     if reference_path is not None: df.attrs["reference_path"] = str(reference_path)
     return df
 
 
-def _reference_row(row_data: Mapping[str, Any], storage_path: Path, *, columns: list[str] | None = None, reference_path: str | Path | None = None) -> dict[str, Any]:
+def _reference_row(
+    row_data: Mapping[str, Any], 
+    storage_path: Path, *, 
+    columns: list[str] | None = None, 
+    reference_path: str | Path | None = None) -> dict[str, Any]:
     row = {k: v for k, v in row_data.items() if pd.api.types.is_scalar(v)}
     if columns is not None:
         row = {k: v for k, v in row.items() if k in columns}
