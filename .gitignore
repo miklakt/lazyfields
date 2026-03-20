@@ -1,6 +1,39 @@
+#Large and temp files
+*.log
+*.bak
+*.tmp
+*.out
+*.err
+
+# Databases and persistent objects
+*.hdf5
+*.h5
+*.pkl
+*.pickle
+data/
+results/
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
+__func_cache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
+*$py.class
+
+# Packaging / build artifacts
 build/
 dist/
+*.egg-info/
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+
+# virtual env
+venv/
+.venv
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+

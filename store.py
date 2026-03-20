@@ -1,108 +1,65 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
-import pickle
-import warnings
+from typing import Any, Mapping
 
 import pandas as pd
 
-
-def is_scalar(value: Any) -> bool:
-    return bool(pd.api.types.is_scalar(value))
+from .persistence import LOADERS_BY_SUFFIX
 
 
-def _pickle_load(path: str | Path) -> Any:
-    with open(path, "rb") as fh:
-        return pickle.load(fh)
-
-
-def _relpath(path: str | Path, base_dir: str | Path | None = None) -> str:
-    path = Path(path)
-    if base_dir is None:
-        return str(path)
+def _load_row(path: str | Path) -> Mapping[str, Any]:
     try:
-        return os.path.relpath(path, start=Path(base_dir))
-    except ValueError:
-        return str(path)
+        return LOADERS_BY_SUFFIX[Path(path).suffix.lower()](path)
+    except KeyError as exc:
+        raise ValueError(f"Could not infer a storage loader from '{Path(path).name}'.") from exc
 
 
-def create_reference_dict(
-    directory: str | Path = "data",
-    columns: list[str] | None = None,
-    *,
-    reference_path: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    directory = Path(directory)
-    rows: list[dict[str, Any]] = []
-    for pickle_path in sorted(directory.glob("*.pkl")):
+def _row_value(path: str | Path, key: str) -> Any:
+    row = _load_row(path)
+    return row.get(key, pd.NA)
+
+
+def _reference_rows(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]:
+    for storage_path in sorted(
+        path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
+    ):
         try:
-            row_data = _pickle_load(pickle_path)
+            row_data = _load_row(storage_path)
         except Exception as exc:
-            print(f"Failed to load {pickle_path.name}: {exc}")
+            print(f"Failed to load {storage_path.name}: {exc}")
             continue
 
         if not isinstance(row_data, Mapping):
-            print(f"Skipping {pickle_path.name}: expected a mapping row dictionary.")
+            print(f"Skipping {storage_path.name}: expected a mapping row dictionary.")
             continue
 
-        rows.append(_reference_row(row_data, pickle_path, columns=columns, reference_path=reference_path))
-
-    return rows
+        yield _reference_row(row_data, storage_path, columns=columns, reference_path=reference_path)
 
 
-def create_reference_table(
-    directory: str | Path = "data",
-    columns: list[str] | None = None,
-    *,
-    reference_path: str | Path | None = None,
-) -> pd.DataFrame:
-    reference_df = pd.DataFrame(create_reference_dict(directory, columns=columns, reference_path=reference_path))
-    if reference_path is not None:
-        reference_df.attrs["reference_path"] = str(reference_path)
-    return reference_df
+def create_reference_dict(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]: return list(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern))
 
 
-def _reference_row(
-    row_data: Mapping[str, Any],
-    pickle_path: Path,
-    *,
-    columns: list[str] | None = None,
-    reference_path: str | Path | None = None,
-) -> dict[str, Any]:
-    """Build one reference-table row from one stored row.
+def create_reference_table(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> pd.DataFrame:
+    df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern))
+    if reference_path is not None: df.attrs["reference_path"] = str(reference_path)
+    return df
 
-    Scalar fields are copied into the reference row, while non-scalar fields
-    remain inside the pickled row file.
-    """
-    row = {key: value for key, value in row_data.items() if is_scalar(value)}
+
+def _reference_row(row_data: Mapping[str, Any], storage_path: Path, *, columns: list[str] | None = None, reference_path: str | Path | None = None) -> dict[str, Any]:
+    row = {k: v for k, v in row_data.items() if pd.api.types.is_scalar(v)}
     if columns is not None:
-        row = {key: value for key, value in row.items() if key in columns}
-
-    reference_dir = Path(reference_path).parent if reference_path is not None else None
-    row["pickle_file"] = _relpath(pickle_path, reference_dir)
-    row["non_scalar_keys"] = [key for key, value in row_data.items() if not is_scalar(value)]
-    row["creation_time"] = datetime.fromtimestamp(pickle_path.stat().st_ctime)
-    return row
-
-
-class LazyPickleList:
-    def __init__(self, files: Iterable[str | Path]):
-        self.files = [str(path) for path in files]
-
-    def __getitem__(self, idx: int | slice) -> Any:
-        if isinstance(idx, slice):
-            return [self[i] for i in range(*idx.indices(len(self.files)))]
-        return _pickle_load(self.files[idx])
-
-    def __len__(self) -> int:
-        return len(self.files)
-
-    def __iter__(self):
-        yield from map(_pickle_load, self.files)
+        row = {k: v for k, v in row.items() if k in columns}
+    base = Path(reference_path).parent if reference_path is not None else None
+    return {
+        **row,
+        "storage_file": str(storage_path) if base is None else os.path.relpath(storage_path, start=base),
+        "non_scalar_keys": [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)],
+        "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
+    }
 
 
-class PickleStorageAccessor:
+class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame):
         self._obj = pandas_obj
         self._base_dir = (
@@ -111,50 +68,27 @@ class PickleStorageAccessor:
             else None
         )
 
-    def _path(self, pickle_path: str | Path) -> Path:
-        path = Path(pickle_path)
+    def _path(self, stored_path: str | Path) -> Path:
+        path = Path(stored_path)
         return path if path.is_absolute() or self._base_dir is None else self._base_dir / path
 
-    def __getitem__(self, keys: str | list[str] | slice) -> Any:
-        files = self._obj["pickle_file"].map(self._path)
-        if keys == slice(None):
-            return LazyPickleList(files.tolist())
-
+    def __getitem__(self, keys):
+        series = isinstance(self._obj, pd.Series)
+        files = self._path(self._obj.storage_file) if series else self._obj["storage_file"].map(self._path)
+        if keys == slice(None): return _load_row(files) if series else [_load_row(path) for path in files]
         if isinstance(keys, str):
-            if keys == "pickle_file":
+            if keys == "storage_file":
                 return files
-            return pd.Series((_pickle_load(path)[keys] for path in files), index=self._obj.index)
-
-        if isinstance(keys, list):
-            return pd.DataFrame({key: self[key] for key in keys}, index=self._obj.index)
-
-        raise TypeError("Keys must be str, list[str], or [:]")
-
-
-class PickleStorageAccessorSeries(PickleStorageAccessor):
-    def __getitem__(self, keys: str | list[str] | slice) -> Any:
-        pickle_file = self._path(self._obj.pickle_file)
-        if keys == slice(None):
-            return _pickle_load(pickle_file)
-
-        if isinstance(keys, str):
-            if keys == "pickle_file":
-                return pickle_file
-            return _pickle_load(pickle_file)[keys]
-
-        if isinstance(keys, list):
-            return {key: self[key] for key in keys}
-
+            if series:
+                return _load_row(files)[keys]
+            values = pd.Series((_row_value(path, keys) for path in files), index=self._obj.index, dtype="object")
+            if values.isna().all():
+                raise KeyError(keys)
+            return values
+        if isinstance(keys, list): return {k: self[k] for k in keys} if series else pd.DataFrame({k: self[k] for k in keys}, index=self._obj.index)
         raise TypeError("Keys must be str, list[str], or [:]")
 
 
 def register_accessors() -> None:
-    if "pkl" in pd.DataFrame._accessors:
-        warnings.warn("DataFrame accessor 'pkl' was already registered; skipping.", stacklevel=2)
-    else:
-        pd.api.extensions.register_dataframe_accessor("pkl")(PickleStorageAccessor)
-
-    if "pkl" in pd.Series._accessors:
-        warnings.warn("Series accessor 'pkl' was already registered; skipping.", stacklevel=2)
-    else:
-        pd.api.extensions.register_series_accessor("pkl")(PickleStorageAccessorSeries)
+    if "store" not in pd.DataFrame._accessors: pd.api.extensions.register_dataframe_accessor("store")(StoreAccessor)
+    if "store" not in pd.Series._accessors: pd.api.extensions.register_series_accessor("store")(StoreAccessor)
