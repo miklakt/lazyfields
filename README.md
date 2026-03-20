@@ -1,17 +1,24 @@
 # lazyfields
 
-`lazyfields` is a small pandas-oriented helper for working with directories of
-persisted row dictionaries.
+`lazyfields` is a small helper built on pandas for working with stored result
+files through an indexed, lazy reference table.
 
-Each stored row file is expected to contain one mapping. When you build a
-reference table:
+It is meant for data that naturally lives as a set of files, such as results
+from a numerical simulation or other batch process. You can inspect and filter
+the results through a lightweight pandas DataFrame without loading everything
+into RAM at once.
+
+Each stored file is expected to contain one mapping, meaning a key-to-value
+structure. When you build a reference table:
 
 - scalar values are copied into the DataFrame,
 - non-scalar values stay in the stored row file,
 - the table gets a `storage_file` column pointing to the row file,
 - the table gets a `non_scalar_keys` column listing deferred fields.
 
-Importing `lazyfields` registers the `.store` pandas accessors.
+Importing `lazyfields` registers the `.store` pandas accessors. The accessor
+gives pandas rows and tables a mapping-like interface for retrieving persisted
+fields by key or nested path.
 
 ## Main API
 
