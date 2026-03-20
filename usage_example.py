@@ -1,10 +1,11 @@
+import json
 import pickle
 from pathlib import Path
 
 try:
     import h5py
 except ImportError as exc:
-    raise ImportError("Install h5py to run the mixed pickle/HDF5 example.") from exc
+    raise ImportError("Install h5py to run the mixed pickle/HDF5/JSON example.") from exc
 
 import lazyfields as lf
 
@@ -25,31 +26,57 @@ sample_rows = [
         "some_float_key1": 1.25,
         "some_float_key2": 10.5,
         "some_string_key": "run-a",
-        "some_image_key": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
-        "some_tensor_key": [[[1, 2], [3, 4]], [[5, 6], [7, 8]]],
+        "some_bool_key": True,
+        "some_2darray_key": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+        "some_3darray_key": [[[1, 2], [3, 4]], [[5, 6], [7, 8]]],
     },
     {
         "some_int_key": 2,
         "some_float_key1": 2.5,
         "some_float_key2": 20.0,
         "some_string_key": "run-b",
-        "some_image_key": [[1.1, 1.2, 1.3], [1.4, 1.5, 1.6]],
-        "some_tensor_key": [[[9, 10], [11, 12]], [[13, 14], [15, 16]]],
+        "some_list_key": ["red", "green", "blue"],
+        "some_2darray_key": [[1.1, 1.2], [1.3, 1.4], [1.5, 1.6]],
+        "some_3darray_key": [[[9, 10], [11, 12], [13, 14]]],
     },
     {
         "some_int_key": 3,
         "some_float_key1": 3.75,
         "some_float_key2": 30.25,
         "some_string_key": "run-c",
-        "some_image_key": [[2.1, 2.2, 2.3], [2.4, 2.5, 2.6]],
-        "some_tensor_key": [[[17, 18], [19, 20]], [[21, 22], [23, 24]]],
+        "some_nested_object_key": {"a": [2.1, 2.2, 2.3], "b": [2.4, 2.5, 2.6]},
+        "some_tags_key": ["json", "row", "three"],
+        "some_matrix_key": [[1, 0], [0, 1]],
+        "some_1darray_key": [0.25, 0.5, 0.75, 1.0],
     },
     {
         "some_int_key": 4,
         "some_float_key1": 4.5,
         "some_float_key2": 40.0,
         "some_string_key": "run-d",
-        "some_nested_object_key": {"a": [2.1, 2.2, 2.3], "b": [2.4, 2.5, 2.6]},
+        "some_nested_object_key": {"a": [3.1, 3.2], "b": [3.3, 3.4]},
+        "some_optional_key": None,
+        "some_vector_key": [4, 5, 6, 7],
+        "some_1darray_key": [10, 20, 30],
+    },
+    {
+        "some_int_key": 5,
+        "some_float_key1": 5.25,
+        "some_float_key2": 50.5,
+        "some_string_key": "run-e",
+        "some_2darray_key": [[2.0, 2.5, 3.0], [3.5, 4.0, 4.5]],
+        "some_3darray_key": [[[1, 0], [0, 1]], [[2, 0], [0, 2]]],
+        "some_metadata_key": {"source": "sim", "batch": 2},
+    },
+    {
+        "some_int_key": 6,
+        "some_float_key1": 6.75,
+        "some_float_key2": 60.0,
+        "some_string_key": "run-f",
+        "some_nested_object_key": {"left": {"a": [1, 2]}, "right": {"b": [3, 4]}},
+        "some_comment_key": "final json row",
+        "some_2darray_key": [[9.1, 9.2], [9.3, 9.4]],
+        "some_1darray_key": [100, 200],
     },
 ]
 
@@ -69,13 +96,19 @@ def write_h5(path: Path, row_data: dict) -> None:
             write_node(fh, key, value)
 
 
+def write_json(path: Path, row_data: dict) -> None:
+    path.write_text(json.dumps(row_data))
+
+
 # %%
 for idx, row_data in enumerate(sample_rows, start=1):
-    if (idx + 1) % 2:
+    if idx % 3 == 1:
         with open(data_dir / f"result_{idx:03d}.pkl", "wb") as fh:
             pickle.dump(row_data, fh, protocol=4)
-    else:
+    elif idx % 3 == 2:
         write_h5(data_dir / f"result_{idx:03d}.h5", row_data)
+    else:
+        write_json(data_dir / f"result_{idx:03d}.json", row_data)
 
 
 # %%
@@ -90,15 +123,71 @@ reference_df.iloc[0].storage_file
 
 
 # %%
-# Load a lazy field that is sparse across rows.
-reference_df.store["some_image_key"]
+# Load a lazy 2d array field that is sparse across rows.
+reference_df.store["some_2darray_key"]
 
 
 # %%
-# Load a lazy field with nested HDF5 hierarchy data.
-reference_df.store["some_nested_object_key"]
+# Load a lazy 1d array field the same way.
+reference_df.store["some_1darray_key"]
+
+
+# %%
+# Load a nested JSON field through the same path syntax.
+display(reference_df.iloc[4].store["some_metadata_key/source"])
+
+
+# %%
+# Load a field from an HDF5-backed row without materializing the full row.
+display(reference_df.iloc[1].store["some_3darray_key"])
+
+
+# %%
+# Load nested HDF5 hierarchy data directly from the stored file.
+display(reference_df.iloc[3].store["some_nested_object_key"])
+
+
+# %%
+# Load one nested subkey from the hierarchy directly.
+display(reference_df.iloc[3].store["some_nested_object_key/a"])
 
 
 # %%
 # Load the full stored row for a single series row.
 reference_df.iloc[-1].store[:]
+
+
+# %%
+# Use a pandas-style lambda filter to keep only rows whose stored file
+# contains a specific deferred key.
+rows_with_2darrays = reference_df[
+    reference_df["non_scalar_keys"].apply(lambda keys: "some_2darray_key" in keys)
+]
+display(rows_with_2darrays[["some_string_key", "non_scalar_keys"]])
+
+
+# %%
+# The same lambda pattern works for 1d array fields too.
+rows_with_1darrays = reference_df[
+    reference_df["non_scalar_keys"].apply(lambda keys: "some_1darray_key" in keys)
+]
+display(rows_with_1darrays[["some_string_key", "non_scalar_keys"]])
+
+
+# %%
+# Use the same pattern for a nested key/subkey path.
+rows_with_nested_a = reference_df[
+    reference_df["non_scalar_keys"].apply(
+        lambda keys: "some_nested_object_key" in keys
+    )
+]
+rows_with_nested_a = rows_with_nested_a[
+    rows_with_nested_a.apply(
+        lambda row: "a" in row.store["some_nested_object_key"],
+        axis=1,
+    )
+]
+display(rows_with_nested_a[["some_string_key", "non_scalar_keys"]])
+display(rows_with_nested_a.store["some_nested_object_key/a"])
+
+# %%

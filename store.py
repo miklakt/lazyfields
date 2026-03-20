@@ -5,7 +5,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
-from .persistence import LOADERS_BY_SUFFIX
+from .persistence import LOADERS_BY_SUFFIX, hdf5_get
 
 
 def _load_row(path: str | Path) -> Mapping[str, Any]:
@@ -15,9 +15,23 @@ def _load_row(path: str | Path) -> Mapping[str, Any]:
         raise ValueError(f"Could not infer a storage loader from '{Path(path).name}'.") from exc
 
 
-def _row_value(path: str | Path, key: str) -> Any:
-    row = _load_row(path)
-    return row.get(key, pd.NA)
+def _path_get(value: Any, key: str) -> Any:
+    for part in key.split("/"):
+        value = value[part]
+    return value
+
+
+def _row_value(path: str | Path, key: str, strict: bool = False) -> Any:
+    path = Path(path)
+    if path.suffix.lower() in {".h5", ".hdf5"}:
+        try: return hdf5_get(path, key)
+        except KeyError:
+            if strict: raise
+            return pd.NA
+    try: return _path_get(_load_row(path), key)
+    except (KeyError, TypeError):
+        if strict: raise
+        return pd.NA
 
 
 def _reference_rows(directory: str | Path = "data", columns: list[str] | None = None, *, reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]:
@@ -80,7 +94,7 @@ class StoreAccessor:
             if keys == "storage_file":
                 return files
             if series:
-                return _load_row(files)[keys]
+                return _row_value(files, keys, strict=True)
             values = pd.Series((_row_value(path, keys) for path in files), index=self._obj.index, dtype="object")
             if values.isna().all():
                 raise KeyError(keys)

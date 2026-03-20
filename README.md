@@ -22,9 +22,9 @@ reference_df = lf.create_reference_table("data")
 ```
 
 `create_reference_table(...)` scans matching files, infers the loader from the
-file suffix, and returns a pandas DataFrame. It will pick up both `.pkl` and
-`.h5` rows in the same directory. Pass `file_pattern` if you want to narrow the
-scan.
+file suffix, and returns a pandas DataFrame. It will pick up `.pkl`, `.json`,
+and `.h5` rows in the same directory. Pass `file_pattern` if you want to
+narrow the scan.
 
 ## Lazy Access
 
@@ -38,7 +38,9 @@ all_arrays = reference_df.store["some_array_key"]
 
 - `row.store[:]` loads the full stored row
 - `row.store["field"]` loads one field from one row
+- `row.store["group/subkey"]` loads a nested field by path
 - `reference_df.store["field"]` loads one field for all rows
+- HDF5 can read a single field directly without loading the full row.
 
 ## Minimal Example
 
