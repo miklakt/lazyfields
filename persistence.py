@@ -57,7 +57,9 @@ def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
             if part: node = node[part]
         if selection is not None:
             return _read_selected(node, h5py, selection)
-        return HDF5DatasetRef(path, key) if isinstance(node, h5py.Dataset) else _read(node, h5py)
+        if isinstance(node, h5py.Dataset):
+            return _read(node, h5py) if getattr(node, "shape", None) == () else HDF5DatasetRef(path, key)
+        return _read(node, h5py)
 
 
 LOADERS_BY_SUFFIX = {

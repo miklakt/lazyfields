@@ -129,7 +129,7 @@ reference_df.store["some_2darray_key"]
 
 # %%
 # Load a nested JSON field through the same path syntax.
-display(reference_df.iloc[4].store["some_metadata_key/source"])
+reference_df.iloc[4].store["some_metadata_key"]
 
 
 # %% [markdown]
@@ -142,8 +142,8 @@ display(reference_df.iloc[4].store["some_metadata_key/source"])
 # 2. `row.store["some_2darray_key"]` calls `StoreAccessor.__getitem__`.
 # 3. The accessor resolves the row's `storage_file` column and asks the loader
 #    for the field.
-# 4. For HDF5 rows, `hdf5_get(...)` returns a lazy `HDF5DatasetRef` instead of
-#    materializing the whole dataset.
+# 4. For non-scalar HDF5 datasets, `hdf5_get(...)` returns a lazy
+#    `HDF5DatasetRef` instead of materializing the whole dataset.
 # 5. `[0:1]` is then applied to that proxy.
 # 6. The proxy calls `hdf5_get(..., selection=slice(0, 1))`.
 # 7. `hdf5_get(...)` applies the HDF5 hyperslab read and only loads the
@@ -152,7 +152,7 @@ display(reference_df.iloc[4].store["some_metadata_key/source"])
 
 # %%
 # Read only a hyperslab from the HDF5 dataset through chained indexing.
-display(reference_df.iloc[1].store["some_2darray_key"][0:1])
+reference_df.iloc[1].store["some_2darray_key"][0:1]
 
 
 # %%
@@ -171,6 +171,6 @@ reference_df.iloc[1:3].store[:]
 rows_with_2darrays = reference_df[
     reference_df["non_scalar_keys"].apply(lambda keys: "some_2darray_key" in keys)
 ]
-display(rows_with_2darrays[["some_string_key", "non_scalar_keys"]])
+rows_with_2darrays[["some_string_key", "non_scalar_keys"]]
 
 # %%
