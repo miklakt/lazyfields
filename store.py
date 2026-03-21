@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import pandas as pd
 
@@ -25,19 +25,24 @@ def _row_value(path: str | Path, key: str, strict: bool = False) -> Any:
     path = Path(path)
     if path.suffix.lower() in {".h5", ".hdf5"}:
         try: return hdf5_get(path, key)
-        except KeyError:
+        except (KeyError, TypeError):
             if strict: raise
             return pd.NA
-    try: return _path_get(_load_row(path), key)
+    try:
+        return _path_get(_load_row(path), key)
     except (KeyError, TypeError):
         if strict: raise
         return pd.NA
 
 
+def _stored_row(path: str | Path, keys: list[str]) -> dict[str, Any]:
+    return {key: _row_value(path, key, strict=True) for key in keys}
+
+
 def _reference_rows(
     directory: str | Path = "data", 
     columns: list[str] | None = None, *, 
-    reference_path: str | Path | None = None, file_pattern: str = "*") -> list[dict[str, Any]]:
+    reference_path: str | Path | None = None, file_pattern: str = "*") -> Iterator[dict[str, Any]]:
     for storage_path in sorted(
         path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
     ):
@@ -96,10 +101,11 @@ class StoreAccessor:
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
         files = self._path(self._obj.storage_file) if series else self._obj["storage_file"].map(self._path)
-        if keys == slice(None): return _load_row(files) if series else [_load_row(path) for path in files]
+        if keys == slice(None):
+            return _stored_row(files, self._obj.non_scalar_keys) if series else [
+                _stored_row(path, row_keys) for path, row_keys in zip(files, self._obj["non_scalar_keys"])
+            ]
         if isinstance(keys, str):
-            if keys == "storage_file":
-                return files
             if series:
                 return _row_value(files, keys, strict=True)
             values = pd.Series((_row_value(path, keys) for path in files), index=self._obj.index, dtype="object")

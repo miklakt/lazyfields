@@ -23,6 +23,7 @@ Importing `lazyfields` registers the `.store` pandas accessors.
 - `create_reference_table(...)` builds an in-memory pandas DataFrame that points
   to the stored files.
 - `storage_file` tells pandas where each row's backing file lives.
+- `storage_file` is a normal DataFrame column, not a `.store` field.
 - `non_scalar_keys` lists the top-level fields that were left in the file
   instead of being copied into the DataFrame.
 - `row.store["field"]` loads one field from one stored row.
@@ -30,7 +31,9 @@ Importing `lazyfields` registers the `.store` pandas accessors.
   Series.
 - `row.store["group/subkey"]` uses slash-separated path access for nested
   values.
-- `row.store[:]` loads the full stored mapping for one row.
+- `row.store["dataset"][slice(...)]` forwards an HDF5 slice to the final
+  dataset without loading the whole array.
+- `row.store[:]` loads only the deferred fields for one row.
 
 ```python
 import lazyfields as lf
@@ -46,12 +49,13 @@ narrow the scan.
 ```python
 row = reference_df.iloc[0]
 
-full_row = row.store[:]
+deferred_fields = row.store[:]
 some_array = row.store["some_array_key"]
 all_arrays = reference_df.store["some_array_key"]
 ```
 
-HDF5 can read a single field directly without loading the full row.
+HDF5 can read a single stored field directly without loading the whole backing
+file.
 
 ## Minimal Example
 

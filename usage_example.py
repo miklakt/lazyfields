@@ -128,66 +128,49 @@ reference_df.store["some_2darray_key"]
 
 
 # %%
-# Load a lazy 1d array field the same way.
-reference_df.store["some_1darray_key"]
-
-
-# %%
 # Load a nested JSON field through the same path syntax.
 display(reference_df.iloc[4].store["some_metadata_key/source"])
 
 
-# %%
-# Load a field from an HDF5-backed row without materializing the full row.
-display(reference_df.iloc[1].store["some_3darray_key"])
+# %% [markdown]
+# ### HDF5 hyperslab chain
+#
+# `reference_df.iloc[1].store["some_2darray_key"][0:1]` works in two steps:
+#
+# 1. `reference_df.iloc[1]` is handled by pandas first, producing a Series row
+#    object.
+# 2. `row.store["some_2darray_key"]` calls `StoreAccessor.__getitem__`.
+# 3. The accessor resolves the row's `storage_file` column and asks the loader
+#    for the field.
+# 4. For HDF5 rows, `hdf5_get(...)` returns a lazy `HDF5DatasetRef` instead of
+#    materializing the whole dataset.
+# 5. `[0:1]` is then applied to that proxy.
+# 6. The proxy calls `hdf5_get(..., selection=slice(0, 1))`.
+# 7. `hdf5_get(...)` applies the HDF5 hyperslab read and only loads the
+#    selected slice.
 
 
 # %%
-# Load nested HDF5 hierarchy data directly from the stored file.
-display(reference_df.iloc[3].store["some_nested_object_key"])
+# Read only a hyperslab from the HDF5 dataset through chained indexing.
+display(reference_df.iloc[1].store["some_2darray_key"][0:1])
 
 
 # %%
-# Load one nested subkey from the hierarchy directly.
-display(reference_df.iloc[3].store["some_nested_object_key/a"])
-
-
-# %%
-# Load the full stored row for a single series row.
+# Load only the deferred fields for a single row.
 reference_df.iloc[-1].store[:]
 
 
 # %%
-# Use a pandas-style lambda filter to keep only rows whose stored file
-# contains a specific deferred key.
+# The same rule applies to a row slice.
+reference_df.iloc[1:3].store[:]
+
+
+# %%
+# Use a pandas-style lambda filter to keep only rows whose stored file contains
+# a specific deferred key.
 rows_with_2darrays = reference_df[
     reference_df["non_scalar_keys"].apply(lambda keys: "some_2darray_key" in keys)
 ]
 display(rows_with_2darrays[["some_string_key", "non_scalar_keys"]])
-
-
-# %%
-# The same lambda pattern works for 1d array fields too.
-rows_with_1darrays = reference_df[
-    reference_df["non_scalar_keys"].apply(lambda keys: "some_1darray_key" in keys)
-]
-display(rows_with_1darrays[["some_string_key", "non_scalar_keys"]])
-
-
-# %%
-# Use the same pattern for a nested key/subkey path.
-rows_with_nested_a = reference_df[
-    reference_df["non_scalar_keys"].apply(
-        lambda keys: "some_nested_object_key" in keys
-    )
-]
-rows_with_nested_a = rows_with_nested_a[
-    rows_with_nested_a.apply(
-        lambda row: "a" in row.store["some_nested_object_key"],
-        axis=1,
-    )
-]
-display(rows_with_nested_a[["some_string_key", "non_scalar_keys"]])
-display(rows_with_nested_a.store["some_nested_object_key/a"])
 
 # %%
