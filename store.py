@@ -21,23 +21,25 @@ def _path_get(value: Any, key: str) -> Any:
     return value
 
 
-def _row_value(path: str | Path, key: str, strict: bool = False) -> Any:
+def _select(value: Any, selection: Any | None) -> Any:
+    return value if selection is None else value[selection]
+
+
+def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
     path = Path(path)
     if path.suffix.lower() in {".h5", ".hdf5"}:
-        try: return hdf5_get(path, key)
+        try:
+            return hdf5_get(path, key, selection=selection)
         except (KeyError, TypeError):
-            if strict: raise
+            if strict:
+                raise
             return pd.NA
     try:
-        return _path_get(_load_row(path), key)
+        return _select(_path_get(_load_row(path), key), selection)
     except (KeyError, TypeError):
-        if strict: raise
+        if strict:
+            raise
         return pd.NA
-
-
-def _stored_row(path: str | Path, keys: list[str]) -> dict[str, Any]:
-    return {key: _row_value(path, key, strict=True) for key in keys}
-
 
 def _reference_rows(
     directory: str | Path = "data", 
@@ -102,18 +104,27 @@ class StoreAccessor:
         series = isinstance(self._obj, pd.Series)
         files = self._path(self._obj.storage_file) if series else self._obj["storage_file"].map(self._path)
         if keys == slice(None):
-            return _stored_row(files, self._obj.non_scalar_keys) if series else [
-                _stored_row(path, row_keys) for path, row_keys in zip(files, self._obj["non_scalar_keys"])
-            ]
+            return _load_row(files) if series else [_load_row(path) for path in files]
+
+        selection = None
+        if isinstance(keys, tuple):
+            if len(keys) != 2 or not isinstance(keys[0], str):
+                raise TypeError("Tuple access must be ('field', selection).")
+            keys, selection = keys
+
         if isinstance(keys, str):
             if series:
-                return _row_value(files, keys, strict=True)
-            values = pd.Series((_row_value(path, keys) for path in files), index=self._obj.index, dtype="object")
+                return _row_value(files, keys, strict=True, selection=selection)
+            values = pd.Series(
+                (_row_value(path, keys, selection=selection) for path in files),
+                index=self._obj.index,
+                dtype="object",
+            )
             if values.isna().all():
                 raise KeyError(keys)
             return values
         if isinstance(keys, list): return {k: self[k] for k in keys} if series else pd.DataFrame({k: self[k] for k in keys}, index=self._obj.index)
-        raise TypeError("Keys must be str, list[str], or [:]")
+        raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
 
 
 def register_accessors() -> None:

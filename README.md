@@ -31,9 +31,9 @@ Importing `lazyfields` registers the `.store` pandas accessors.
   Series.
 - `row.store["group/subkey"]` uses slash-separated path access for nested
   values.
-- `row.store["dataset"][slice(...)]` forwards an HDF5 slice to the final
-  dataset without loading the whole array.
-- `row.store[:]` loads only the deferred fields for one row.
+- `row.store["dataset", slice(...)]` lets HDF5-backed rows forward that
+  selection to the final dataset without loading the whole array first.
+- `row.store[:]` loads the full stored row for one reference row.
 
 ```python
 import lazyfields as lf
@@ -49,8 +49,9 @@ narrow the scan.
 ```python
 row = reference_df.iloc[0]
 
-deferred_fields = row.store[:]
+stored_row = row.store[:]
 some_array = row.store["some_array_key"]
+some_slice = row.store["some_array_key", 0:10]
 all_arrays = reference_df.store["some_array_key"]
 ```
 
