@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 import pandas as pd
 
@@ -44,7 +44,9 @@ def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: A
 def _reference_rows(
     directory: str | Path = "data", 
     columns: list[str] | None = None, *, 
-    reference_path: str | Path | None = None, file_pattern: str = "*") -> Iterator[dict[str, Any]]:
+    reference_path: str | Path | None = None, file_pattern: str = "*",
+    preprocessor: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+) -> Iterator[dict[str, Any]]:
     for storage_path in sorted(
         path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
     ):
@@ -58,14 +60,42 @@ def _reference_rows(
             print(f"Skipping {storage_path.name}: expected a mapping row dictionary.")
             continue
 
-        yield _reference_row(row_data, storage_path, columns=columns, reference_path=reference_path)
+        non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
+        processed_row_data = row_data
+        if preprocessor is not None:
+            try:
+                processed_row_data = preprocessor(row_data) or row_data
+            except Exception as exc:
+                print(f"Failed to preprocess {storage_path.name}: {exc}")
+                continue
+            if not isinstance(processed_row_data, Mapping):
+                print(f"Skipping {storage_path.name}: preprocessor must return a mapping or None.")
+                continue
+
+        yield _reference_row(
+            processed_row_data,
+            storage_path,
+            columns=columns,
+            reference_path=reference_path,
+            non_scalar_keys=non_scalar_keys,
+        )
 
 def create_reference_table(
     directory: str | Path = "data", 
     columns: list[str] | None = None, 
     *, reference_path: str | Path | None = None, 
-    file_pattern: str = "*") -> pd.DataFrame:
-    df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern))
+    file_pattern: str = "*",
+    preprocessor: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+) -> pd.DataFrame:
+    df = pd.DataFrame(
+        _reference_rows(
+            directory,
+            columns,
+            reference_path=reference_path,
+            file_pattern=file_pattern,
+            preprocessor=preprocessor,
+        )
+    )
     if reference_path is not None: df.attrs["reference_path"] = str(reference_path)
     return df
 
@@ -74,7 +104,9 @@ def _reference_row(
     row_data: Mapping[str, Any], 
     storage_path: Path, *, 
     columns: list[str] | None = None, 
-    reference_path: str | Path | None = None) -> dict[str, Any]:
+    reference_path: str | Path | None = None,
+    non_scalar_keys: list[str] | None = None,
+) -> dict[str, Any]:
     row = {k: v for k, v in row_data.items() if pd.api.types.is_scalar(v)}
     if columns is not None:
         row = {k: v for k, v in row.items() if k in columns}
@@ -82,7 +114,7 @@ def _reference_row(
     return {
         **row,
         "storage_file": str(storage_path) if base is None else os.path.relpath(storage_path, start=base),
-        "non_scalar_keys": [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)],
+        "non_scalar_keys": non_scalar_keys if non_scalar_keys is not None else [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)],
         "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
     }
 

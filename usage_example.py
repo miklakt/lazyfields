@@ -118,6 +118,23 @@ display(reference_df)
 
 
 # %%
+# Use a preprocessor to unnest a nested array element into a scalar reference column.
+def unnest_a_0(row_data: dict) -> None:
+    nested = row_data.get("some_nested_object_key")
+    if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
+        row_data["a_0"] = nested["a"][0]
+
+
+reference_with_a_0_df = lf.create_reference_table(data_dir, preprocessor=unnest_a_0)
+display(reference_with_a_0_df[["some_string_key", "a_0"]])
+
+
+# %%
+# The stored row is unchanged; only the reference table got the derived scalar.
+reference_with_a_0_df.iloc[3].store["some_nested_object_key"]
+
+
+# %%
 # Load the backing file path for a single row.
 reference_df.iloc[0].storage_file
 
