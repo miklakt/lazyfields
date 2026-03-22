@@ -118,20 +118,43 @@ display(reference_df)
 
 
 # %%
-# Use a preprocessor to unnest a nested array element into a scalar reference column.
+# Use `pipe=[...]` to unnest a nested array element into a scalar reference column.
 def unnest_a_0(row_data: dict) -> None:
     nested = row_data.get("some_nested_object_key")
     if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
         row_data["a_0"] = nested["a"][0]
 
 
-reference_with_a_0_df = lf.create_reference_table(data_dir, preprocessor=unnest_a_0)
+reference_with_a_0_df = lf.create_reference_table(data_dir, pipe=[unnest_a_0])
 display(reference_with_a_0_df[["some_string_key", "a_0"]])
 
 
 # %%
 # The stored row is unchanged; only the reference table got the derived scalar.
 reference_with_a_0_df.iloc[3].store["some_nested_object_key"]
+
+
+# %%
+# A filter step returns `True` to keep a row and `False` to skip it.
+def keep_a_0_ge_3(row_data: dict) -> bool:
+    return row_data.get("a_0", 0) >= 3.0
+
+
+reference_filtered_df = lf.create_reference_table(
+    data_dir,
+    pipe=[unnest_a_0, keep_a_0_ge_3],
+)
+display(reference_filtered_df[["some_string_key", "a_0"]])
+
+
+# %%
+# A nested block applies temporary preprocessing for filtering only.
+reference_scoped_filter_df = lf.create_reference_table(
+    data_dir,
+    pipe=[[unnest_a_0, keep_a_0_ge_3]],
+)
+display(reference_scoped_filter_df[["some_string_key"]])
+"a_0" in reference_scoped_filter_df.columns
 
 
 # %%

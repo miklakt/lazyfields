@@ -46,7 +46,39 @@ file suffix, and returns a pandas DataFrame. It will pick up `.pkl`, `.json`,
 and `.h5` rows in the same directory. Pass `file_pattern` if you want to
 narrow the scan.
 
+You can also customize reference-table construction with `pipe=[...]`, a list
+of row-wise callbacks applied in order.
+
+- a callback may mutate the loaded row in place and return `None`
+- a callback may return a new mapping to replace the current row view
+- a callback may return `True` or `False` to keep or skip the row
+- a nested list defines a scoped filter block; its last step must be a filter,
+  and any preprocessing inside that block is temporary
+
+These hooks only affect the reference table. The stored files remain unchanged,
+and `.store[...]` still reads the original row data from `storage_file`.
+
 ```python
+reference_df = lf.create_reference_table("data")
+
+def unnest_a_0(row_data):
+    nested = row_data.get("some_nested_object_key")
+    if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
+        row_data["a_0"] = nested["a"][0]
+
+def keep_a_0(row_data):
+    return row_data.get("a_0", 0) >= 3.0
+
+reference_with_a_0_df = lf.create_reference_table("data", pipe=[unnest_a_0])
+reference_filtered_df = lf.create_reference_table(
+    "data",
+    pipe=[unnest_a_0, keep_a_0],
+)
+reference_scoped_filter_df = lf.create_reference_table(
+    "data",
+    pipe=[[unnest_a_0, keep_a_0]],
+)
+
 row = reference_df.iloc[0]
 
 stored_row = row.store[:]
@@ -54,6 +86,9 @@ some_array = row.store["some_array_key"]
 some_slice = row.store["some_array_key", 0:10]
 all_arrays = reference_df.store["some_array_key"]
 ```
+
+In `pipe=[[unnest_a_0, keep_a_0]]`, `unnest_a_0` is only used to evaluate the
+filter and does not add `a_0` to the final reference table.
 
 HDF5 can read a single stored field directly without loading the whole backing
 file.

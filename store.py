@@ -1,7 +1,8 @@
 import os
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 import pandas as pd
 
@@ -41,11 +42,26 @@ def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: A
             raise
         return pd.NA
 
+
+def _apply_pipe(row_data: Mapping[str, Any], pipe: list[Any] | None, *, scoped: bool = False) -> Mapping[str, Any] | bool:
+    last_was_filter = False
+    for step in pipe or []:
+        result = _apply_pipe(deepcopy(row_data), step, scoped=True) if isinstance(step, list) else step(row_data)
+        if result is None: last_was_filter = False
+        elif isinstance(result, Mapping): row_data, last_was_filter = result, False
+        elif isinstance(result, bool):
+            if not result: return False
+            last_was_filter = True
+        else: raise TypeError("Pipe callbacks must return a mapping, bool, or None.")
+    if scoped and not last_was_filter: raise TypeError("Scoped pipe blocks must end with a filter.")
+    return True if scoped else row_data
+
+
 def _reference_rows(
     directory: str | Path = "data", 
     columns: list[str] | None = None, *, 
     reference_path: str | Path | None = None, file_pattern: str = "*",
-    preprocessor: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+    pipe: list[Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     for storage_path in sorted(
         path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
@@ -61,16 +77,13 @@ def _reference_rows(
             continue
 
         non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
-        processed_row_data = row_data
-        if preprocessor is not None:
-            try:
-                processed_row_data = preprocessor(row_data) or row_data
-            except Exception as exc:
-                print(f"Failed to preprocess {storage_path.name}: {exc}")
-                continue
-            if not isinstance(processed_row_data, Mapping):
-                print(f"Skipping {storage_path.name}: preprocessor must return a mapping or None.")
-                continue
+        try:
+            processed_row_data = _apply_pipe(row_data, pipe)
+        except Exception as exc:
+            print(f"Failed to apply pipe to {storage_path.name}: {exc}")
+            continue
+        if processed_row_data is False:
+            continue
 
         yield _reference_row(
             processed_row_data,
@@ -80,22 +93,15 @@ def _reference_rows(
             non_scalar_keys=non_scalar_keys,
         )
 
+
 def create_reference_table(
     directory: str | Path = "data", 
     columns: list[str] | None = None, 
     *, reference_path: str | Path | None = None, 
     file_pattern: str = "*",
-    preprocessor: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+    pipe: list[Any] | None = None,
 ) -> pd.DataFrame:
-    df = pd.DataFrame(
-        _reference_rows(
-            directory,
-            columns,
-            reference_path=reference_path,
-            file_pattern=file_pattern,
-            preprocessor=preprocessor,
-        )
-    )
+    df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern, pipe=pipe))
     if reference_path is not None: df.attrs["reference_path"] = str(reference_path)
     return df
 
