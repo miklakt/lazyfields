@@ -102,7 +102,8 @@ def create_reference_table(
     pipe: list[Any] | None = None,
 ) -> pd.DataFrame:
     df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern, pipe=pipe))
-    if reference_path is not None: df.attrs["reference_path"] = str(reference_path)
+    if reference_path is not None:
+        df.attrs["reference_path"] = str(reference_path)
     return df
 
 
@@ -128,11 +129,16 @@ def _reference_row(
 class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame):
         self._obj = pandas_obj
-        self._base_dir = (
-            Path(pandas_obj.attrs["reference_path"]).parent
-            if "reference_path" in pandas_obj.attrs
-            else None
-        )
+
+    def rebase_reference_paths(self, reference_path: str | Path) -> pd.DataFrame:
+        self._obj.attrs["reference_path"] = str(reference_path)
+        return self._obj
+
+    @property
+    def _base_dir(self) -> Path | None:
+        if "reference_path" not in self._obj.attrs:
+            return None
+        return Path(self._obj.attrs["reference_path"]).parent
 
     def _path(self, stored_path: str | Path) -> Path:
         path = Path(stored_path)

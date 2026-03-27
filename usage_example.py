@@ -1,6 +1,9 @@
+import os
 import json
 import pickle
 from pathlib import Path
+
+import pandas as pd
 
 try:
     import h5py
@@ -160,6 +163,31 @@ display(reference_scoped_filter_df[["some_string_key"]])
 # %%
 # Load the backing file path for a single row.
 reference_df.iloc[0].storage_file
+
+
+# %%
+# Simulate loading the pickled table from a different working directory and
+# re-resolve its storage paths so relative storage files still resolve.
+
+reference_table_path = root_dir / "reference_df.pkl"
+print(f"Writing reference table to {reference_table_path}")
+reference_df.to_pickle(reference_table_path)
+
+other_cwd = root_dir / "other_cwd"
+other_cwd.mkdir(exist_ok=True)
+original_cwd = Path.cwd()
+try:
+    print(f"Switching working directory from {original_cwd} to {other_cwd}")
+    os.chdir(other_cwd)
+    print("Loading the pickled table from its saved path with pandas")
+    loaded_reference_df = pd.read_pickle(reference_table_path)
+    print("Rebasing reference paths through the store accessor")
+    loaded_reference_df = loaded_reference_df.store.rebase_reference_paths(__file__)
+    print("Resolving a stored value from the reloaded table")
+    print(loaded_reference_df.iloc[0].store["some_string_key"])
+finally:
+    print(f"Restoring working directory to {original_cwd}")
+    os.chdir(original_cwd)
 
 
 # %%
