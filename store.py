@@ -1,4 +1,5 @@
 import os
+import warnings
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -16,9 +17,51 @@ def _load_row(path: str | Path) -> Mapping[str, Any]:
         raise ValueError(f"Could not infer a storage loader from '{Path(path).name}'.") from exc
 
 
-def _path_get(value: Any, key: str) -> Any:
+def _path_parts(key: str) -> Iterator[tuple[str, bool]]:
     for part in key.split("/"):
-        value = value[part]
+        if not part:
+            continue
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}:
+            yield part[1:-1], True
+        else:
+            yield part, False
+
+
+def _int_like(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _mapping_get(value: Mapping[str, Any], part: str, *, quoted: bool) -> Any:
+    int_part = _int_like(part)
+    if quoted:
+        if int_part is not None:
+            warnings.warn(
+                f"Quoted path segment {part!r} is treating the segment as a string key.",
+                stacklevel=4,
+            )
+        return value[part]
+    if part in value:
+        return value[part]
+    if int_part is not None:
+        if int_part in value:
+            return value[int_part]
+        if part in value:
+            return value[part]
+    return value[part]
+
+
+def _path_get(value: Any, key: str) -> Any:
+    for part, quoted in _path_parts(key):
+        if isinstance(value, Mapping):
+            value = _mapping_get(value, part, quoted=quoted)
+        elif not quoted:
+            int_part = _int_like(part)
+            value = value[int_part if int_part is not None else part]
+        else:
+            value = value[part]
     return value
 
 
@@ -37,7 +80,7 @@ def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: A
             return pd.NA
     try:
         return _select(_path_get(_load_row(path), key), selection)
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, IndexError):
         if strict:
             raise
         return pd.NA

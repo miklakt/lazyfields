@@ -4,22 +4,19 @@ import pickle
 from pathlib import Path
 
 import pandas as pd
-
-try:
-    import h5py
-except ImportError as exc:
-    raise ImportError("Install h5py to run the mixed pickle/HDF5/JSON example.") from exc
-
+import h5py
 import lazyfields as lf
-
 
 # %%
 root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
 data_dir.mkdir(parents=True, exist_ok=True)
-for path in data_dir.iterdir():
+nested_data_dir = data_dir / "nested"
+for path in sorted(data_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
     if path.is_file():
         path.unlink()
+    elif path.is_dir():
+        path.rmdir()
 
 
 # %%
@@ -77,9 +74,18 @@ sample_rows = [
         "some_float_key2": 60.0,
         "some_string_key": "run-f",
         "some_nested_object_key": {"left": {"a": [1, 2]}, "right": {"b": [3, 4]}},
-        "some_comment_key": "final json row",
         "some_2darray_key": [[9.1, 9.2], [9.3, 9.4]],
         "some_1darray_key": [100, 200],
+    },
+    {
+        "some_int_key": 7,
+        "some_float_key1": 7.05,
+        "some_float_key2": 70.0,
+        "some_string_key": "run-g",
+        "some_nested_object_key": [{"a": [1, 2], "b": [3, 4]}, {"c": [5, 6, 7]}],
+        "some_2darray_key": [[9.1, 9.2], [9.3, 9.4]],
+        "some_1darray_key": [100, 200],
+        "some_comment_key": "final json row",
     },
 ]
 
@@ -111,19 +117,22 @@ for idx, row_data in enumerate(sample_rows, start=1):
     elif idx % 3 == 2:
         write_h5(data_dir / f"result_{idx:03d}.h5", row_data)
     else:
-        write_json(data_dir / f"result_{idx:03d}.json", row_data)
+        target_dir = nested_data_dir if idx == len(sample_rows) else data_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        write_json(target_dir / f"result_{idx:03d}.json", row_data)
 
 
 # %%
 # Build a reference table from mixed pickle and HDF5 files.
 
-reference_df = lf.create_reference_table("data")
+reference_df = lf.create_reference_table("data", search_subdirectories=True)
 display(reference_df)
 
 
 # %%
 # Set `search_subdirectories=True` to include matching files in nested folders.
-# reference_recursive_df = lf.create_reference_table(data_dir, search_subdirectories=True)
+reference_recursive_df = lf.create_reference_table(data_dir, search_subdirectories=True)
+display(reference_recursive_df[["some_string_key", "storage_file"]])
 
 
 # %%
@@ -169,31 +178,6 @@ display(reference_scoped_filter_df[["some_string_key"]])
 # %%
 # Load the backing file path for a single row.
 reference_df.iloc[0].storage_file
-
-
-# %%
-# Simulate loading the pickled table from a different working directory and
-# re-resolve its storage paths so relative storage files still resolve.
-
-reference_table_path = root_dir / "reference_df.pkl"
-print(f"Writing reference table to {reference_table_path}")
-reference_df.to_pickle(reference_table_path)
-
-other_cwd = root_dir / "other_cwd"
-other_cwd.mkdir(exist_ok=True)
-original_cwd = Path.cwd()
-try:
-    print(f"Switching working directory from {original_cwd} to {other_cwd}")
-    os.chdir(other_cwd)
-    print("Loading the pickled table from its saved path with pandas")
-    loaded_reference_df = pd.read_pickle(reference_table_path)
-    print("Rebasing reference paths through the store accessor")
-    loaded_reference_df = loaded_reference_df.store.rebase_reference_paths(__file__)
-    print("Resolving a stored value from the reloaded table")
-    print(loaded_reference_df.iloc[0].store["some_string_key"])
-finally:
-    print(f"Restoring working directory to {original_cwd}")
-    os.chdir(original_cwd)
 
 
 # %%
@@ -244,4 +228,9 @@ rows_with_2darrays = reference_df[
 ]
 rows_with_2darrays[["some_string_key", "non_scalar_keys"]]
 
+# %%
+# Access a nested field using slash-separated key notation.
+reference_df.store["some_nested_object_key/a"]
+# %%
+reference_df.store['some_nested_object_key/1']
 # %%
