@@ -74,9 +74,11 @@ reference_df = lf.create_reference_table("data")
 ```
 
 `create_reference_table(...)` scans matching files, infers the loader from the
-file suffix. Pass `file_pattern` if you want to narrow the scan. If you need to
-save or reload a reference table elsewhere, pass `reference_path=...` so
-relative `storage_file` values still resolve correctly through `.store[...]`.
+file suffix. Pass `file_pattern` if you want to narrow the scan, or
+`search_subdirectories=True` to include matching files below nested folders. If
+you need to save or reload a reference table elsewhere, pass
+`reference_path=...` so relative `storage_file` values still resolve correctly
+through `.store[...]`.
 
 You can also customize reference-table construction with `pipe=[...]`, a list
 of row-wise callbacks applied in order.

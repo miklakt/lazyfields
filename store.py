@@ -61,10 +61,12 @@ def _reference_rows(
     directory: str | Path = "data", 
     columns: list[str] | None = None, *, 
     reference_path: str | Path | None = None, file_pattern: str = "*",
+    search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
+    scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
     for storage_path in sorted(
-        path for path in Path(directory).glob(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
+        path for path in scan(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
     ):
         try:
             row_data = _load_row(storage_path)
@@ -99,9 +101,19 @@ def create_reference_table(
     columns: list[str] | None = None, 
     *, reference_path: str | Path | None = None, 
     file_pattern: str = "*",
+    search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
 ) -> pd.DataFrame:
-    df = pd.DataFrame(_reference_rows(directory, columns, reference_path=reference_path, file_pattern=file_pattern, pipe=pipe))
+    df = pd.DataFrame(
+        _reference_rows(
+            directory,
+            columns,
+            reference_path=reference_path,
+            file_pattern=file_pattern,
+            search_subdirectories=search_subdirectories,
+            pipe=pipe,
+        )
+    )
     if reference_path is not None:
         df.attrs["reference_path"] = str(reference_path)
     return df

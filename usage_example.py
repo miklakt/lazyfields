@@ -14,7 +14,7 @@ import lazyfields as lf
 
 
 # %%
-root_dir = Path(__file__).resolve().parent
+root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
 data_dir.mkdir(parents=True, exist_ok=True)
 for path in data_dir.iterdir():
@@ -116,8 +116,14 @@ for idx, row_data in enumerate(sample_rows, start=1):
 
 # %%
 # Build a reference table from mixed pickle and HDF5 files.
-reference_df = lf.create_reference_table(data_dir)
+
+reference_df = lf.create_reference_table("data")
 display(reference_df)
+
+
+# %%
+# Set `search_subdirectories=True` to include matching files in nested folders.
+# reference_recursive_df = lf.create_reference_table(data_dir, search_subdirectories=True)
 
 
 # %%
