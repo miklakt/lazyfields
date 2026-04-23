@@ -1,3 +1,5 @@
+import atexit
+import hashlib
 import json
 import pickle
 import shutil
@@ -5,7 +7,6 @@ import tarfile
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Mapping
 
 
@@ -79,6 +80,8 @@ _DIRECT_LOADERS_BY_SUFFIX = {
 
 _ARCHIVE_SUFFIXES = (".tar.gz2", ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip")
 _ARCHIVE_LOADER_SUFFIXES = (".zip", ".tgz", ".tbz2", ".txz", ".gz", ".gz2", ".bz2", ".xz")
+_CACHE_DIR_NAME = "__lazyfields__"
+_CACHE_ROOTS: set[Path] = set()
 
 
 def archive_suffix(path: str | Path) -> str | None:
@@ -114,15 +117,57 @@ def _archive_member(path: str | Path, files: list[tuple[Any, str]], kind: str) -
 
 def _inner_filename(filename: str, suffix: str) -> str:
     name = Path(filename).name
-    if not name or Path(name).suffix.lower() != suffix:
-        return f"inner_file{suffix}"
-    return name
+    return name if name and Path(name).suffix.lower() == suffix else f"inner_file{suffix}"
 
 
-def _copy_member(source: Any, temp_dir: str, filename: str, suffix: str) -> Path:
-    inner_path = Path(temp_dir) / _inner_filename(filename, suffix)
-    with source, inner_path.open("wb") as target:
-        shutil.copyfileobj(source, target)
+def _cleanup_caches() -> None:
+    for root in list(_CACHE_ROOTS):
+        shutil.rmtree(root, ignore_errors=True)
+
+
+atexit.register(_cleanup_caches)
+
+
+def _archive_key(path: Path) -> str:
+    stat = path.stat()
+    data = f"{path.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}".encode()
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _cache_root(path: Path) -> Path:
+    root = path.parent / _CACHE_DIR_NAME
+    if root not in _CACHE_ROOTS:
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(exist_ok=True)
+        _CACHE_ROOTS.add(root)
+    return root
+
+
+def _archive_cache_dir(path: str | Path) -> Path:
+    path = Path(path)
+    cache_dir = _cache_root(path) / "unpacked_archive_member" / _archive_key(path)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _cached_archive_file(path: str | Path) -> Path | None:
+    cache_dir = _archive_cache_dir(path)
+    files = [file for file in cache_dir.iterdir() if file.is_file() and not file.name.endswith(".tmp")]
+    if len(files) != 1:
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    return files[0] if len(files) == 1 else None
+
+
+def _copy_member(source: Any, inner_path: Path) -> Path:
+    tmp_path = inner_path.with_name(f"{inner_path.name}.tmp")
+    try:
+        with source, tmp_path.open("wb") as target:
+            shutil.copyfileobj(source, target)
+        tmp_path.replace(inner_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return inner_path
 
 
@@ -131,20 +176,24 @@ def unpacked_archive_member(path: str | Path) -> Iterator[Path]:
     suffix = archive_suffix(path)
     if suffix is None:
         raise ValueError(f"'{Path(path).name}' is not a supported archive.")
-    with TemporaryDirectory() as temp_dir:
-        if suffix == ".zip":
-            with zipfile.ZipFile(path) as archive:
-                files = [(info, info.filename) for info in archive.infolist() if not info.is_dir()]
-                info, inner_suffix = _archive_member(path, files, "Zip")
-                yield _copy_member(archive.open(info), temp_dir, info.filename, inner_suffix)
-        else:
-            with tarfile.open(path, "r:*") as archive:
-                files = [(info, info.name) for info in archive.getmembers() if info.isfile()]
-                info, inner_suffix = _archive_member(path, files, "Tar")
-                source = archive.extractfile(info)
-                if source is None:
-                    raise ValueError(f"Could not read '{info.name}' from '{Path(path).name}'.")
-                yield _copy_member(source, temp_dir, info.name, inner_suffix)
+    cached = _cached_archive_file(path)
+    if cached is not None:
+        yield cached
+        return
+    cache_dir = _archive_cache_dir(path)
+    if suffix == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            files = [(info, info.filename) for info in archive.infolist() if not info.is_dir()]
+            info, inner_suffix = _archive_member(path, files, "Zip")
+            yield _copy_member(archive.open(info), cache_dir / _inner_filename(info.filename, inner_suffix))
+    else:
+        with tarfile.open(path, "r:*") as archive:
+            files = [(info, info.name) for info in archive.getmembers() if info.isfile()]
+            info, inner_suffix = _archive_member(path, files, "Tar")
+            source = archive.extractfile(info)
+            if source is None:
+                raise ValueError(f"Could not read '{info.name}' from '{Path(path).name}'.")
+            yield _copy_member(source, cache_dir / _inner_filename(info.name, inner_suffix))
 
 
 def archive_load(path: str | Path) -> Mapping[str, Any]:

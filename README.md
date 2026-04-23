@@ -54,8 +54,9 @@ The example script clears files in `data/` before regenerating sample rows.
   object.
 - supported suffixes are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`,
   `.tar.gz`, `.tar.gz2`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`
-- archive files are unpacked temporarily on each access, and the contained
+- archive files are memoized under `__lazyfields__`, and the contained
   supported file is read through the normal loader
+- the archive cache is removed on normal exit and reset on first archive use
 - the returned DataFrame contains copied scalar fields plus:
   `storage_file`, `non_scalar_keys`, and `creation_time`
 - `storage_file` is a normal DataFrame column, not a `.store` field
