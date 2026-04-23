@@ -73,7 +73,7 @@ def prepare_data() -> None:
                 else:
                     dataset = fh.create_dataset(field, data=array)
                 if field == "array1d_objects":
-                    # Make each file's first object-string unique while keeping the fixed 32 KiB payload size.
+                    # Make each file's first object-string unique while keeping the fixed 32 KiB content size.
                     prefix = f"file-{file_index:02d}:"
                     dataset[0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
 

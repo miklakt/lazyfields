@@ -145,7 +145,7 @@ def run_case_subprocess(case_name: str) -> dict[str, object]:
 def print_results(results: list[dict[str, object]]) -> None:
     print(f"Data directory: {DATA_DIR}")
     print("Each row file stores the same 100.00 MiB arrays as the HDF5 benchmark.")
-    print("Pickle rows must be deserialized before selection, so slices still materialize the full row payload.")
+    print("Pickle rows must be deserialized before selection, so slices still materialize the full row content.")
     print(f"Small array accesses are expected to load {SMALL_BYTES} bytes, about 1 MiB.")
     print()
     print(f"{'case':28} {'expected MiB':>12} {'peak MiB':>10}")

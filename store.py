@@ -7,7 +7,7 @@ from typing import Any, Iterator, Mapping
 
 import pandas as pd
 
-from .persistence import LOADERS_BY_SUFFIX, hdf5_get
+from .persistence import LOADERS_BY_SUFFIX, archive_suffix, hdf5_get, is_supported_storage_path, unpacked_archive_member
 
 
 def _load_row(path: str | Path) -> Mapping[str, Any]:
@@ -71,6 +71,14 @@ def _select(value: Any, selection: Any | None) -> Any:
 
 def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
     path = Path(path)
+    if archive_suffix(path) is not None:
+        try:
+            with unpacked_archive_member(path) as inner_path:
+                return _row_value(inner_path, key, strict=True, selection=selection)
+        except (KeyError, TypeError, IndexError, ValueError):
+            if strict:
+                raise
+            return pd.NA
     if path.suffix.lower() in {".h5", ".hdf5"}:
         try:
             return hdf5_get(path, key, selection=selection)
@@ -109,7 +117,7 @@ def _reference_rows(
 ) -> Iterator[dict[str, Any]]:
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
     for storage_path in sorted(
-        path for path in scan(file_pattern) if path.suffix.lower() in LOADERS_BY_SUFFIX
+        path for path in scan(file_pattern) if is_supported_storage_path(path)
     ):
         try:
             row_data = _load_row(storage_path)
