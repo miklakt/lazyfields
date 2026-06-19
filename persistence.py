@@ -26,12 +26,6 @@ def _normalize(value: Any) -> Any:
     return value.item() if getattr(value, "shape", None) == () else value
 
 
-def _select(value: Any, selection: Any | None) -> Any:
-    if selection is None:
-        return value
-    return _normalize(value[selection])
-
-
 def _node(root: Any, key: str) -> Any:
     node = root
     for part in key.split("/"):
@@ -61,7 +55,7 @@ def _read_selected(node: Any, h5py: Any, selection: Any | None) -> Any:
             pass
     # Fall back to normal Python indexing when the node is not a dataset or
     # h5py cannot apply the requested selection directly.
-    return _select(_read(node, h5py), selection)
+    return _normalize(_read(node, h5py)[selection])
 
 
 def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:

@@ -1,5 +1,6 @@
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -65,10 +66,6 @@ def _path_get(value: Any, key: str) -> Any:
     return value
 
 
-def _select(value: Any, selection: Any | None) -> Any:
-    return value if selection is None else value[selection]
-
-
 def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
     path = Path(path)
     if archive_suffix(path) is not None:
@@ -87,7 +84,8 @@ def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: A
                 raise
             return pd.NA
     try:
-        return _select(_path_get(_load_row(path), key), selection)
+        value = _path_get(_load_row(path), key)
+        return value if selection is None else value[selection]
     except (KeyError, TypeError, IndexError):
         if strict:
             raise
@@ -108,43 +106,74 @@ def _apply_pipe(row_data: Mapping[str, Any], pipe: list[Any] | None, *, scoped: 
     return True if scoped else row_data
 
 
+def _reference_row_from_path(
+    storage_path: Path, *,
+    columns: list[str] | None = None,
+    reference_path: str | Path | None = None,
+    pipe: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        row_data = _load_row(storage_path)
+    except Exception as exc:
+        print(f"Failed to load {storage_path.name}: {exc}")
+        return None
+
+    if not isinstance(row_data, Mapping):
+        print(f"Skipping {storage_path.name}: expected a mapping row dictionary.")
+        return None
+
+    non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
+    try:
+        processed_row_data = _apply_pipe(row_data, pipe)
+    except Exception as exc:
+        print(f"Failed to apply pipe to {storage_path.name}: {exc}")
+        return None
+    if processed_row_data is False:
+        return None
+
+    return _reference_row(
+        processed_row_data,
+        storage_path,
+        columns=columns,
+        reference_path=reference_path,
+        non_scalar_keys=non_scalar_keys,
+    )
+
+
 def _reference_rows(
     directory: str | Path = "data", 
     columns: list[str] | None = None, *, 
     reference_path: str | Path | None = None, file_pattern: str = "*",
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
+    workers: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    for storage_path in sorted(
+    storage_paths = sorted(
         path for path in scan(file_pattern) if is_supported_storage_path(path)
-    ):
-        try:
-            row_data = _load_row(storage_path)
-        except Exception as exc:
-            print(f"Failed to load {storage_path.name}: {exc}")
-            continue
+    )
 
-        if not isinstance(row_data, Mapping):
-            print(f"Skipping {storage_path.name}: expected a mapping row dictionary.")
-            continue
-
-        non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
-        try:
-            processed_row_data = _apply_pipe(row_data, pipe)
-        except Exception as exc:
-            print(f"Failed to apply pipe to {storage_path.name}: {exc}")
-            continue
-        if processed_row_data is False:
-            continue
-
-        yield _reference_row(
-            processed_row_data,
+    def make_row(storage_path: Path) -> dict[str, Any] | None:
+        return _reference_row_from_path(
             storage_path,
             columns=columns,
             reference_path=reference_path,
-            non_scalar_keys=non_scalar_keys,
+            pipe=pipe,
         )
+
+    def present_rows(rows):
+        for row in rows:
+            if row is not None:
+                yield row
+
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be None or a positive integer.")
+
+    if workers in (None, 1):
+        yield from present_rows(map(make_row, storage_paths))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            yield from present_rows(executor.map(make_row, storage_paths))
 
 
 def create_reference_table(
@@ -154,6 +183,7 @@ def create_reference_table(
     file_pattern: str = "*",
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
+    workers: int | None = None,
 ) -> pd.DataFrame:
     df = pd.DataFrame(
         _reference_rows(
@@ -163,6 +193,7 @@ def create_reference_table(
             file_pattern=file_pattern,
             search_subdirectories=search_subdirectories,
             pipe=pipe,
+            workers=workers,
         )
     )
     if reference_path is not None:
@@ -199,9 +230,7 @@ class StoreAccessor:
 
     @property
     def _base_dir(self) -> Path | None:
-        if "reference_path" not in self._obj.attrs:
-            return None
-        return Path(self._obj.attrs["reference_path"]).parent
+        return None if (reference_path := self._obj.attrs.get("reference_path")) is None else Path(reference_path).parent
 
     def _path(self, stored_path: str | Path) -> Path:
         path = Path(stored_path)
@@ -230,10 +259,14 @@ class StoreAccessor:
             if values.isna().all():
                 raise KeyError(keys)
             return values
-        if isinstance(keys, list): return {k: self[k] for k in keys} if series else pd.DataFrame({k: self[k] for k in keys}, index=self._obj.index)
+        if isinstance(keys, list):
+            values = {k: self[k] for k in keys}
+            return values if series else pd.DataFrame(values, index=self._obj.index)
         raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
 
 
 def register_accessors() -> None:
-    if "store" not in pd.DataFrame._accessors: pd.api.extensions.register_dataframe_accessor("store")(StoreAccessor)
-    if "store" not in pd.Series._accessors: pd.api.extensions.register_series_accessor("store")(StoreAccessor)
+    if "store" not in pd.DataFrame._accessors:
+        pd.api.extensions.register_dataframe_accessor("store")(StoreAccessor)
+    if "store" not in pd.Series._accessors:
+        pd.api.extensions.register_series_accessor("store")(StoreAccessor)
