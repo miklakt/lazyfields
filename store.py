@@ -140,40 +140,19 @@ def _reference_row_from_path(
     )
 
 
-def _reference_rows(
-    directory: str | Path = "data", 
-    columns: list[str] | None = None, *, 
-    reference_path: str | Path | None = None, file_pattern: str = "*",
-    search_subdirectories: bool = False,
-    pipe: list[Any] | None = None,
-    workers: int | None = None,
-) -> Iterator[dict[str, Any]]:
+def _storage_paths(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    storage_paths = sorted(
-        path for path in scan(file_pattern) if is_supported_storage_path(path)
-    )
+    return sorted(path for path in scan(file_pattern) if is_supported_storage_path(path))
 
-    def make_row(storage_path: Path) -> dict[str, Any] | None:
-        return _reference_row_from_path(
-            storage_path,
-            columns=columns,
-            reference_path=reference_path,
-            pipe=pipe,
-        )
 
-    def present_rows(rows):
-        for row in rows:
-            if row is not None:
-                yield row
+def _stored_path(storage_path: Path, reference_path: str | Path | None = None) -> str:
+    base = Path(reference_path).parent if reference_path is not None else None
+    return str(storage_path) if base is None else os.path.relpath(storage_path, start=base)
 
-    if workers is not None and workers < 1:
-        raise ValueError("workers must be None or a positive integer.")
 
-    if workers in (None, 1):
-        yield from present_rows(map(make_row, storage_paths))
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            yield from present_rows(executor.map(make_row, storage_paths))
+def _stat_fingerprint(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
 
 
 def create_reference_table(
@@ -185,19 +164,63 @@ def create_reference_table(
     pipe: list[Any] | None = None,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    df = pd.DataFrame(
-        _reference_rows(
-            directory,
-            columns,
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be None or a positive integer.")
+
+    storage_paths = _storage_paths(directory, file_pattern, search_subdirectories)
+
+    def make_row(storage_path: Path) -> dict[str, Any] | None:
+        return _reference_row_from_path(
+            storage_path,
+            columns=columns,
             reference_path=reference_path,
-            file_pattern=file_pattern,
-            search_subdirectories=search_subdirectories,
             pipe=pipe,
-            workers=workers,
         )
-    )
+
+    rows = map(make_row, storage_paths)
+    if workers not in (None, 1):
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            rows = executor.map(make_row, storage_paths)
+            df = pd.DataFrame(row for row in rows if row is not None)
+    else:
+        df = pd.DataFrame(row for row in rows if row is not None)
+
     if reference_path is not None:
         df.attrs["reference_path"] = str(reference_path)
+    df.attrs["stat_fingerprints"] = {
+        _stored_path(path, reference_path): _stat_fingerprint(path)
+        for path in storage_paths
+    }
+    return df
+
+
+def update_reference_table(
+    reference_df: pd.DataFrame,
+    directory: str | Path = "data",
+    columns: list[str] | None = None,
+    *,
+    reference_path: str | Path | None = None,
+    file_pattern: str = "*",
+    search_subdirectories: bool = False,
+    pipe: list[Any] | None = None,
+) -> pd.DataFrame:
+    reference_path = reference_path if reference_path is not None else reference_df.attrs.get("reference_path")
+    old_rows = reference_df.set_index("storage_file", drop=False) if "storage_file" in reference_df else pd.DataFrame()
+    old_fingerprints = reference_df.attrs.get("stat_fingerprints", {})
+    rows = []
+    fingerprints = {}
+    for path in _storage_paths(directory, file_pattern, search_subdirectories):
+        stored_path = _stored_path(path, reference_path)
+        fingerprint = _stat_fingerprint(path)
+        fingerprints[stored_path] = fingerprint
+        if stored_path in old_rows.index and old_fingerprints.get(stored_path) == fingerprint:
+            rows.append(old_rows.loc[stored_path].to_dict())
+        elif (row := _reference_row_from_path(path, columns=columns, reference_path=reference_path, pipe=pipe)) is not None:
+            rows.append(row)
+    df = pd.DataFrame(rows)
+    if reference_path is not None:
+        df.attrs["reference_path"] = str(reference_path)
+    df.attrs["stat_fingerprints"] = fingerprints
     return df
 
 
@@ -211,10 +234,9 @@ def _reference_row(
     row = {k: v for k, v in row_data.items() if pd.api.types.is_scalar(v)}
     if columns is not None:
         row = {k: v for k, v in row.items() if k in columns}
-    base = Path(reference_path).parent if reference_path is not None else None
     return {
         **row,
-        "storage_file": str(storage_path) if base is None else os.path.relpath(storage_path, start=base),
+        "storage_file": _stored_path(storage_path, reference_path),
         "non_scalar_keys": non_scalar_keys if non_scalar_keys is not None else [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)],
         "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
     }
