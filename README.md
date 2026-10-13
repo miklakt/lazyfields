@@ -16,7 +16,8 @@ Here, "scalar" follows `pandas.api.types.is_scalar(...)`: numbers, strings,
 booleans, timestamps, and `None` count as scalar, while lists, dicts, arrays,
 and other nested containers do not.
 
-Importing `lazyfields` registers the `.store` pandas accessors.
+Importing `lazyfields` adds lazy field access through `row.store[...]` and
+`reference_df.store[...]`.
 
 ## Quick Start
 
@@ -52,15 +53,12 @@ The example script clears files in `data/` before regenerating sample rows.
 - `create_reference_table(...)` builds an in-memory pandas DataFrame that points
   to stored row files. Each file must deserialize to one mapping-like row
   object.
-- supported suffixes are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`,
-  `.tar.gz`, `.tar.gz2`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`
-- archive files are memoized under `__lazyfields__`, and the contained
-  supported file is read through the normal loader
-- the archive cache is removed on normal exit and reset on first archive use
-- the returned DataFrame contains copied scalar fields plus:
+- Supported suffixes are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`,
+  `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
+- Archive members are memoized in one process-local temporary directory.
+- The returned DataFrame contains copied scalar fields plus
   `storage_file`, `non_scalar_keys`, and `creation_time`
-- `storage_file` is a normal DataFrame column, not a `.store` field
-- `non_scalar_keys` lists the top-level fields left in the backing file
+- `non_scalar_keys` lists the top-level fields left in the backing file.
 - `creation_time` stores the source file creation timestamp for each row.
 - `row.store["field"]` loads one field from one stored row.
 - `reference_df.store["field"]` loads that field across all rows as a pandas
@@ -79,10 +77,15 @@ reference_df = lf.create_reference_table("data")
 
 `create_reference_table(...)` scans matching files, infers the loader from the
 file suffix. Pass `file_pattern` if you want to narrow the scan, or
-`search_subdirectories=True` to include matching files below nested folders. If
-you need to save or reload a reference table elsewhere, pass
-`reference_path=...` so relative `storage_file` values still resolve correctly
-through `.store[...]`.
+`search_subdirectories=True` to include matching files below nested folders.
+Paths are relative to the creation working directory unless `relative_to` is
+provided; both it and `set_relative_to` take the reference-table filename.
+Set it before saving and again after loading with pandas:
+
+```python
+reference_df.store.set_relative_to(destination).to_pickle(destination)
+reference_df = pd.read_pickle(destination).store.set_relative_to(destination)
+```
 
 You can also customize reference-table construction with `pipe=[...]`, a list
 of row-wise callbacks applied in order.

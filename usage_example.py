@@ -1,17 +1,22 @@
-import os
 import json
 import pickle
 from pathlib import Path
 
-import pandas as pd
 import h5py
 import lazyfields as lf
+
+try:
+    from IPython import get_ipython
+    from IPython.display import display
+    show = display if get_ipython() else print
+except ImportError:
+    show = print
 
 # %%
 root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
 data_dir.mkdir(parents=True, exist_ok=True)
-nested_data_dir = data_dir / "nested"
+nested_data_dir = data_dir / "subdirectory"
 for path in sorted(data_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
     if path.is_file():
         path.unlink()
@@ -91,22 +96,13 @@ sample_rows = [
 
 
 # %%
-def write_h5(path: Path, row_data: dict) -> None:
-    def write_node(group, key, value):
-        if isinstance(value, dict):
-            sub = group.create_group(key)
-            for sub_key, sub_value in value.items():
-                write_node(sub, sub_key, sub_value)
-        else:
-            group.create_dataset(key, data=value)
-
-    with h5py.File(path, "w") as fh:
-        for key, value in row_data.items():
-            write_node(fh, key, value)
-
-
-def write_json(path: Path, row_data: dict) -> None:
-    path.write_text(json.dumps(row_data))
+def write_h5_node(group, key, value):
+    if isinstance(value, dict):
+        sub = group.create_group(key)
+        for sub_key, sub_value in value.items():
+            write_h5_node(sub, sub_key, sub_value)
+    else:
+        group.create_dataset(key, data=value)
 
 
 # %%
@@ -115,24 +111,18 @@ for idx, row_data in enumerate(sample_rows, start=1):
         with open(data_dir / f"result_{idx:03d}.pkl", "wb") as fh:
             pickle.dump(row_data, fh, protocol=4)
     elif idx % 3 == 2:
-        write_h5(data_dir / f"result_{idx:03d}.h5", row_data)
+        with h5py.File(data_dir / f"result_{idx:03d}.h5", "w") as fh:
+            for key, value in row_data.items():
+                write_h5_node(fh, key, value)
     else:
-        target_dir = nested_data_dir if idx == len(sample_rows) else data_dir
+        target_dir = nested_data_dir if idx == len(sample_rows) - 1 else data_dir
         target_dir.mkdir(parents=True, exist_ok=True)
-        write_json(target_dir / f"result_{idx:03d}.json", row_data)
+        (target_dir / f"result_{idx:03d}.json").write_text(json.dumps(row_data))
 
 
 # %%
-# Build a reference table from mixed pickle and HDF5 files.
-
-reference_df = lf.create_reference_table("data", search_subdirectories=True)
-display(reference_df)
-
-
-# %%
-# Set `search_subdirectories=True` to include matching files in nested folders.
-reference_recursive_df = lf.create_reference_table(data_dir, search_subdirectories=True)
-display(reference_recursive_df[["some_string_key", "storage_file"]])
+reference_df = lf.create_reference_table(data_dir, search_subdirectories=True)
+show(reference_df)
 
 
 # %%
@@ -144,11 +134,10 @@ def unnest_a_0(row_data: dict) -> None:
 
 
 reference_with_a_0_df = lf.create_reference_table(data_dir, pipe=[unnest_a_0])
-display(reference_with_a_0_df[["some_string_key", "a_0"]])
+show(reference_with_a_0_df[["some_string_key", "a_0"]])
 
 
 # %%
-# The stored row is unchanged; only the reference table got the derived scalar.
 reference_with_a_0_df.iloc[3].store["some_nested_object_key"]
 
 
@@ -162,7 +151,7 @@ reference_filtered_df = lf.create_reference_table(
     data_dir,
     pipe=[unnest_a_0, keep_a_0_ge_3],
 )
-display(reference_filtered_df[["some_string_key", "a_0"]])
+show(reference_filtered_df[["some_string_key", "a_0"]])
 
 
 # %%
@@ -171,13 +160,12 @@ reference_scoped_filter_df = lf.create_reference_table(
     data_dir,
     pipe=[[unnest_a_0, keep_a_0_ge_3]],
 )
-display(reference_scoped_filter_df[["some_string_key"]])
+show(reference_scoped_filter_df[["some_string_key"]])
 "a_0" in reference_scoped_filter_df.columns
 
 
 # %%
-# Load the backing file path for a single row.
-reference_df.iloc[0].storage_file
+reference_df.iloc[0]["storage_file"]
 
 
 # %%

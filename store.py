@@ -4,11 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Mapping
 
 import pandas as pd
 
-from .persistence import LOADERS_BY_SUFFIX, archive_suffix, hdf5_get, is_supported_storage_path, unpacked_archive_member
+from .persistence import LOADERS_BY_SUFFIX, archive_suffix, hdf5_get, unpacked_archive_member
 
 
 def _load_row(path: str | Path) -> Mapping[str, Any]:
@@ -18,48 +18,26 @@ def _load_row(path: str | Path) -> Mapping[str, Any]:
         raise ValueError(f"Could not infer a storage loader from '{Path(path).name}'.") from exc
 
 
-def _path_parts(key: str) -> Iterator[tuple[str, bool]]:
-    for part in key.split("/"):
-        if not part:
-            continue
-        if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}:
-            yield part[1:-1], True
-        else:
-            yield part, False
-
-
-def _int_like(value: str) -> int | None:
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-def _mapping_get(value: Mapping[str, Any], part: str, *, quoted: bool) -> Any:
-    int_part = _int_like(part)
-    if quoted:
-        if int_part is not None:
-            warnings.warn(
-                f"Quoted path segment {part!r} is treating the segment as a string key.",
-                stacklevel=4,
-            )
-        return value[part]
-    if part in value:
-        return value[part]
-    if int_part is not None:
-        if int_part in value:
-            return value[int_part]
-        if part in value:
-            return value[part]
-    return value[part]
-
-
 def _path_get(value: Any, key: str) -> Any:
-    for part, quoted in _path_parts(key):
+    for part in filter(None, key.split("/")):
+        quoted = len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
+        if quoted:
+            part = part[1:-1]
+        try:
+            int_part = int(part)
+        except ValueError:
+            int_part = None
         if isinstance(value, Mapping):
-            value = _mapping_get(value, part, quoted=quoted)
+            if quoted and int_part is not None:
+                # Quoting distinguishes intentional string keys from numeric path indices.
+                warnings.warn(f"Quoted path segment {part!r} is treating the segment as a string key.", stacklevel=4)
+            if quoted or part in value:
+                value = value[part]
+            elif int_part is not None and int_part in value:
+                value = value[int_part]
+            else:
+                value = value[part]
         elif not quoted:
-            int_part = _int_like(part)
             value = value[int_part if int_part is not None else part]
         else:
             value = value[part]
@@ -109,7 +87,7 @@ def _apply_pipe(row_data: Mapping[str, Any], pipe: list[Any] | None, *, scoped: 
 def _reference_row_from_path(
     storage_path: Path, *,
     columns: list[str] | None = None,
-    reference_path: str | Path | None = None,
+    relative_to: Path,
     pipe: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
@@ -131,23 +109,27 @@ def _reference_row_from_path(
     if processed_row_data is False:
         return None
 
-    return _reference_row(
-        processed_row_data,
-        storage_path,
-        columns=columns,
-        reference_path=reference_path,
-        non_scalar_keys=non_scalar_keys,
+    row = {k: v for k, v in processed_row_data.items() if pd.api.types.is_scalar(v)}
+    if columns is not None:
+        row = {k: v for k, v in row.items() if k in columns}
+    return {
+        **row,
+        "storage_file": _storage_file_value(storage_path, relative_to),
+        "non_scalar_keys": non_scalar_keys,
+        "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
+    }
+
+
+def _find_storage_files(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
+    scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
+    return sorted(
+        path for path in scan(file_pattern)
+        if path.suffix.lower() in LOADERS_BY_SUFFIX and (path.suffix.lower() not in {".gz", ".bz2", ".xz"} or archive_suffix(path))
     )
 
 
-def _storage_paths(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
-    scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    return sorted(path for path in scan(file_pattern) if is_supported_storage_path(path))
-
-
-def _stored_path(storage_path: Path, reference_path: str | Path | None = None) -> str:
-    base = Path(reference_path).parent if reference_path is not None else None
-    return str(storage_path) if base is None else os.path.relpath(storage_path, start=base)
+def _storage_file_value(storage_path: Path, relative_to: Path) -> str:
+    return os.path.relpath(storage_path.resolve(), start=relative_to)
 
 
 def _stat_fingerprint(path: Path) -> tuple[int, int]:
@@ -158,7 +140,7 @@ def _stat_fingerprint(path: Path) -> tuple[int, int]:
 def create_reference_table(
     directory: str | Path = "data", 
     columns: list[str] | None = None, 
-    *, reference_path: str | Path | None = None, 
+    *, relative_to: str | Path | None = None,
     file_pattern: str = "*",
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
@@ -167,13 +149,14 @@ def create_reference_table(
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
 
-    storage_paths = _storage_paths(directory, file_pattern, search_subdirectories)
+    relative_to = Path.cwd().resolve() if relative_to is None else Path(relative_to).resolve().parent
+    storage_paths = _find_storage_files(directory, file_pattern, search_subdirectories)
 
     def make_row(storage_path: Path) -> dict[str, Any] | None:
         return _reference_row_from_path(
             storage_path,
             columns=columns,
-            reference_path=reference_path,
+            relative_to=relative_to,
             pipe=pipe,
         )
 
@@ -185,10 +168,9 @@ def create_reference_table(
     else:
         df = pd.DataFrame(row for row in rows if row is not None)
 
-    if reference_path is not None:
-        df.attrs["reference_path"] = str(reference_path)
+    df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = {
-        _stored_path(path, reference_path): _stat_fingerprint(path)
+        _storage_file_value(path, relative_to): _stat_fingerprint(path)
         for path in storage_paths
     }
     return df
@@ -199,68 +181,50 @@ def update_reference_table(
     directory: str | Path = "data",
     columns: list[str] | None = None,
     *,
-    reference_path: str | Path | None = None,
+    relative_to: str | Path | None = None,
     file_pattern: str = "*",
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
 ) -> pd.DataFrame:
-    reference_path = reference_path if reference_path is not None else reference_df.attrs.get("reference_path")
+    relative_to = Path(relative_to).resolve().parent if relative_to is not None else Path(reference_df.attrs["relative_to"])
     old_rows = reference_df.set_index("storage_file", drop=False) if "storage_file" in reference_df else pd.DataFrame()
     old_fingerprints = reference_df.attrs.get("stat_fingerprints", {})
     rows = []
     fingerprints = {}
-    for path in _storage_paths(directory, file_pattern, search_subdirectories):
-        stored_path = _stored_path(path, reference_path)
+    for path in _find_storage_files(directory, file_pattern, search_subdirectories):
+        stored_path = _storage_file_value(path, relative_to)
         fingerprint = _stat_fingerprint(path)
         fingerprints[stored_path] = fingerprint
         if stored_path in old_rows.index and old_fingerprints.get(stored_path) == fingerprint:
             rows.append(old_rows.loc[stored_path].to_dict())
-        elif (row := _reference_row_from_path(path, columns=columns, reference_path=reference_path, pipe=pipe)) is not None:
+        elif (row := _reference_row_from_path(path, columns=columns, relative_to=relative_to, pipe=pipe)) is not None:
             rows.append(row)
     df = pd.DataFrame(rows)
-    if reference_path is not None:
-        df.attrs["reference_path"] = str(reference_path)
+    df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = fingerprints
     return df
 
 
-def _reference_row(
-    row_data: Mapping[str, Any], 
-    storage_path: Path, *, 
-    columns: list[str] | None = None, 
-    reference_path: str | Path | None = None,
-    non_scalar_keys: list[str] | None = None,
-) -> dict[str, Any]:
-    row = {k: v for k, v in row_data.items() if pd.api.types.is_scalar(v)}
-    if columns is not None:
-        row = {k: v for k, v in row.items() if k in columns}
-    return {
-        **row,
-        "storage_file": _stored_path(storage_path, reference_path),
-        "non_scalar_keys": non_scalar_keys if non_scalar_keys is not None else [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)],
-        "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
-    }
-
-
+@pd.api.extensions.register_dataframe_accessor("store")
+@pd.api.extensions.register_series_accessor("store")
 class StoreAccessor:
-    def __init__(self, pandas_obj: pd.DataFrame):
+    def __init__(self, pandas_obj: pd.DataFrame | pd.Series):
         self._obj = pandas_obj
 
-    def rebase_reference_paths(self, reference_path: str | Path) -> pd.DataFrame:
-        self._obj.attrs["reference_path"] = str(reference_path)
+    def set_relative_to(self, relative_to: str | Path) -> pd.DataFrame | pd.Series:
+        self._obj.attrs["relative_to"] = str(Path(relative_to).resolve().parent)
         return self._obj
-
-    @property
-    def _base_dir(self) -> Path | None:
-        return None if (reference_path := self._obj.attrs.get("reference_path")) is None else Path(reference_path).parent
 
     def _path(self, stored_path: str | Path) -> Path:
         path = Path(stored_path)
-        return path if path.is_absolute() or self._base_dir is None else self._base_dir / path
+        try:
+            return Path(self._obj.attrs["relative_to"]) / path
+        except KeyError:
+            raise RuntimeError("Call .store.set_relative_to(path) after loading this table.") from None
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
-        files = self._path(self._obj.storage_file) if series else self._obj["storage_file"].map(self._path)
+        files = self._path(self._obj["storage_file"]) if series else self._obj["storage_file"].map(self._path)
         if keys == slice(None):
             return _load_row(files) if series else [_load_row(path) for path in files]
 
@@ -285,10 +249,3 @@ class StoreAccessor:
             values = {k: self[k] for k in keys}
             return values if series else pd.DataFrame(values, index=self._obj.index)
         raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
-
-
-def register_accessors() -> None:
-    if "store" not in pd.DataFrame._accessors:
-        pd.api.extensions.register_dataframe_accessor("store")(StoreAccessor)
-    if "store" not in pd.Series._accessors:
-        pd.api.extensions.register_series_accessor("store")(StoreAccessor)

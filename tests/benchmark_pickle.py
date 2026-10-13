@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 import gc
 import json
+import pickle
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pandas as pd
 
 
 ROOT_DIR = Path(__file__).resolve().parent
-if str(ROOT_DIR.parent) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR.parent))
+sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
 
@@ -25,16 +24,14 @@ SLICE_BYTES = 25 * MiB
 SMALL_BYTES = MiB
 SMALL_ELEMENT_COUNT = SMALL_BYTES // np.dtype(np.float64).itemsize
 ALL_ROWS_BYTES = ROW_COUNT * TARGET_BYTES
-DATA_DIR = ROOT_DIR / "benchmark_ram_data"
-REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_ram_reference.pkl"
+DATA_DIR = ROOT_DIR / "benchmark_pickle_data"
+REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_pickle_reference.pkl"
 
 FLOAT_COUNT = 13_107_200
 OBJECT_ITEM_BYTES = 32 * 1024
 OBJECT_COUNT = 3_200
 OBJECT_TEMPLATE = "x" * OBJECT_ITEM_BYTES
-STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
 
-ARRAY1D_SHAPE = (13_107_200,)
 ARRAY2D_SHAPE = (3_200, 4_096)
 ARRAY3D_SHAPE = (200, 256, 256)
 
@@ -44,6 +41,7 @@ def current_peak_rss_bytes() -> int:
         if line.startswith("VmHWM:"):
             return int(line.split()[1]) * 1024
     raise RuntimeError("Could not read VmHWM from /proc/self/status.")
+
 
 def prepare_data() -> None:
     if DATA_DIR.exists():
@@ -58,27 +56,23 @@ def prepare_data() -> None:
         "array1d_objects": np.full(OBJECT_COUNT, OBJECT_TEMPLATE, dtype=object),
     }
     for file_index in range(ROW_COUNT):
-        with h5py.File(DATA_DIR / f"row_{file_index:02d}.h5", "w") as fh:
-            for key, value in {
-                "x_int": 100 + file_index,
-                "x_float": 10.5 + file_index / 10.0,
-                "x_bool": bool(file_index % 2),
-                "x_str": f"row-{file_index:02d}",
-                "variant_id": file_index,
-            }.items():
-                fh.create_dataset(key, data=value)
-            for field, array in arrays.items():
-                if field == "array1d_objects":
-                    dataset = fh.create_dataset(field, data=array, dtype=STRING_DTYPE)
-                else:
-                    dataset = fh.create_dataset(field, data=array)
-                if field == "array1d_objects":
-                    # Make each file's first object-string unique while keeping the fixed 32 KiB content size.
-                    prefix = f"file-{file_index:02d}:"
-                    dataset[0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
+        row_data = {
+            "x_int": 100 + file_index,
+            "x_float": 10.5 + file_index / 10.0,
+            "x_bool": bool(file_index % 2),
+            "x_str": f"row-{file_index:02d}",
+            "variant_id": file_index,
+        }
+        row_data.update(arrays)
+        row_data["array1d_objects"] = np.array(row_data["array1d_objects"], copy=True)
+        prefix = f"file-{file_index:02d}:"
+        row_data["array1d_objects"][0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
+
+        with open(DATA_DIR / f"row_{file_index:02d}.pkl", "wb") as fh:
+            pickle.dump(row_data, fh, protocol=4)
 
     gc.collect()
-    lf.create_reference_table(DATA_DIR, file_pattern="*.h5").to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(DATA_DIR, file_pattern="*.pkl").to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:
@@ -100,9 +94,6 @@ def run_case(case_name: str) -> dict[str, object]:
     reference_df = pd.read_pickle(REFERENCE_TABLE_PATH)
     row = reference_df.iloc[0]
 
-    ##########################
-    # Access patterns under test
-    ##########################
     if case_name == "row-full-array1d":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array1d"])
     if case_name == "row-small-array1d":
@@ -131,9 +122,8 @@ def run_case(case_name: str) -> dict[str, object]:
         return measure_case(case_name, ALL_ROWS_BYTES, lambda: reference_df.store["array1d"])
     if case_name == "frame-all-rows-array2d":
         return measure_case(case_name, ALL_ROWS_BYTES, lambda: reference_df.store["array2d"])
-    ##########################
-
     raise ValueError(f"Unknown case: {case_name}")
+
 
 def run_case_subprocess(case_name: str) -> dict[str, object]:
     completed = subprocess.run(
@@ -147,8 +137,8 @@ def run_case_subprocess(case_name: str) -> dict[str, object]:
 
 def print_results(results: list[dict[str, object]]) -> None:
     print(f"Data directory: {DATA_DIR}")
-    print("Each non-scalar dataset is 100.00 MiB.")
-    print("Single-row hyperslabs are expected to load 25.00 MiB.")
+    print("Each row file stores the same 100.00 MiB arrays as the HDF5 benchmark.")
+    print("Pickle rows must be deserialized before selection, so slices still materialize the full row content.")
     print(f"Small array accesses are expected to load {SMALL_BYTES} bytes, about 1 MiB.")
     print()
     print(f"{'case':28} {'expected MiB':>12} {'peak MiB':>10}")

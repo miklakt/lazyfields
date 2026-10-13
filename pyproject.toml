@@ -1,3 +1,19 @@
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazyfields"
+version = "0.2.0"
+description = "A minimal pandas reference-table layer with lazy persisted row storage."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Mikhail Laktionov", email = "miklakt@gmail.com"}]
+dependencies = ["pandas>=1.5"]
+
+[project.optional-dependencies]
+hdf5 = ["h5py>=3"]
+
+[tool.setuptools]
+packages = ["lazyfields"]
+package-dir = {lazyfields = "."}
