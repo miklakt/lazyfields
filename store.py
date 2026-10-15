@@ -243,6 +243,9 @@ class StoreAccessor:
 
         return call
 
+    def get_registered_methods(self):
+        return list(self._methods.keys())
+
     def set_relative_to(self, relative_to: str | Path) -> pd.DataFrame | pd.Series:
         self._obj.attrs["relative_to"] = str(Path(relative_to).resolve().parent)
         return self._obj

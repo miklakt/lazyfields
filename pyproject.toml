@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lazyfields"
 version = "0.2.0"
-description = "A minimal pandas reference-table layer with lazy persisted row storage."
+description = "Create pandas table that index collections of JSON, pickle, HDF5 files, loading stored data from disk on demand."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Mikhail Laktionov", email = "miklakt@gmail.com"}]

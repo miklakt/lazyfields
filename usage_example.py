@@ -126,6 +126,24 @@ show(reference_df)
 
 
 # %%
+# Register methods on this reference table. They run when called on a row or
+# row selection, and one registered method can call another through row.store.
+
+@reference_df.store.register_method
+def length(row, field):
+    try:
+        return len(row.store[field])
+    except (KeyError, TypeError):
+        return None
+
+show(reference_df.store.get_registered_methods())
+
+show(reference_df.iloc[0].store.length("some_2darray_key"))
+
+show(reference_df.store.length("some_2darray_key"))
+
+
+# %%
 # Use `pipe=[...]` to unnest a nested array element into a scalar reference column.
 def unnest_a_0(row_data: dict) -> None:
     nested = row_data.get("some_nested_object_key")
