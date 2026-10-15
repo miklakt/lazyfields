@@ -19,6 +19,31 @@ and other nested containers do not.
 Importing `lazyfields` adds lazy field access through `row.store[...]` and
 `reference_df.store[...]`.
 
+Register custom row-wise methods to use them on one row or any DataFrame
+selection. The function receives a reference row as its first argument.
+On a DataFrame, the result is a Series with the same index.
+Registered methods can call one another through `row.store`:
+
+```python
+import lazyfields as lf
+
+reference_df = lf.create_reference_table("data")
+
+@reference_df.store.register_method
+def load_array(row, field):
+    return row.store[field]
+
+@reference_df.store.register_method
+def array_length(row, field):
+    return len(row.store.load_array(field))
+
+lengths = reference_df.iloc[1:4].store.array_length("some_string_key")
+```
+
+Methods belong to the reference table where they were registered. Pandas
+selections that retain the table's attributes retain its methods; registering a
+method on another table does not add it to this one.
+
 ## Quick Start
 
 Requirements:

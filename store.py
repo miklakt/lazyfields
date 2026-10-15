@@ -3,8 +3,9 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import pandas as pd
 
@@ -210,6 +211,37 @@ def update_reference_table(
 class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame | pd.Series):
         self._obj = pandas_obj
+        self._methods: dict[str, Callable[..., Any]] = pandas_obj.attrs.get("store_methods", {})
+
+    def register_method(self, method: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a row-wise method for this pandas object and its selections."""
+        name = getattr(method, "__name__", None)
+        if not callable(method) or not isinstance(name, str) or not name.isidentifier():
+            raise TypeError("A store method must be a named callable.")
+        if hasattr(type(self), name) or name in self._methods:
+            raise ValueError(f"A store method named {name!r} already exists.")
+        self._methods = {**self._methods, name: method}
+        self._obj.attrs["store_methods"] = self._methods
+        return method
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            method = self._methods[name]
+        except KeyError:
+            raise AttributeError(f"{type(self).__name__!r} has no attribute {name!r}") from None
+
+        @wraps(method)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if isinstance(self._obj, pd.Series):
+                return method(self._obj, *args, **kwargs)
+            values = []
+            for _, row in self._obj.iterrows():
+                row.attrs = self._obj.attrs.copy()
+                row.store._methods = self._methods
+                values.append(method(row, *args, **kwargs))
+            return pd.Series(values, index=self._obj.index, dtype="object", name=name)
+
+        return call
 
     def set_relative_to(self, relative_to: str | Path) -> pd.DataFrame | pd.Series:
         self._obj.attrs["relative_to"] = str(Path(relative_to).resolve().parent)
