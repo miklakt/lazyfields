@@ -1,3 +1,4 @@
+#%%
 import json
 import pickle
 from pathlib import Path
@@ -5,16 +6,11 @@ from pathlib import Path
 import h5py
 import lazyfields as lf
 
-try:
-    from IPython import get_ipython
-    from IPython.display import display
-    show = display if get_ipython() else print
-except ImportError:
-    show = print
 
 # %%
 root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
+reference_path = root_dir / "reference_table.pkl"
 data_dir.mkdir(parents=True, exist_ok=True)
 nested_data_dir = data_dir / "subdirectory"
 for path in sorted(data_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
@@ -121,122 +117,46 @@ for idx, row_data in enumerate(sample_rows, start=1):
 
 
 # %%
-reference_df = lf.create_reference_table(data_dir, search_subdirectories=True)
-show(reference_df)
+def unnest_a_0(row: dict) -> None:
+    nested = row.get("some_nested_object_key")
+    if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
+        row["a_0"] = nested["a"][0]
+
+
+def keep_a_0_greater_than(value):
+    def f(row: dict) -> bool:
+        return row.get("a_0", 0) > value
+
+    return f
+
+
+def add_a_sum(row: dict) -> None:
+    nested = row.get("some_nested_object_key")
+    if isinstance(nested, dict) and "a" in nested:
+        row["a_sum"] = sum(nested["a"])
+
+
+pipe = [[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
+
+reference_df = lf.create_reference_table(
+    data_dir,
+    # Keep paths to the indexed files relative to the reference table when it is outside the current working directory.
+    relative_to=reference_path,
+    search_subdirectories=True,
+    pipe=pipe,
+)
 
 
 # %%
-# Register methods on this reference table. They run when called on a row or
-# row selection, and one registered method can call another through row.store.
-
 @reference_df.store.register_method
-def length(row, field):
+def length(row, key):
     try:
-        return len(row.store[field])
+        return len(row.store[key])
     except (KeyError, TypeError):
         return None
 
-show(reference_df.store.get_registered_methods())
-
-show(reference_df.iloc[0].store.length("some_2darray_key"))
-
-show(reference_df.store.length("some_2darray_key"))
-
 
 # %%
-# Use `pipe=[...]` to unnest a nested array element into a scalar reference column.
-def unnest_a_0(row_data: dict) -> None:
-    nested = row_data.get("some_nested_object_key")
-    if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
-        row_data["a_0"] = nested["a"][0]
+reference_df.to_pickle(reference_path)
 
-
-reference_with_a_0_df = lf.create_reference_table(data_dir, pipe=[unnest_a_0])
-show(reference_with_a_0_df[["some_string_key", "a_0"]])
-
-
-# %%
-reference_with_a_0_df.iloc[3].store["some_nested_object_key"]
-
-
-# %%
-# A filter step returns `True` to keep a row and `False` to skip it.
-def keep_a_0_ge_3(row_data: dict) -> bool:
-    return row_data.get("a_0", 0) >= 3.0
-
-
-reference_filtered_df = lf.create_reference_table(
-    data_dir,
-    pipe=[unnest_a_0, keep_a_0_ge_3],
-)
-show(reference_filtered_df[["some_string_key", "a_0"]])
-
-
-# %%
-# A nested block applies temporary preprocessing for filtering only.
-reference_scoped_filter_df = lf.create_reference_table(
-    data_dir,
-    pipe=[[unnest_a_0, keep_a_0_ge_3]],
-)
-show(reference_scoped_filter_df[["some_string_key"]])
-"a_0" in reference_scoped_filter_df.columns
-
-
-# %%
-reference_df.iloc[0]["storage_file"]
-
-
-# %%
-# Materialize a 2d array field across rows.
-reference_df.store["some_2darray_key"]
-
-
-# %%
-# Load a nested JSON field through the same path syntax.
-reference_df.iloc[4].store["some_metadata_key"]
-
-
-# %% [markdown]
-# ### HDF5 tuple-key selection
-#
-# `reference_df.iloc[1].store["some_2darray_key", 0:1]` works in one accessor call:
-#
-# 1. `reference_df.iloc[1]` is handled by pandas first, producing a Series row
-#    object.
-# 2. `row.store["some_2darray_key", 0:1]` calls `StoreAccessor.__getitem__`
-#    with both the field key and the selection.
-# 3. The accessor resolves the row's `storage_file` column and asks the loader
-#    for the field and selection together.
-# 4. For HDF5 datasets, `hdf5_get(..., selection=slice(0, 1))` applies the
-#    hyperslab read and only loads the selected slice.
-
-
-# %%
-# Read only a hyperslab from the HDF5 dataset through tuple-key indexing.
-reference_df.iloc[1].store["some_2darray_key", 0:1]
-
-
-# %%
-# Load the full stored row for a single reference row.
-reference_df.iloc[-1].store[:]
-
-
-# %%
-# The same rule applies to a row slice.
-reference_df.iloc[1:3].store[:]
-
-
-# %%
-# Use a pandas-style lambda filter to keep only rows whose stored file contains
-# a specific deferred key.
-rows_with_2darrays = reference_df[
-    reference_df["non_scalar_keys"].apply(lambda keys: "some_2darray_key" in keys)
-]
-rows_with_2darrays[["some_string_key", "non_scalar_keys"]]
-
-# %%
-# Access a nested field using slash-separated key notation.
-reference_df.store["some_nested_object_key/a"]
-# %%
-reference_df.store['some_nested_object_key/1']
 # %%
