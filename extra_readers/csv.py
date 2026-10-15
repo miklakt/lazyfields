@@ -6,7 +6,7 @@ import pandas as pd
 from ..readers import Reader
 
 
-def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows: int = 0) -> Reader:
+def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows: int = 0, column_separator: str = ",", suffixes: tuple[str, ...] = (".csv",)) -> Reader:
     def metadata(path):
         values = {}
         with Path(path).open() as file:
@@ -20,17 +20,17 @@ def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows
         return values
 
     def load(path):
-        table = pd.read_csv(path, comment=comment, skiprows=skiprows)
+        table = pd.read_csv(path, comment=comment, skiprows=skiprows, sep=column_separator)
         return {**metadata(path), **{key: table[key].to_numpy() for key in table}}
 
     def read(path, key, selection=None):
         values = metadata(path)
-        value = values[key] if key in values else pd.read_csv(path, comment=comment, skiprows=skiprows, usecols=[key])[key].to_numpy()
+        value = values[key] if key in values else pd.read_csv(path, comment=comment, skiprows=skiprows, sep=column_separator, usecols=[key])[key].to_numpy()
         return value if selection is None else value[selection]
 
     def inspect(path):
         yield from ((key, True, value) for key, value in metadata(path).items())
-        columns = pd.read_csv(path, comment=comment, skiprows=skiprows, nrows=0).columns
+        columns = pd.read_csv(path, comment=comment, skiprows=skiprows, sep=column_separator, nrows=0).columns
         yield from ((key, False, None) for key in columns)
 
-    return Reader((".csv",), load, read, inspect, (KeyError, TypeError, IndexError, ValueError))
+    return Reader(suffixes, load, read, inspect, (KeyError, TypeError, IndexError, ValueError))
