@@ -1,4 +1,7 @@
+import ast
+import inspect
 import os
+import textwrap
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -211,7 +214,8 @@ def update_reference_table(
 class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame | pd.Series):
         self._obj = pandas_obj
-        self._methods: dict[str, Callable[..., Any]] = pandas_obj.attrs.get("store_methods", {})
+        self._methods: dict[str, str] = pandas_obj.attrs.get("store_methods", {})
+        self._compiled_methods: dict[str, Callable[..., Any]] = {}
 
     def register_method(self, method: Callable[..., Any]) -> Callable[..., Any]:
         """Register a row-wise method for this pandas object and its selections."""
@@ -220,15 +224,28 @@ class StoreAccessor:
             raise TypeError("A store method must be a named callable.")
         if hasattr(type(self), name) or name in self._methods:
             raise ValueError(f"A store method named {name!r} already exists.")
-        self._methods = {**self._methods, name: method}
+        try:
+            node = ast.parse(textwrap.dedent(inspect.getsource(method))).body[0]
+        except (OSError, TypeError, SyntaxError) as exc:
+            raise ValueError("A registered method must have inspectable source code.") from exc
+        if not isinstance(node, ast.FunctionDef) or node.name != name:
+            raise ValueError("A registered method must be a named function.")
+        node.decorator_list = []
+        self._methods = {**self._methods, name: ast.unparse(node)}
         self._obj.attrs["store_methods"] = self._methods
+        self._compiled_methods[name] = method
         return method
 
     def __getattr__(self, name: str) -> Any:
         try:
-            method = self._methods[name]
+            source = self._methods[name]
         except KeyError:
             raise AttributeError(f"{type(self).__name__!r} has no attribute {name!r}") from None
+        if name not in self._compiled_methods:
+            namespace: dict[str, Any] = {}
+            exec(source, namespace)
+            self._compiled_methods[name] = namespace[name]
+        method = self._compiled_methods[name]
 
         @wraps(method)
         def call(*args: Any, **kwargs: Any) -> Any:
@@ -238,6 +255,7 @@ class StoreAccessor:
             for _, row in self._obj.iterrows():
                 row.attrs = self._obj.attrs.copy()
                 row.store._methods = self._methods
+                row.store._compiled_methods = self._compiled_methods
                 values.append(method(row, *args, **kwargs))
             return pd.Series(values, index=self._obj.index, dtype="object", name=name)
 

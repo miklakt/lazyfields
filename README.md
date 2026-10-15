@@ -43,6 +43,11 @@ lengths = reference_df.iloc[1:4].store.array_length("some_string_key")
 Methods belong to the reference table where they were registered. Pandas
 selections that retain the table's attributes retain its methods; registering a
 method on another table does not add it to this one.
+The table stores each method's source code in `attrs`, so methods are available
+again after saving and loading the table with pandas. Registered functions must
+have inspectable source code. Put imports and other dependencies inside the
+function if it must work after reloading. Only load tables from trusted sources,
+since calling a saved method executes its stored code.
 
 ## Quick Start
 
