@@ -1,4 +1,4 @@
-from .persistence import archive_load, hdf5_load, json_load, pickle_load
+from .readers import Reader, archive_load, hdf5_load, json_load, pickle_load, register_reader
 from .store import create_reference_table, update_reference_table
 
 __all__ = [
@@ -8,5 +8,7 @@ __all__ = [
     "hdf5_load",
     "json_load",
     "archive_load",
+    "Reader",
+    "register_reader",
 ]
 __version__ = "0.2.0"

@@ -1,8 +1,4 @@
-import ast
-import inspect
-import os
-import textwrap
-import warnings
+import ast, inspect, os, textwrap
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
@@ -12,65 +8,15 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from .persistence import LOADERS_BY_SUFFIX, archive_suffix, hdf5_get, unpacked_archive_member
-
-
-def _load_row(path: str | Path) -> Mapping[str, Any]:
-    try:
-        return LOADERS_BY_SUFFIX[Path(path).suffix.lower()](path)
-    except KeyError as exc:
-        raise ValueError(f"Could not infer a storage loader from '{Path(path).name}'.") from exc
-
-
-def _path_get(value: Any, key: str) -> Any:
-    for part in filter(None, key.split("/")):
-        quoted = len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
-        if quoted:
-            part = part[1:-1]
-        try:
-            int_part = int(part)
-        except ValueError:
-            int_part = None
-        if isinstance(value, Mapping):
-            if quoted and int_part is not None:
-                # Quoting distinguishes intentional string keys from numeric path indices.
-                warnings.warn(f"Quoted path segment {part!r} is treating the segment as a string key.", stacklevel=4)
-            if quoted or part in value:
-                value = value[part]
-            elif int_part is not None and int_part in value:
-                value = value[int_part]
-            else:
-                value = value[part]
-        elif not quoted:
-            value = value[int_part if int_part is not None else part]
-        else:
-            value = value[part]
-    return value
+from .readers import _reader_match, require_reader
 
 
 def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
-    path = Path(path)
-    if archive_suffix(path) is not None:
-        try:
-            with unpacked_archive_member(path) as inner_path:
-                return _row_value(inner_path, key, strict=True, selection=selection)
-        except (KeyError, TypeError, IndexError, ValueError):
-            if strict:
-                raise
-            return pd.NA
-    if path.suffix.lower() in {".h5", ".hdf5"}:
-        try:
-            return hdf5_get(path, key, selection=selection)
-        except (KeyError, TypeError):
-            if strict:
-                raise
-            return pd.NA
+    reader = require_reader(path)
     try:
-        value = _path_get(_load_row(path), key)
-        return value if selection is None else value[selection]
-    except (KeyError, TypeError, IndexError):
-        if strict:
-            raise
+        return reader.get(path, key, selection)
+    except reader.missing_errors:
+        if strict: raise
         return pd.NA
 
 
@@ -95,27 +41,30 @@ def _reference_row_from_path(
     pipe: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        row_data = _load_row(storage_path)
+        reader = require_reader(storage_path)
+        if not pipe and reader.inspect is not None:
+            row, non_scalar_keys = {}, []
+            for key, is_scalar, value in reader.items(storage_path):
+                if is_scalar:
+                    row[key] = value
+                else:
+                    non_scalar_keys.append(key)
+        else:
+            row_data = reader.load(storage_path)
     except Exception as exc:
-        print(f"Failed to load {storage_path.name}: {exc}")
-        return None
+        print(f"Failed to load {storage_path.name}: {exc}"); return None
 
-    if not isinstance(row_data, Mapping):
-        print(f"Skipping {storage_path.name}: expected a mapping row dictionary.")
-        return None
-
-    non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
-    try:
-        processed_row_data = _apply_pipe(row_data, pipe)
-    except Exception as exc:
-        print(f"Failed to apply pipe to {storage_path.name}: {exc}")
-        return None
-    if processed_row_data is False:
-        return None
-
-    row = {k: v for k, v in processed_row_data.items() if pd.api.types.is_scalar(v)}
-    if columns is not None:
-        row = {k: v for k, v in row.items() if k in columns}
+    if pipe or reader.inspect is None:
+        if not isinstance(row_data, Mapping):
+            print(f"Skipping {storage_path.name}: expected a mapping row dictionary."); return None
+        non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
+        try:
+            processed_row_data = _apply_pipe(row_data, pipe)
+        except Exception as exc:
+            print(f"Failed to apply pipe to {storage_path.name}: {exc}"); return None
+        if processed_row_data is False: return None
+        row = {k: v for k, v in processed_row_data.items() if pd.api.types.is_scalar(v)}
+    if columns is not None: row = {k: v for k, v in row.items() if k in columns}
     return {
         **row,
         "storage_file": _storage_file_value(storage_path, relative_to),
@@ -126,10 +75,7 @@ def _reference_row_from_path(
 
 def _find_storage_files(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    return sorted(
-        path for path in scan(file_pattern)
-        if path.suffix.lower() in LOADERS_BY_SUFFIX and (path.suffix.lower() not in {".gz", ".bz2", ".xz"} or archive_suffix(path))
-    )
+    return sorted(path for path in scan(file_pattern) if _reader_match(path)[0] is not None)
 
 
 def _storage_file_value(storage_path: Path, relative_to: Path) -> str:
@@ -201,8 +147,9 @@ def update_reference_table(
         fingerprints[stored_path] = fingerprint
         if stored_path in old_rows.index and old_fingerprints.get(stored_path) == fingerprint:
             rows.append(old_rows.loc[stored_path].to_dict())
-        elif (row := _reference_row_from_path(path, columns=columns, relative_to=relative_to, pipe=pipe)) is not None:
-            rows.append(row)
+        else:
+            row = _reference_row_from_path(path, columns=columns, relative_to=relative_to, pipe=pipe)
+            if row is not None: rows.append(row)
     df = pd.DataFrame(rows)
     df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = fingerprints
@@ -279,7 +226,7 @@ class StoreAccessor:
         series = isinstance(self._obj, pd.Series)
         files = self._path(self._obj["storage_file"]) if series else self._obj["storage_file"].map(self._path)
         if keys == slice(None):
-            return _load_row(files) if series else [_load_row(path) for path in files]
+            return require_reader(files).load(files) if series else [require_reader(path).load(path) for path in files]
 
         selection = None
         if isinstance(keys, tuple):

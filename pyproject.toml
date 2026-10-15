@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lazyfields"
-version = "0.2.0"
+version = "0.3.0"
 description = "Create pandas table that index collections of JSON, pickle, HDF5 files, loading stored data from disk on demand."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,5 +15,5 @@ dependencies = ["pandas>=1.5"]
 hdf5 = ["h5py>=3"]
 
 [tool.setuptools]
-packages = ["lazyfields"]
+packages = ["lazyfields", "lazyfields.extra_readers"]
 package-dir = {lazyfields = "."}
