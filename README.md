@@ -149,3 +149,15 @@ input_data -> function -> filter -> [function -> filter] -> function -> output_d
 
 Applying the pipe only affect the reference table.
 The original indexed files remain unchanged, and `.store[...]` still reads their original data.
+
+## Extra readers
+
+Extra readers for formats such as CSV files with a metadata header containing key-value pairs and NumPy `.npz` archives are available but still in development, so their APIs may change. Register the readers you need before creating a reference table:
+
+```python
+from lazyfields import register_reader
+from lazyfields.extra_readers import CSV_WITH_HEADER, NUMPY_ARCHIVE
+
+register_reader(CSV_WITH_HEADER())  # Header metadata lines start with "#" by default.
+register_reader(NUMPY_ARCHIVE)
+```
