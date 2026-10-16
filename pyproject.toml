@@ -9,6 +9,7 @@ description = "Create pandas table that index collections of JSON, pickle, HDF5 
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Mikhail Laktionov", email = "miklakt@gmail.com"}]
+license = "BSD-3-Clause"
 dependencies = ["pandas>=1.5"]
 
 [project.optional-dependencies]
