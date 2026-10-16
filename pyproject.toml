@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Mikhail Laktionov", email = "miklakt@gmail.com"}]
 license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 dependencies = ["pandas>=1.5"]
 
 [project.optional-dependencies]
