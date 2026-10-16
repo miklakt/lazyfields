@@ -1,6 +1,6 @@
 # lazyfields
 
-`lazyfields` is a small pandas helper layer for working with result files through a reference table.
+`lazyfields` is a lightweight pandas extension for indexing collections of structured data files and loading their contents on demand
 
 It is meant for data that naturally lives as a set of files, such as results from a numerical simulation or other batch process.
 You can inspect and filter the results through a lightweight pandas DataFrame without loading everything into RAM at once.

@@ -1,0 +1,45 @@
+from zipfile import ZipFile
+
+import numpy as np
+import pandas as pd
+from numpy.lib import format as npy_format
+
+from ..readers import Reader
+
+
+def _npz_headers(path):
+    with ZipFile(path) as archive:
+        for member in archive.infolist():
+            if not member.filename.endswith(".npy"): continue
+            with archive.open(member) as file:
+                version = npy_format.read_magic(file)
+                read_header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
+                shape, _, dtype = read_header(file)
+            if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
+            yield member.filename[:-4], shape
+
+
+def _npz_value(value):
+    return value.item() if value.shape == () else value
+
+
+def _npz_load(path):
+    with np.load(path, allow_pickle=False) as archive:
+        return {key: _npz_value(archive[key]) for key in archive.files}
+
+
+def _npz_read(path, key, selection=None):
+    with np.load(path, allow_pickle=False) as archive:
+        value = archive[key]
+        if selection is not None: value = value[selection]
+        return _npz_value(value)
+
+
+def _npz_inspect(path):
+    with np.load(path, allow_pickle=False) as archive:
+        for key, shape in _npz_headers(path):
+            value = _npz_value(archive[key]) if shape == () else None
+            yield key, shape == () and pd.api.types.is_scalar(value), value
+
+
+NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect)
