@@ -24,8 +24,8 @@ SLICE_BYTES = 25 * MiB
 SMALL_BYTES = MiB
 SMALL_ELEMENT_COUNT = SMALL_BYTES // np.dtype(np.float64).itemsize
 ALL_ROWS_BYTES = ROW_COUNT * TARGET_BYTES
-DATA_DIR = ROOT_DIR / "benchmark_ram_data"
-REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_ram_reference.pkl"
+DATA_DIR = ROOT_DIR / "benchmark_h5_data"
+REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_h5_reference.pkl"
 
 FLOAT_COUNT = 13_107_200
 OBJECT_ITEM_BYTES = 32 * 1024
