@@ -16,6 +16,22 @@ from ..readers import Reader, _path_get, json_load
 
 _SPACE = b" \t\r\n"
 _DELIMITER = b",]} \t\r\n"
+_QUOTE = ord('"')
+_BACKSLASH = ord("\\")
+_OBJECT_START, _OBJECT_END = ord("{"), ord("}")
+_ARRAY_START, _ARRAY_END = ord("["), ord("]")
+_COLON, _COMMA = ord(":"), ord(",")
+_VALUE_KINDS = {
+    _OBJECT_START: "object", _ARRAY_START: "array", _QUOTE: "string",
+    ord("t"): "boolean", ord("f"): "boolean", ord("n"): "null",
+}
+_MIB = 1024 * 1024
+_DEFAULT_SIZE_CUTOFF = _MIB
+_DEFAULT_MAX_CACHED_FILES = 32
+_DEFAULT_MAX_CACHE_BYTES = 64 * _MIB
+_SQLITE_TIMEOUT_SECONDS = 30
+# Approximate Python dict entry, tuple, and integer overhead per indexed key.
+_OFFSET_ENTRY_ESTIMATE_BYTES = 96
 
 
 class _Scanner:
@@ -36,7 +52,7 @@ class _Scanner:
             if mark < 0:
                 break
             slash = mark - 1
-            while slash > start and self.data[slash] == 92:
+            while slash > start and self.data[slash] == _BACKSLASH:
                 slash -= 1
             if (mark - 1 - slash) % 2 == 0:
                 return mark + 1
@@ -48,37 +64,37 @@ class _Scanner:
         if pos >= self.end:
             raise ValueError("Unexpected end of JSON")
         kind = self.data[pos]
-        if kind == 34:
+        if kind == _QUOTE:
             return self.string(pos)
-        if kind == 123:
+        if kind == _OBJECT_START:
             pos = self.space(pos + 1)
-            if self.data[pos] == 125:
+            if self.data[pos] == _OBJECT_END:
                 return pos + 1
             while True:
-                if self.data[pos] != 34:
+                if self.data[pos] != _QUOTE:
                     raise ValueError("Expected JSON object key")
                 finish = self.string(pos)
                 key = json.loads(self.data[pos:finish])
                 if "/" in key:
                     raise ValueError(f"Key {key!r} contains '/', which is reserved for nested paths.")
                 pos = self.space(finish)
-                if self.data[pos] != 58:
+                if self.data[pos] != _COLON:
                     raise ValueError("Expected ':' after JSON key")
                 pos = self.space(self.value(pos + 1))
-                if self.data[pos] == 125:
+                if self.data[pos] == _OBJECT_END:
                     return pos + 1
-                if self.data[pos] != 44:
+                if self.data[pos] != _COMMA:
                     raise ValueError("Expected ',' in JSON object")
                 pos = self.space(pos + 1)
-        if kind == 91:
+        if kind == _ARRAY_START:
             pos = self.space(pos + 1)
-            if self.data[pos] == 93:
+            if self.data[pos] == _ARRAY_END:
                 return pos + 1
             while True:
                 pos = self.space(self.value(pos))
-                if self.data[pos] == 93:
+                if self.data[pos] == _ARRAY_END:
                     return pos + 1
-                if self.data[pos] != 44:
+                if self.data[pos] != _COMMA:
                     raise ValueError("Expected ',' in JSON array")
                 pos = self.space(pos + 1)
         finish = pos
@@ -90,27 +106,27 @@ class _Scanner:
 
     def top_level(self):
         pos = self.space(0)
-        if pos >= self.end or self.data[pos] != 123:
+        if pos >= self.end or self.data[pos] != _OBJECT_START:
             raise TypeError("expected a mapping row dictionary.")
         pos = self.space(pos + 1)
         offsets = {}
-        if self.data[pos] != 125:
+        if self.data[pos] != _OBJECT_END:
             while True:
-                if self.data[pos] != 34:
+                if self.data[pos] != _QUOTE:
                     raise ValueError("Expected JSON object key")
                 finish = self.string(pos)
                 key = json.loads(self.data[pos:finish])
                 if "/" in key:
                     raise ValueError(f"Key {key!r} contains '/', which is reserved for nested paths.")
                 pos = self.space(finish)
-                if self.data[pos] != 58:
+                if self.data[pos] != _COLON:
                     raise ValueError("Expected ':' after JSON key")
                 start = self.space(pos + 1)
                 pos = self.space(self.value(start))
                 offsets[key] = (start, pos)
-                if self.data[pos] == 125:
+                if self.data[pos] == _OBJECT_END:
                     break
-                if self.data[pos] != 44:
+                if self.data[pos] != _COMMA:
                     raise ValueError("Expected ',' in JSON object")
                 pos = self.space(pos + 1)
         if self.space(pos + 1) != self.end:
@@ -121,11 +137,11 @@ class _Scanner:
         pos = start
         for part in parts:
             pos = self.space(pos)
-            if self.data[pos] == 123:
+            if self.data[pos] == _OBJECT_START:
                 quoted = len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'"
                 wanted = part[1:-1] if quoted else part
                 cursor = self.space(pos + 1)
-                while self.data[cursor] != 125:
+                while self.data[cursor] != _OBJECT_END:
                     finish = self.string(cursor)
                     key = json.loads(self.data[cursor:finish])
                     cursor = self.space(finish)
@@ -135,31 +151,31 @@ class _Scanner:
                         pos = begin
                         break
                     cursor = self.space(finish)
-                    if self.data[cursor] == 44:
+                    if self.data[cursor] == _COMMA:
                         cursor = self.space(cursor + 1)
                 else:
                     raise KeyError(wanted)
-            elif self.data[pos] == 91:
+            elif self.data[pos] == _ARRAY_START:
                 if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'":
                     raise TypeError("Array indices must be integers")
                 index = int(part)
                 if index < 0:
                     count = 0
                     cursor = self.space(pos + 1)
-                    while self.data[cursor] != 93:
+                    while self.data[cursor] != _ARRAY_END:
                         count += 1
                         cursor = self.space(self.value(cursor))
-                        if self.data[cursor] == 44:
+                        if self.data[cursor] == _COMMA:
                             cursor = self.space(cursor + 1)
                     index += count
                 cursor = self.space(pos + 1)
                 for _ in range(index):
-                    if self.data[cursor] == 93:
+                    if self.data[cursor] == _ARRAY_END:
                         raise IndexError(index)
                     cursor = self.space(self.value(cursor))
-                    if self.data[cursor] == 44:
+                    if self.data[cursor] == _COMMA:
                         cursor = self.space(cursor + 1)
-                if index < 0 or self.data[cursor] == 93:
+                if index < 0 or self.data[cursor] == _ARRAY_END:
                     raise IndexError(index)
                 pos = cursor
             else:
@@ -171,26 +187,27 @@ class _Scanner:
                 (selection.start is not None and selection.start < 0) or
                 (selection.stop is not None and selection.stop < 0)):
             return None
-        if self.data[start] != 91:
+        if self.data[start] != _ARRAY_START:
             return None
         first = selection.start or 0
         stop = selection.stop
         values = []
         cursor = self.space(start + 1)
         index = 0
-        while self.data[cursor] != 93 and (stop is None or index < stop):
+        while self.data[cursor] != _ARRAY_END and (stop is None or index < stop):
             end = self.value(cursor)
             if index >= first:
                 values.append(json.loads(self.data[cursor:end]))
             cursor = self.space(end)
-            if self.data[cursor] == 44:
+            if self.data[cursor] == _COMMA:
                 cursor = self.space(cursor + 1)
             index += 1
         return values
 
 
-def JSON_FAST(size_cutoff: int = 1024 * 1024, max_cached_files: int = 32,
-              max_cache_bytes: int = 64 * 1024 * 1024,
+def JSON_FAST(size_cutoff: int = _DEFAULT_SIZE_CUTOFF,
+              max_cached_files: int = _DEFAULT_MAX_CACHED_FILES,
+              max_cache_bytes: int = _DEFAULT_MAX_CACHE_BYTES,
               cache_dir: str | Path | None = None,
               use_disk_cache: bool = True) -> Reader:
     """Build a JSON reader with offsets above size_cutoff.
@@ -218,8 +235,7 @@ def JSON_FAST(size_cutoff: int = 1024 * 1024, max_cached_files: int = 32,
 
     def open_database(path):
         cache_dir.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(database_path(path), timeout=30)
-        connection.execute("PRAGMA busy_timeout=30000")
+        connection = sqlite3.connect(database_path(path), timeout=_SQLITE_TIMEOUT_SECONDS)
         connection.execute("CREATE TABLE IF NOT EXISTS file_meta "
                            "(id INTEGER PRIMARY KEY CHECK (id = 1), path TEXT NOT NULL, "
                            "device INTEGER NOT NULL, inode INTEGER NOT NULL, "
@@ -278,15 +294,14 @@ def JSON_FAST(size_cutoff: int = 1024 * 1024, max_cached_files: int = 32,
                         offsets = _Scanner(data).top_level()
                         if use_disk_cache:
                             kinds = {
-                                key: {123: "object", 91: "array", 34: "string", 116: "boolean",
-                                      102: "boolean", 110: "null"}.get(data[start], "number")
+                                key: _VALUE_KINDS.get(data[start], "number")
                                 for key, (start, _) in offsets.items()
                             }
             if fingerprint(path) != stamp:
                 return index(path)
             if rebuild and use_disk_cache:
                 write_disk_index(path, stamp, offsets, kinds)
-            estimate = sum(96 + len(key.encode("utf-8")) for key in offsets)
+            estimate = sum(_OFFSET_ENTRY_ESTIMATE_BYTES + len(key.encode("utf-8")) for key in offsets)
             if estimate <= max_cache_bytes:
                 cache[path] = (stamp, offsets, estimate)
                 cache.move_to_end(path)
@@ -297,6 +312,19 @@ def JSON_FAST(size_cutoff: int = 1024 * 1024, max_cached_files: int = 32,
 
     def load(path):
         return json_load(path)
+
+    def select(value, selection):
+        if not isinstance(selection, tuple):
+            return value[selection]
+        def apply(current, parts):
+            if not parts:
+                return current
+            head, *tail = parts
+            selected = current[head]
+            if isinstance(head, slice) and tail:
+                return [apply(item, tail) for item in selected]
+            return apply(selected, tail)
+        return apply(value, selection)
 
     def read(path, key, selection=None):
         if Path(path).stat().st_size < size_cutoff:
@@ -317,11 +345,16 @@ def JSON_FAST(size_cutoff: int = 1024 * 1024, max_cached_files: int = 32,
                             start, end = _Scanner(data).locate(start, parts)
                         scanner = _Scanner(data)
                         if selection is not None:
-                            sliced = scanner.array_slice(start, selection)
+                            outer_slice = selection
+                            if isinstance(selection, tuple) and selection and all(
+                                part == slice(None) for part in selection[1:]
+                            ):
+                                outer_slice = selection[0]
+                            sliced = scanner.array_slice(start, outer_slice)
                             if sliced is not None:
                                 return sliced
                         value = json.loads(data[start:end])
-        return value if selection is None else value[selection]
+        return value if selection is None else select(value, selection)
 
     def inspect(path):
         if Path(path).stat().st_size < size_cutoff:

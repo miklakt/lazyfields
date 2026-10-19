@@ -2,6 +2,7 @@
 import gc
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ import lazyfields as lf
 from lazyfields.extra_readers import JSON_FAST
 from lazyfields.readers import _READERS
 
-# _READERS[".json"] = JSON_FAST()
+_READERS[".json"] = JSON_FAST()
 
 MiB = 1024 * 1024
 ROW_COUNT = 3
@@ -55,11 +56,11 @@ def write_numeric_array(fh, array: np.ndarray) -> None:
         fh.write("]")
 
 
-def current_rss_bytes() -> int:
+def current_peak_rss_bytes() -> int:
     for line in (Path("/proc/self/status").read_text()).splitlines():
-        if line.startswith("VmRSS:"):
+        if line.startswith("VmHWM:"):
             return int(line.split()[1]) * 1024
-    raise RuntimeError("Could not read VmRSS from /proc/self/status.")
+    raise RuntimeError("Could not read VmHWM from /proc/self/status.")
 
 
 def prepare_data() -> None:
@@ -114,18 +115,18 @@ def build_reference() -> pd.DataFrame:
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:
     gc.collect()
-    rss_before = current_rss_bytes()
+    rss_before = current_peak_rss_bytes()
     start = time.perf_counter()
     loaded = loader()
     seconds = time.perf_counter() - start
-    rss_after = current_rss_bytes()
+    rss_after = current_peak_rss_bytes()
     del loaded
     gc.collect()
     return {
         "case": case_name,
         "expected_bytes": expected_bytes,
         "seconds": seconds,
-        "rss_delta_bytes": rss_after - rss_before,
+        "peak_rss_delta_bytes": max(0, rss_after - rss_before),
     }
 
 
@@ -147,11 +148,11 @@ def run_case(case_name: str) -> dict[str, object]:
     if case_name == "row-full-array2d":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array2d"])
     if case_name == "row-slice-array2d":
-        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array2d", :800])
+        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array2d", :800, :])
     if case_name == "row-full-array3d":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array3d"])
     if case_name == "row-slice-array3d":
-        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array3d", :50])
+        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array3d", :50, :, :])
     if case_name == "row-full-array1d_objects":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array1d_objects"])
     if case_name == "row-slice-array1d_objects":
@@ -169,23 +170,36 @@ def run_case(case_name: str) -> dict[str, object]:
     raise ValueError(f"Unknown case: {case_name}")
 
 
+def run_case_subprocess(case_name: str) -> dict[str, object]:
+    completed = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--case", case_name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def print_results(cases: tuple[str, ...]) -> None:
-    print("Reader: JSON_FAST (disk cache)", flush=True)
     print(f"Data directory: {DATA_DIR}")
     print("Each row file stores the same 100.00 MiB logical arrays as the HDF5 and pickle benchmarks.")
     print("JSON file byte sizes differ from the logical array sizes shown below.")
     print(f"Small array accesses are expected to load {SMALL_BYTES} bytes, about 1 MiB.")
     print()
-    print(f"{'case':28} {'expected MiB':>12} {'seconds':>10} {'RSS Δ MiB':>10}")
+    print(f"{'case':28} {'expected MiB':>12} {'seconds':>10} {'peak MiB':>10}")
     print("-" * 65, flush=True)
     for case in cases:
-        result = run_case(case)
+        result = run_case_subprocess(case)
         expected = int(result["expected_bytes"])
-        rss_delta = int(result["rss_delta_bytes"])
+        rss_delta = int(result["peak_rss_delta_bytes"])
         print(f"{result['case']:28} {expected / MiB:9.2f} {result['seconds']:10.3f} {rss_delta / MiB:9.2f}", flush=True)
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--case":
+        print(json.dumps(run_case(sys.argv[2])))
+        return
+
     prepare_data()
     cases = (
         "reference-inspect", "row-scalar",
