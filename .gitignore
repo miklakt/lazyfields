@@ -11,6 +11,7 @@
 *.pkl
 *.pickle
 data/
+tests/benchmark_json_data/
 results/
 
 # Byte-compiled / optimized / DLL files
@@ -33,6 +34,7 @@ venv/
 .venv
 
 # Test / tooling caches
+.lazyfields_cache/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
