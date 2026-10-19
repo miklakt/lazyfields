@@ -35,51 +35,51 @@ def _apply_pipe(row_data: Mapping[str, Any], pipe: list[Any] | None, *, scoped: 
 
 
 def _reference_row_from_path(
-    storage_path: Path, *,
+    file_path: Path, *,
     columns: list[str] | None = None,
     relative_to: Path,
     pipe: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        reader = require_reader(storage_path)
+        reader = require_reader(file_path)
         if not pipe and reader.inspect is not None:
             row, non_scalar_keys = {}, []
-            for key, is_scalar, value in reader.items(storage_path):
+            for key, is_scalar, value in reader.items(file_path):
                 if is_scalar:
                     row[key] = value
                 else:
                     non_scalar_keys.append(key)
         else:
-            row_data = reader.load(storage_path)
+            row_data = reader.load(file_path)
     except Exception as exc:
-        print(f"Failed to load {storage_path.name}: {exc}"); return None
+        print(f"Failed to load {file_path.name}: {exc}"); return None
 
     if pipe or reader.inspect is None:
         if not isinstance(row_data, Mapping):
-            print(f"Skipping {storage_path.name}: expected a mapping row dictionary."); return None
+            print(f"Skipping {file_path.name}: expected a mapping row dictionary."); return None
         non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
         try:
             processed_row_data = _apply_pipe(row_data, pipe)
         except Exception as exc:
-            print(f"Failed to apply pipe to {storage_path.name}: {exc}"); return None
+            print(f"Failed to apply pipe to {file_path.name}: {exc}"); return None
         if processed_row_data is False: return None
         row = {k: v for k, v in processed_row_data.items() if pd.api.types.is_scalar(v)}
     if columns is not None: row = {k: v for k, v in row.items() if k in columns}
     return {
         **row,
-        "storage_file": _storage_file_value(storage_path, relative_to),
+        "file_path": _relative_file_path(file_path, relative_to),
         "non_scalar_keys": non_scalar_keys,
-        "creation_time": datetime.fromtimestamp(storage_path.stat().st_ctime),
+        "creation_time": datetime.fromtimestamp(file_path.stat().st_ctime),
     }
 
 
-def _find_storage_files(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
+def _find_files(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
     return sorted(path for path in scan(file_pattern) if _reader_match(path)[0] is not None)
 
 
-def _storage_file_value(storage_path: Path, relative_to: Path) -> str:
-    return os.path.relpath(storage_path.resolve(), start=relative_to)
+def _relative_file_path(path: Path, relative_to: Path) -> str:
+    return os.path.relpath(path.resolve(), start=relative_to)
 
 
 def _stat_fingerprint(path: Path) -> tuple[int, int]:
@@ -100,28 +100,28 @@ def create_reference_table(
         raise ValueError("workers must be None or a positive integer.")
 
     relative_to = Path.cwd().resolve() if relative_to is None else Path(relative_to).resolve().parent
-    storage_paths = _find_storage_files(directory, file_pattern, search_subdirectories)
+    file_paths = _find_files(directory, file_pattern, search_subdirectories)
 
-    def make_row(storage_path: Path) -> dict[str, Any] | None:
+    def make_row(file_path: Path) -> dict[str, Any] | None:
         return _reference_row_from_path(
-            storage_path,
+            file_path,
             columns=columns,
             relative_to=relative_to,
             pipe=pipe,
         )
 
-    rows = map(make_row, storage_paths)
+    rows = map(make_row, file_paths)
     if workers not in (None, 1):
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            rows = executor.map(make_row, storage_paths)
+            rows = executor.map(make_row, file_paths)
             df = pd.DataFrame(row for row in rows if row is not None)
     else:
         df = pd.DataFrame(row for row in rows if row is not None)
 
     df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = {
-        _storage_file_value(path, relative_to): _stat_fingerprint(path)
-        for path in storage_paths
+        _relative_file_path(path, relative_to): _stat_fingerprint(path)
+        for path in file_paths
     }
     return df
 
@@ -137,12 +137,12 @@ def update_reference_table(
     pipe: list[Any] | None = None,
 ) -> pd.DataFrame:
     relative_to = Path(relative_to).resolve().parent if relative_to is not None else Path(reference_df.attrs["relative_to"])
-    old_rows = reference_df.set_index("storage_file", drop=False) if "storage_file" in reference_df else pd.DataFrame()
+    old_rows = reference_df.set_index("file_path", drop=False) if "file_path" in reference_df else pd.DataFrame()
     old_fingerprints = reference_df.attrs.get("stat_fingerprints", {})
     rows = []
     fingerprints = {}
-    for path in _find_storage_files(directory, file_pattern, search_subdirectories):
-        stored_path = _storage_file_value(path, relative_to)
+    for path in _find_files(directory, file_pattern, search_subdirectories):
+        stored_path = _relative_file_path(path, relative_to)
         fingerprint = _stat_fingerprint(path)
         fingerprints[stored_path] = fingerprint
         if stored_path in old_rows.index and old_fingerprints.get(stored_path) == fingerprint:
@@ -224,7 +224,7 @@ class StoreAccessor:
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
-        files = self._path(self._obj["storage_file"]) if series else self._obj["storage_file"].map(self._path)
+        files = self._path(self._obj["file_path"]) if series else self._obj["file_path"].map(self._path)
         if keys == slice(None):
             return require_reader(files).load(files) if series else [require_reader(path).load(path) for path in files]
 

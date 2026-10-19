@@ -128,7 +128,7 @@ def _reader_match(path: str | Path, archives: bool = True) -> tuple[Reader | Non
 
 def require_reader(path: str | Path) -> Reader:
     reader = _reader_match(path)[0]
-    if reader is None: raise ValueError(f"Could not infer a storage reader from '{Path(path).name}'.")
+    if reader is None: raise ValueError(f"Could not infer file reader from '{Path(path).name}'.")
     return reader
 
 
@@ -139,13 +139,13 @@ def archive_suffix(path: str | Path) -> str | None:
 def _archive_member(path: str | Path, files: list[tuple[Any, str]], kind: str) -> tuple[Any, str]:
     supported = [(member, filename, _reader_match(filename, False)[1]) for member, filename in files]
     supported = [item for item in supported if item[2] is not None]
-    if len(supported) > 1: raise ValueError(f"{kind} archives must contain exactly one supported storage file.")
+    if len(supported) > 1: raise ValueError(f"{kind} archives must contain exactly one supported file.")
     if supported:
         member, filename, suffix = supported[0]
     else:
         archive = archive_suffix(path)
         _, suffix = _reader_match(Path(path).name[:-len(archive)] if archive else "", False)
-        if len(files) != 1 or suffix is None: raise ValueError(f"{kind} archives must contain one supported storage file.")
+        if len(files) != 1 or suffix is None: raise ValueError(f"{kind} archives must contain one supported file.")
         member, filename = files[0]
     return member, _inner_filename(filename, suffix)
 

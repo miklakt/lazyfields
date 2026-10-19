@@ -55,7 +55,7 @@ An archive must contain exactly one supported data file.
 
 The returned DataFrame contains copied values plus three columns:
 
-- `storage_file` identifies the original file.
+- `file_path` identifies the original file.
 - `non_scalar_keys` lists the names of lists, dictionaries, arrays, and other nested values kept in that file.
 - `creation_time` contains the file creation time.
 

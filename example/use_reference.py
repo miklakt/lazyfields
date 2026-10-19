@@ -34,7 +34,7 @@ show(reference_df[["some_string_key", "a_sum"]])
 
 # %%
 # Show the data file referenced by the first row.
-show(reference_df.iloc[0]["storage_file"])
+show(reference_df.iloc[0]["file_path"])
 
 
 # %%
