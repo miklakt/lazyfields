@@ -34,6 +34,7 @@ python3 -m pip install -e '.[hdf5]'
 Create the example data and reference table, then run the usage examples:
 
 ```bash
+python3 example/generate_dataset.py
 python3 example/create_reference.py
 python3 example/use_reference.py
 ```
@@ -67,6 +68,8 @@ Use the stored in the indexed files data through `.store`:
 - `row.store["group/subkey"]` loads a nested value.
 - `row.store["dataset", slice(...)]` loads only the requested part of an HDF5 array.
 - `row.store[:]` loads all data for one row.
+
+Keys containing `/` are rejected when creating a reference table because `/` separates nested path segments.
 
 > **Performance note:** An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
 
@@ -106,16 +109,24 @@ reference_df = pd.read_pickle(destination)
 
 Only load trusted pickle files because they can execute code.
 
-Use `pipe=[...]` to run functions on each dictionary while the reference table is created, not on demand.
+Use `pipe=[...]` to process each file as the reference table is built, compute additional values, and add them to the index.
 The functions run in the listed order.
+Pipe functions can read nested values with slash paths, such as
+`row["key/subkey/0"]`; numeric segments follow the same rules as `.store[...]`.
+They can also index or slice a resolved value with `row["key/subkey", 1:5]`.
+Use `row.get(("key/subkey", 1:5), default)` for a selection that may be missing;
+the tuple holds the selection, and the second `get` argument is the fallback.
+Assign extracted values to top-level columns, for example
+`row["indexing_object"] = row["key/subkey/0"]`.
+Pipe errors skip the affected file by default and print a one-line error.
+Pass `pipe_error_skip=False` to `create_reference_table` or `update_reference_table`
+to raise the original exception instead.
 
 ```python
 def unnest_a_0(row):
-    # {"a": [2.1, 2.2], "b": [2.3, 2.4]} in row["nested_object_key"]
-    # Copy the first value from the nested "a" array into the reference table.
-    nested = row.get("nested_object_key")
-    if isinstance(nested, dict) and "a" in nested and len(nested["a"]) > 0:
-        row["a_0"] = nested["a"][0]
+    # For example, row["some_nested_object_key"] may be {"a": [2.1, 2.2], "b": [2.3, 2.4]}.
+    # Read the first value of the nested "a" array, or use 0 if it is missing.
+    row["a_0"] = row.get(("some_nested_object_key/a", 0), 0)
 
 def keep_a_0_greater_than(value):
     # Create a filter for the extracted value.
@@ -125,17 +136,13 @@ def keep_a_0_greater_than(value):
 
 def add_a_sum(row):
     # Add the sum of the nested "a" array to the reference table.
-    nested = row.get("nested_object_key")
-    if isinstance(nested, dict) and "a" in nested:
-        row["a_sum"] = sum(nested["a"])
+    row["a_sum"] = sum(row.get("some_nested_object_key/a", []))
 
-# Keep only rows whose indexed file has nested_object_key["a"][0] greater than 2.0.
+# Keep files whose first nested "a" value is greater than 2.0.
+# The nested list uses a temporary row, so only a_sum is added to the table.
 reference_df = lf.create_reference_table(
     "data",
-    pipe=[unnest_a_0, keep_a_0_greater_than(2.0), add_a_sum],
-    # Because these steps are not inside a nested list, a_0 and a_sum remain in the reference table and can be used for indexing.
-    # otherwise use
-    # pipe=[[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
+    pipe=[[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum],
 )
 ```
 

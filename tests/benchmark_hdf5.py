@@ -107,11 +107,11 @@ def run_case(case_name: str) -> dict[str, object]:
     if case_name == "row-full-array2d":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array2d"])
     if case_name == "row-slice-array2d":
-        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array2d", (slice(None, 800), slice(None))])
+        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array2d", :800, :])
     if case_name == "row-full-array3d":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array3d"])
     if case_name == "row-slice-array3d":
-        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array3d", (slice(None, 50), slice(None), slice(None))])
+        return measure_case(case_name, SLICE_BYTES, lambda: row.store["array3d", :50, :, :])
     if case_name == "row-full-array1d_objects":
         return measure_case(case_name, TARGET_BYTES, lambda: row.store["array1d_objects"])
     if case_name == "row-slice-array1d_objects":
