@@ -154,6 +154,7 @@ def update_reference_table(
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
 ) -> pd.DataFrame:
+    original_attrs = reference_df.attrs.copy()
     relative_to = Path(relative_to).resolve().parent if relative_to is not None else Path(reference_df.attrs["relative_to"])
     old_rows = reference_df.set_index("file_path", drop=False) if "file_path" in reference_df else pd.DataFrame()
     previous_paths = {(Path(reference_df.attrs["relative_to"]) / path).resolve() for path in old_rows.index}
@@ -174,6 +175,7 @@ def update_reference_table(
             row = _reference_row_from_path(path, columns=columns, relative_to=relative_to, pipe=pipe, pipe_error_skip=pipe_error_skip)
             if row is not None: rows.append(row)
     df = pd.DataFrame(rows)
+    df.attrs = original_attrs
     df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = fingerprints
     return df
