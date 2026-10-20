@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import pandas as pd
 
@@ -90,9 +90,13 @@ def _reference_row_from_path(
     }
 
 
-def _find_files(directory: str | Path, file_pattern: str, search_subdirectories: bool) -> list[Path]:
+def _selected_paths(directory: str | Path, file_pattern: str | None, file_paths: Iterable[str | Path] | None, search_subdirectories: bool) -> list[Path]:
+    if file_paths is not None:
+        if file_pattern is not None:
+            raise ValueError("file_paths and file_pattern are mutually exclusive.")
+        return [Path(directory) / path for path in file_paths]
     scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    return sorted(path for path in scan(file_pattern) if _reader_match(path)[0] is not None)
+    return list(scan(file_pattern or "*"))
 
 
 def _relative_file_path(path: Path, relative_to: Path) -> str:
@@ -108,7 +112,8 @@ def create_reference_table(
     directory: str | Path = "data", 
     columns: list[str] | None = None, 
     *, relative_to: str | Path | None = None,
-    file_pattern: str = "*",
+    file_pattern: str | None = None,
+    file_paths: Iterable[str | Path] | None = None,
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
@@ -118,7 +123,8 @@ def create_reference_table(
         raise ValueError("workers must be None or a positive integer.")
 
     relative_to = Path.cwd().resolve() if relative_to is None else Path(relative_to).resolve().parent
-    file_paths = _find_files(directory, file_pattern, search_subdirectories)
+    selected_paths = _selected_paths(directory, file_pattern, file_paths, search_subdirectories)
+    paths = sorted(path for path in selected_paths if _reader_match(path)[0] is not None)
 
     def make_row(file_path: Path) -> dict[str, Any] | None:
         return _reference_row_from_path(
@@ -131,14 +137,14 @@ def create_reference_table(
 
     if workers not in (None, 1):
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            df = pd.DataFrame(row for row in executor.map(make_row, file_paths) if row is not None)
+            df = pd.DataFrame(row for row in executor.map(make_row, paths) if row is not None)
     else:
-        df = pd.DataFrame(row for row in map(make_row, file_paths) if row is not None)
+        df = pd.DataFrame(row for row in map(make_row, paths) if row is not None)
 
     df.attrs["relative_to"] = str(relative_to)
     df.attrs["stat_fingerprints"] = {
         _relative_file_path(path, relative_to): _stat_fingerprint(path)
-        for path in file_paths
+        for path in paths
     }
     return df
 
@@ -149,7 +155,8 @@ def update_reference_table(
     columns: list[str] | None = None,
     *,
     relative_to: str | Path | None = None,
-    file_pattern: str = "*",
+    file_pattern: str | None = None,
+    file_paths: Iterable[str | Path] | None = None,
     search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
@@ -158,14 +165,14 @@ def update_reference_table(
     relative_to = Path(relative_to).resolve().parent if relative_to is not None else Path(reference_df.attrs["relative_to"])
     old_rows = reference_df.set_index("file_path", drop=False) if "file_path" in reference_df else pd.DataFrame()
     previous_paths = {(Path(reference_df.attrs["relative_to"]) / path).resolve() for path in old_rows.index}
-    scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    for path in scan(file_pattern):
+    selected_paths = _selected_paths(directory, file_pattern, file_paths, search_subdirectories)
+    for path in selected_paths:
         if path.resolve() in previous_paths and _reader_match(path)[0] is None:
             raise ValueError(f"No reader registered for previously indexed file: {path}")
     old_fingerprints = reference_df.attrs.get("stat_fingerprints", {})
     rows = []
     fingerprints = {}
-    for path in _find_files(directory, file_pattern, search_subdirectories):
+    for path in sorted(path for path in selected_paths if _reader_match(path)[0] is not None):
         stored_path = _relative_file_path(path, relative_to)
         fingerprint = _stat_fingerprint(path)
         fingerprints[stored_path] = fingerprint
