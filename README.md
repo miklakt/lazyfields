@@ -88,6 +88,44 @@ def length(row, key):
 lengths = reference_df.store.length("some_2darray_key")
 ```
 
+Use `bind_method` as a helper to adapt an existing free function to a row-wise method.
+Calling `bind_method(...)(abc)` creates an adapted function
+without changing `abc`, so the original remains independently callable.
+Using `@bind_method(...)` instead reassigns the function name to the adapted version:
+
+```python
+def abc(a, b, c):
+    return a + b + c
+
+reference_df.store.register_method(
+    lf.bind_method(a='_["a"]', b='_.store["b"]')(abc)
+)
+
+abc(1, 2, 10)                         # ordinary function call: 13
+results = reference_df.store.abc(10)  # _["a"] + _.store["b"] + 10
+```
+
+The example above stores this generated source in
+`reference_df.attrs["store_methods"]["abc"]`:
+
+```python
+def abc(_, c):
+    a = _['a']
+    b = _.store['b']
+    return a + b + c
+```
+
+Expressions may also call previously registered methods, for example:
+
+```python
+reference_df.store.register_method(
+    lf.bind_method(a='_["a"]', b='_.store.length("b")')(abc)
+)
+```
+
+This source is saved with the table when pickled and reconstructed when the
+method is first called after loading.
+
 A registered method is evaluated on demand for one row or for every row in a selection.
 
 > **Implementation note:** A method's source code is stored in `DataFrame.attrs`.
