@@ -34,7 +34,6 @@ def bind_method(
 
     "source" stores the function body and recoverable imports.
     "wrap" stores a wrapper; the original module must stay available.
-    The mode argument is positional-only; all keywords are field mappings.
     Bindings are trusted Python expressions. Globals/closures are not captured.
     """
     if mode not in ("source", "wrap"):
@@ -48,9 +47,9 @@ def bind_method(
         suffix = expression.strip()
         bindings[name] = "__row" + suffix if suffix.startswith(("[", ".")) else f"__row[{expression!r}]"
     parameters = inspect.signature(function).parameters
-    allowed = {name for name, p in parameters.items() if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
-    if not mapping.keys() <= allowed:
-        raise ValueError("Unknown or variadic parameter in bindings.")
+    allowed = [name for name, p in parameters.items() if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+    if not mapping.keys() <= set(allowed):
+        raise TypeError(f"Expected parameters: {', '.join(allowed) or '(none)'}.")
     if "__row" in parameters:
         raise ValueError("Reserved name '__row' conflicts with the original function.")
     name = function.__name__
@@ -59,18 +58,30 @@ def bind_method(
         module = inspect.getmodule(function)
         if module is None or module.__name__ == "__main__" or getattr(module, name, None) is not function:
             raise ValueError("The function must be available by name in an importable module.")
-        fields = ", ".join(f"{field!r}: ({expression})" for field, expression in bindings.items())
-        source = f'''def {name}(__row, *args, **kwargs):
-    from {module.__name__} import {name} as __method
-    from inspect import signature, BoundArguments
-    fields = {{{fields}}}
-    sig = signature(__method)
-    free = sig.replace(parameters=[p for name, p in sig.parameters.items() if name not in fields])
-    supplied = free.bind(*args, **kwargs)
-    supplied.apply_defaults()
-    bound = BoundArguments(sig, {{**supplied.arguments, **fields}})
-    return __method(*bound.args, **bound.kwargs)
-'''
+        target = "__method"
+        while target in parameters:
+            target += "_"
+        original = f"__import__({module.__name__!r}, fromlist=[{name!r}]).{name}"
+        free, arguments = [], []
+        for p in parameters.values():
+            prefix = {p.VAR_POSITIONAL: "*", p.VAR_KEYWORD: "**", p.KEYWORD_ONLY: f"{p.name}="}.get(p.kind, "")
+            arguments.append(f"{prefix}({bindings.get(p.name, p.name)})")
+            if p.name not in bindings:
+                default = p.empty if p.default is p.empty else (
+                    f"__import__('inspect').signature({original}).parameters[{p.name!r}].default"
+                )
+                free.append(p.replace(annotation=p.empty, default=default))
+        row_kind = free[0].kind if free and free[0].kind == inspect.Parameter.POSITIONAL_ONLY else inspect.Parameter.POSITIONAL_OR_KEYWORD
+        signature = inspect.Signature([inspect.Parameter("__row", row_kind), *free])
+        node = ast.parse(f'''def {name}{signature}:
+    from {module.__name__} import {name} as {target}
+    return {target}({", ".join(arguments)})
+''').body[0]
+        for defaults in (node.args.defaults, node.args.kw_defaults):
+            for index, default in enumerate(defaults):
+                if default is not None:
+                    defaults[index] = ast.parse(default.value, mode="eval").body
+        source = ast.unparse(ast.fix_missing_locations(node)) + "\n"
         namespace = {}
     else:
         node = ast.parse(textwrap.dedent(inspect.getsource(function))).body[0]

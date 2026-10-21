@@ -153,19 +153,14 @@ results = reference_df.store.abc(10)
 The stored source is a small forwarding wrapper:
 
 ```python
-def abc(__row, *args, **kwargs):
+def abc(__row, c):
     from my_analysis import abc as __method
-    from inspect import signature, BoundArguments
-    fields = {'a': __row['a'], 'b': __row.store['b']}
-    sig = signature(__method)
-    free = sig.replace(parameters=[p for name, p in sig.parameters.items() if name not in fields])
-    supplied = free.bind(*args, **kwargs)
-    supplied.apply_defaults()
-    bound = BoundArguments(sig, {**supplied.arguments, **fields})
-    return __method(*bound.args, **bound.kwargs)
+    return __method(__row['a'], __row.store['b'], c)
 ```
 
-Free arguments are matched to the original signature when called. The
+The wrapper's signature is generated once when binding, so calls forward arguments
+directly. Defaults reference the original function's objects when the wrapper is
+defined or reconstructed after loading. The
 `my_analysis` module must remain available after loading; changes to its `abc`
 function affect calls through the wrapper. Keep that function unchanged when
 registering: create a separate wrapper rather than replacing the original function.
