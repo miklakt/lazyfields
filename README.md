@@ -52,7 +52,7 @@ Pass `file_pattern` to narrow the search or `search_subdirectories=True` to incl
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
 
-> **Implementation note:** Extracted archive contents are reused from a temporary directory while the Python process is running.
+>  Extracted archive contents are reused from a temporary directory while the Python process is running.
 
 The returned DataFrame contains copied values plus three columns:
 
@@ -71,7 +71,7 @@ Use the stored in the indexed files data through `.store`:
 
 Keys containing `/` are rejected when creating a reference table because `/` separates nested path segments.
 
-> **Performance note:** An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
+> An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
 
 You can register methods for use on one row or a selection of rows.
 Each method receives a row as its first argument.
@@ -88,10 +88,15 @@ def length(row, key):
 lengths = reference_df.store.length("some_2darray_key")
 ```
 
+Remove a registered method by name:
+
+```python
+reference_df.store.unregister_method("length")
+```
+
 Use `bind_method` as a helper to adapt an existing free function to a row-wise method.
 The second positional argument selects `"source"` (the default) or
-`"wrap"`. All keyword arguments are parameter mappings, so a function
-parameter named `mode` can also be mapped without conflict.
+`"wrap"`.
 Use a column name directly (`a="a"` or `a='["a"]'`) and `.store["b"]` for a value kept in the original file.
 Calling `bind_method(abc, ...)` creates an adapted function without changing
 `abc`, so the original remains independently callable:
@@ -126,9 +131,8 @@ bound_abc = lf.bind_method(abc, a="a", b='.store.length("b")')
 ```
 
 With `"source"`, `bind_method` adds imports for modules and importable
-functions or classes referenced by the body, preserving aliases such as `import numpy as np`.
-Global constants and other closure values are not saved. Imports added inside
-the body cannot provide names needed by defaults or annotations in the signature.
+functions or classes referenced by the body.
+Global constants and other closure values are not saved.
 
 The generated source is saved with the table when pickled and reconstructed
 when the method is first called after loading.
@@ -169,7 +173,7 @@ Functions defined only in `__main__` or a local scope cannot be used this way.
 
 A registered method is evaluated on demand for one row or for every row in a selection.
 
-> **Implementation note:** A method's source code is stored in `DataFrame.attrs`.
+> A method's source code is stored in `DataFrame.attrs`.
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
