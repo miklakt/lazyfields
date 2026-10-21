@@ -89,17 +89,19 @@ lengths = reference_df.store.length("some_2darray_key")
 ```
 
 Use `bind_method` as a helper to adapt an existing free function to a row-wise method.
+The second positional argument selects `"source"` (the default) or
+`"wrap"`. All keyword arguments are parameter mappings, so a function
+parameter named `mode` can also be mapped without conflict.
 Use a column name directly (`a="a"` or `a='["a"]'`) and `.store["b"]` for a value kept in the original file.
-Calling `bind_method(...)(abc)` creates an adapted function
-without changing `abc`, so the original remains independently callable.
-Using `@bind_method(...)` instead reassigns the function name to the adapted version:
+Calling `bind_method(abc, ...)` creates an adapted function without changing
+`abc`, so the original remains independently callable:
 
 ```python
 def abc(a, b, c):
     return a + b + c
 
 reference_df.store.register_method(
-    lf.bind_method(a="a", b='.store["b"]')(abc)
+    lf.bind_method(abc, a="a", b='.store["b"]')
 )
 
 abc(1, 2, 10)                        # ordinary function call: 13
@@ -120,11 +122,50 @@ The row reference is supplied automatically. Use `.store.method(...)` to call
 an already registered method as an alternative binding:
 
 ```python
-bound_abc = lf.bind_method(a="a", b='.store.length("b")')(abc)
+bound_abc = lf.bind_method(abc, a="a", b='.store.length("b")')
 ```
+
+With `"source"`, `bind_method` adds imports for modules and importable
+functions or classes referenced by the body, preserving aliases such as `import numpy as np`.
+Global constants and other closure values are not saved. Imports added inside
+the body cannot provide names needed by defaults or annotations in the signature.
 
 The generated source is saved with the table when pickled and reconstructed
 when the method is first called after loading.
+
+Pass `"wrap"` when the original function lives in an importable
+module and should remain a dependency. This option does not inspect or copy its
+source; the original function keeps its module globals and defaults:
+
+```python
+from my_analysis import abc
+
+reference_df.store.register_method(
+    lf.bind_method(abc, "wrap", a="a", b='.store["b"]')
+)
+results = reference_df.store.abc(10)
+```
+
+The stored source is a small forwarding wrapper:
+
+```python
+def abc(__row, *args, **kwargs):
+    from my_analysis import abc as __method
+    from inspect import signature, BoundArguments
+    fields = {'a': __row['a'], 'b': __row.store['b']}
+    sig = signature(__method)
+    free = sig.replace(parameters=[p for name, p in sig.parameters.items() if name not in fields])
+    supplied = free.bind(*args, **kwargs)
+    supplied.apply_defaults()
+    bound = BoundArguments(sig, {**supplied.arguments, **fields})
+    return __method(*bound.args, **bound.kwargs)
+```
+
+Free arguments are matched to the original signature when called. The
+`my_analysis` module must remain available after loading; changes to its `abc`
+function affect calls through the wrapper. Keep that function unchanged when
+registering: create a separate wrapper rather than replacing the original function.
+Functions defined only in `__main__` or a local scope cannot be used this way.
 
 A registered method is evaluated on demand for one row or for every row in a selection.
 
