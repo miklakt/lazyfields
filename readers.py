@@ -1,4 +1,4 @@
-import hashlib, json, pickle, shutil, tarfile, warnings, zipfile
+import hashlib, pickle, shutil, tarfile, warnings, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,9 +7,14 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 
 import pandas as pd
 
+try:
+    import orjson as json
+except ImportError:
+    import json
+
 
 def pickle_load(path: str | Path) -> Mapping[str, Any]: return pickle.loads(Path(path).read_bytes())
-def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_text())
+def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
 
 
 def _h5():

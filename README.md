@@ -31,6 +31,15 @@ Install with HDF5 support:
 python3 -m pip install -e '.[hdf5]'
 ```
 
+Install with faster JSON decoding:
+
+```bash
+python3 -m pip install -e '.[json]'
+```
+
+JSON readers automatically use `orjson` when installed, otherwise Python's `json`.
+`orjson` expects UTF-8 JSON and rejects nonstandard values such as `NaN` and `Infinity`.
+
 Create the example data and reference table, then run the usage examples:
 
 ```bash

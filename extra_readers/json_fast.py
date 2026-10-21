@@ -1,7 +1,6 @@
 """Optional JSON reader with memory and SQLite caches of byte ranges."""
 
 import hashlib
-import json
 import mmap
 import sqlite3
 import threading
@@ -11,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..readers import Reader, _path_get, json_load
+from ..readers import Reader, _path_get, json, json_load
 
 
 _SPACE = b" \t\r\n"
