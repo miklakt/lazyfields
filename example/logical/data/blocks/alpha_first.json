@@ -1,0 +1,9 @@
+{
+    "description": "The first block for partition alpha. Rows correspond to coordinates; columns contain three values. The ordered pair of blocks can form one logical asset.",
+    "block_index": 0,
+    "coordinates": [0, 0.5],
+    "values": [
+        [1.0, 1.01, 1.02],
+        [1.03, 1.04, 1.05]
+    ]
+}

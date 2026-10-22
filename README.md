@@ -245,57 +245,25 @@ input_data -> function -> filter -> [function -> filter] -> function -> output_d
 Applying the pipe only affect the reference table.
 The original indexed files remain unchanged, and `.store[...]` still reads their original data.
 
-## Physical asset collections
+## Experimental multiasset foundation
 
-Use `AssetsCollection` to access a selected set of physical files through their
-readers:
+The internal `lazyfields.assets.AssetsCollection` provides a read-only physical
+filesystem: registered relative filenames become mounts, and reader-defined
+infile paths continue below them. Use `node(path)` for lazy handles,
+`listdir(path)` for child names, `read(path, selection)` for data, and
+`locate(path, selection)` for an explicit physical locator.
+See the [development example](example/multiassets/README.md)
+for usage and reader limitations.
 
-```python
-from lazyfields import AssetsCollection
-from lazyfields.extra_readers import NUMPY_ARCHIVE
+All format access stays in `Reader`. Node listing and classification use reader
+metadata when available; HDF5 and NPZ avoid loading dataset values for these
+operations. Other readers fall back to loading the requested value.
 
-access = AssetsCollection(
-    filepaths=["batch.json", "observables.npz"],
-    readers=[NUMPY_ARCHIVE],
-    aliases={"batch": "batch.json", "observables": "observables.npz"},
-    relative_to="results",
-)
-
-energy = access("batch")["runs/run2/energy"]
-first_values = access("observables")["signal", 0:2]
-complete_batch = access("batch")[:]
-```
-
-Built-in and globally registered readers are available automatically. Additional
-readers passed to the collection take precedence locally without changing the
-global registry. File contents are read on demand; returned values are not cached.
-Missing fields and invalid selections propagate the reader's exceptions.
-
-Registered relative paths are the default lookup names. Explicit aliases map
-additional names to registered relative paths. Paths are relative to the
-collection's `relative_to` directory, which defaults to the working directory at
-construction. Duplicate paths are registered once.
-
-Calling the collection returns a lightweight reader accessor with bracket syntax
-and bound reader operations:
-
-```python
-file = access("batch")
-file.get("runs/run2/c", selection=slice(0, 2))
-file.load()
-list(file.items())  # (key, is_scalar, value), following Reader.items
-```
-
-Bracket access supports slash paths, numeric path segments, tuple selections,
-lists of field names, and `[:]`, as in the store accessor. Selections are forwarded
-to the reader, preserving direct reads when the format supports them. The
-collection stores a reader per relative path; iteration and `access.paths` expose
-those paths. To relocate the collection, set `access.relative_to` to the new
-directory as an absolute `Path`; existing reader accessors resolve against it on
-their next read. For asset collections, `relative_to` names a directory.
-
-The collection provides physical access for future logical-file grouping. The
-existing reference-table and single-row pipe APIs retain their current behavior.
+The [logical collection design brief](example/logical/README.md) uses generic
+fixtures in `example/logical/data/`: `partitions.json`, `metadata/`, and `blocks/`.
+It explains the implemented physical filesystem and proposes a logical filesystem
+with partition, merge, and link mounts for `alpha`, `beta`, and `gamma`.
+The logical filesystem is not implemented yet.
 
 ## Extra readers
 

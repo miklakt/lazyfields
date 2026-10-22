@@ -17,6 +17,14 @@ def pickle_load(path: str | Path) -> Mapping[str, Any]: return pickle.loads(Path
 def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
 
 
+@dataclass(frozen=True)
+class NodeInfo:
+    """Node classification and immediate child names, without dataset values."""
+
+    kind: str
+    children: tuple[str, ...] = ()
+
+
 def _h5():
     try: import h5py
     except ImportError as exc: raise ImportError("h5py is required to load HDF5-backed rows.") from exc
@@ -64,6 +72,17 @@ def hdf5_inspect(path: str | Path) -> Iterable[tuple[str, bool, Any]]:
             yield key, scalar and pd.api.types.is_scalar(value), value
 
 
+def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
+    h5py = _h5()
+    with h5py.File(path, "r") as file:
+        node = file
+        for part in filter(None, (key or "").split("/")):
+            node = node[part]
+        if isinstance(node, h5py.Group):
+            return NodeInfo("group", tuple(node.keys()))
+        return NodeInfo("scalar" if node.shape == () else "dataset")
+
+
 def _path_get(value: Any, key: str) -> Any:
     for part in filter(None, key.split("/")):
         quoted = len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
@@ -95,11 +114,28 @@ class Reader:
     inspect: Callable[..., Iterable[tuple[str, bool, Any]]] | None = None
     # Exceptions that indicate a requested key or selection is missing.
     missing_errors: tuple[type[Exception], ...] = (KeyError, TypeError, IndexError)
+    # Optional metadata-only classification/listing at any infile path.
+    inspect_node: Callable[..., NodeInfo] | None = None
 
-    def get(self, path: str | Path, key: str, selection: Any | None = None) -> Any:
+    def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
+        """Read a file or one field, forwarding selection to direct readers."""
+        if key is not None and not isinstance(key, str):
+            raise TypeError("infile_path must be a string or None.")
+        if selection is not None and key is None:
+            raise ValueError("selection requires a single infile path.")
+        if key is None: return self.load(path)
         if self.read is not None: return self.read(path, key, selection)
         value = _path_get(self.load(path), key)
         return value if selection is None else value[selection]
+
+    def info(self, path: str | Path, key: str | None = None) -> NodeInfo:
+        """Use metadata when supported, otherwise classify one loaded value."""
+        if self.inspect_node is not None: return self.inspect_node(path, key)
+        if key is None and self.inspect is not None:
+            return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(path)))
+        value = self.get(path, key)
+        if isinstance(value, Mapping): return NodeInfo("group", tuple(str(name) for name in value))
+        return NodeInfo("scalar" if pd.api.types.is_scalar(value) else "dataset")
 
     def items(self, path: str | Path) -> Iterable[tuple[str, bool, Any]]:
         if self.inspect is not None: return self.inspect(path)
@@ -212,9 +248,13 @@ def archive_inspect(path: str | Path) -> Iterable[tuple[str, bool, Any]]:
     with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).items(inner_path)
 
 
+def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
+    with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).info(inner_path, key)
+
+
 for _reader in (
     Reader((".pkl", ".pickle"), pickle_load),
     Reader((".json",), json_load),
-    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, (KeyError, TypeError)),
-    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, (KeyError, TypeError, IndexError, ValueError))
+    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, (KeyError, TypeError), inspect_node=hdf5_info),
+    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, (KeyError, TypeError, IndexError, ValueError), inspect_node=archive_info)
     ): register_reader(_reader)

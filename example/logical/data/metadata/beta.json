@@ -1,0 +1,6 @@
+{
+    "description": "Metadata for partition beta. This physical file is exposed as one logical asset.",
+    "label": "beta",
+    "weight": 45,
+    "coefficients": [1.04, 1.02, 0.98]
+}

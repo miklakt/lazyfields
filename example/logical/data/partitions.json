@@ -1,0 +1,38 @@
+{
+    "description": "Three logical partitions stored in one physical file. Each partition contains two scalars, a vector, a matrix, and links to metadata and two ordered blocks.",
+    "partitions": {
+        "alpha": {
+            "scalar_a": 0,
+            "scalar_b": 1.5,
+            "vector": [0, 0.5, 1.0],
+            "matrix": [
+                [1, 2, 3],
+                [4, 5, 6]
+            ],
+            "file_ref": "metadata/alpha.json",
+            "file_refs": ["blocks/alpha_first.json", "blocks/alpha_second.json"]
+        },
+        "beta": {
+            "scalar_a": 10,
+            "scalar_b": 2.0,
+            "vector": [10, 10.5, 11.0],
+            "matrix": [
+                [11, 12, 13],
+                [14, 15, 16]
+            ],
+            "file_ref": "metadata/beta.json",
+            "file_refs": ["blocks/beta_first.json", "blocks/beta_second.json"]
+        },
+        "gamma": {
+            "scalar_a": 20,
+            "scalar_b": 0.5,
+            "vector": [20, 20.5, 21.0],
+            "matrix": [
+                [21, 22, 23],
+                [24, 25, 26]
+            ],
+            "file_ref": "metadata/gamma.json",
+            "file_refs": ["blocks/gamma_first.json", "blocks/gamma_second.json"]
+        }
+    }
+}

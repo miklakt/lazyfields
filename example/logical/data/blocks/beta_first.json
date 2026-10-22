@@ -1,0 +1,9 @@
+{
+    "description": "The first block for partition beta. Rows correspond to coordinates; columns contain three values. The ordered pair of blocks can form one logical asset.",
+    "block_index": 0,
+    "coordinates": [10, 10.5],
+    "values": [
+        [2.0, 2.01, 2.02],
+        [2.03, 2.04, 2.05]
+    ]
+}

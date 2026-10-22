@@ -1,0 +1,6 @@
+{
+    "description": "Metadata for partition gamma. This physical file is exposed as one logical asset.",
+    "label": "gamma",
+    "weight": 60,
+    "coefficients": [0.97, 1.03, 1.01]
+}

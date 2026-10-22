@@ -1,65 +1,30 @@
-"""Physical assets accessed through the existing file readers."""
+"""A thin read-only filesystem binding registered physical files to readers."""
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
-from .readers import Reader, require_reader
+from .filesystem import AssetNode, PhysicalLocator, _MountIndex
+from .readers import NodeInfo, Reader, require_reader
 
 
 class AssetsCollection:
-    """Bind physical files to readers and look them up by relative path or alias.
+    """Read-only namespace over registered files and reader-defined infile paths.
 
-    ``filepaths`` accepts an iterable of paths or a single path. Repeated paths
-    are registered once. Iteration yields the registered relative paths.
-
-    ``readers`` supplies collection-local readers, taking precedence over the
-    registered readers. ``aliases`` maps additional names to registered paths.
-    Asset paths must be relative to the directory ``relative_to``, which defaults
-    to the working directory at construction. Construction does not load files.
+    Registration and node creation do not read contents. Local readers override
+    global readers; paths are relative to ``relative_to`` (the current directory
+    by default). Repeated files are mounted once. Values are not cached.
     """
-
-    class _Accesor:
-        """Bracket syntax for a reader bound to a lazily resolved physical path."""
-
-        def __init__(self, reader: Reader, path: Callable[[], Path]):
-            self._reader, self._path = reader, path
-
-        def load(self) -> Mapping[str, Any]:
-            return self._reader.load(self._path())
-
-        def get(self, key: str, selection: Any | None = None) -> Any:
-            """Read a physical field, following Reader.get's strict semantics."""
-            return self._reader.get(self._path(), key, selection)
-
-        def items(self) -> Iterable[tuple[str, bool, Any]]:
-            return self._reader.items(self._path())
-
-        def __getitem__(self, keys: Any) -> Any:
-            if isinstance(keys, slice) and keys == slice(None):
-                return self.load()
-            if isinstance(keys, str):
-                return self.get(keys)
-            if isinstance(keys, tuple):
-                if len(keys) < 2 or not isinstance(keys[0], str):
-                    raise TypeError("Tuple access must start with a field name and a selection.")
-                selection = keys[1] if len(keys) == 2 else keys[1:]
-                return self.get(keys[0], selection)
-            if isinstance(keys, list) and all(isinstance(key, str) for key in keys):
-                return {key: self.get(key) for key in keys}
-            raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
 
     def __init__(
         self,
         filepaths: Iterable[str | Path] | str | Path,
         readers: Reader | Iterable[Reader] | None = None,
         *,
-        aliases: Mapping[str, str | Path] | None = None,
         relative_to: str | Path | None = None,
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
         self._readers: dict[Path, Reader] = {}
-        self._aliases: dict[str, Path] = {}
 
         local_readers = (readers,) if isinstance(readers, Reader) else readers or ()
         suffix_readers = {}
@@ -68,39 +33,23 @@ class AssetsCollection:
                 raise TypeError("readers must contain Reader instances.")
             for suffix in reader.suffixes:
                 suffix = suffix.lower()
-                if not suffix.startswith("."):
-                    raise ValueError("Reader suffixes must start with '.'.")
-                if suffix in suffix_readers:
-                    raise ValueError(f"Multiple local readers for {suffix!r}.")
+                if not suffix.startswith(".") or suffix in suffix_readers:
+                    raise ValueError(f"Invalid or duplicate reader suffix: {suffix!r}")
                 suffix_readers[suffix] = reader
 
         if isinstance(filepaths, (str, Path)):
             filepaths = [filepaths]
         if isinstance(filepaths, Mapping):
-            raise TypeError("filepaths must contain paths; use aliases to name them.")
+            raise TypeError("filepaths must contain paths.")
+        suffixes = sorted(suffix_readers, key=len, reverse=True)
         for path in filepaths:
             path = self._relative(path)
             if path not in self._readers:
-                suffixes = path.suffixes
-                reader = next((
-                    suffix_readers[suffix]
-                    for start in range(len(suffixes))
-                    if (suffix := "".join(suffixes[start:]).lower()) in suffix_readers
-                ), None)
-                if reader is None:
-                    reader = require_reader(path)
-                self._readers[path] = reader
+                filename = path.name.lower()
+                suffix = next((suffix for suffix in suffixes if filename.endswith(suffix)), None)
+                self._readers[path] = suffix_readers.get(suffix) or require_reader(path)
 
-        for alias, target in (aliases or {}).items():
-            if not isinstance(alias, str):
-                raise TypeError("Asset aliases must be strings.")
-            path = self._relative(target)
-            if path not in self._readers:
-                raise KeyError(f"Unknown asset: {target!r}")
-            name_path = self._relative(alias)
-            if name_path in self._readers and name_path != path:
-                raise ValueError(f"Asset alias {alias!r} conflicts with a registered path.")
-            self._aliases[alias] = path
+        self._mounts = _MountIndex(self._readers)
 
     @staticmethod
     def _relative(path: str | Path) -> Path:
@@ -108,19 +57,55 @@ class AssetsCollection:
             raise TypeError("Asset paths must be strings or Path objects.")
         if Path(path).is_absolute():
             raise ValueError("Asset paths must be relative to relative_to.")
-        return Path(os.path.normpath(path))
+        path = Path(os.path.normpath(path))
+        if path == Path(".") or path.parts[0] == "..":
+            raise ValueError("Asset paths must identify files below relative_to.")
+        return path
 
-    def _resolve(self, reference: str | Path) -> Path:
-        if isinstance(reference, str) and reference in self._aliases:
-            return self._aliases[reference]
-        path = self._relative(reference)
-        if path in self._readers:
-            return path
-        raise KeyError(f"Unknown asset: {reference!r}")
+    def node(self, path: str | Path = "") -> AssetNode:
+        """Bind a lazy handle, checking mounts but not infile contents."""
+        path = self._mounts.normalize(path)
+        self._mounts.split(path)
+        return AssetNode(self, path)
 
-    def __call__(self, reference: str | Path) -> "AssetsCollection._Accesor":
-        path = self._resolve(reference)
-        return self._Accesor(self._readers[path], lambda: (self.relative_to / path).resolve())
+    def locate(self, path: str | Path, selection: Any | None = None) -> PhysicalLocator:
+        """Resolve a namespace path to a file/path/selection triple without I/O."""
+        path = self._mounts.normalize(path)
+        file_path, infile_path = self._mounts.split(path)
+        if file_path is None:
+            raise IsADirectoryError(f"Physical directory has no single locator: {path!r}")
+        if selection is not None and infile_path is None:
+            raise ValueError("selection requires an infile path.")
+        return PhysicalLocator(file_path, infile_path, selection)
+
+    def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
+        """Read a node or materialize a directory's registered children.
+
+        Dataset selections are forwarded unchanged to the mounted reader.
+        """
+        path = self._mounts.normalize(path)
+        file_path, infile_path = self._mounts.split(path)
+        if file_path is None:
+            if selection is not None:
+                raise ValueError("selection requires an infile path.")
+            return {name: self.read(f"{path}/{name}") for name in self._mounts.directories[path]}
+        return self._readers[file_path].get(self.relative_to / file_path, infile_path, selection)
+
+    def listdir(self, path: str | Path = "") -> tuple[str, ...]:
+        """List child names through the index or reader's metadata/fallback."""
+        info = self._info(path)
+        if info.kind != "group":
+            raise NotADirectoryError(str(path))
+        return info.children
+
+    def _info(self, path: str | Path, *, list_children: bool = True) -> NodeInfo:
+        path = self._mounts.normalize(path)
+        file_path, infile_path = self._mounts.split(path)
+        if file_path is None:
+            return NodeInfo("group", tuple(self._mounts.directories[path]))
+        if infile_path is None and not list_children:
+            return NodeInfo("group")
+        return self._readers[file_path].info(self.relative_to / file_path, infile_path)
 
     def __iter__(self) -> Iterator[Path]:
         return iter(self._readers)

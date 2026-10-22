@@ -1,0 +1,9 @@
+{
+    "description": "The first block for partition gamma. Rows correspond to coordinates; columns contain three values. The ordered pair of blocks can form one logical asset.",
+    "block_index": 0,
+    "coordinates": [20, 20.5],
+    "values": [
+        [3.0, 3.01, 3.02],
+        [3.03, 3.04, 3.05]
+    ]
+}
