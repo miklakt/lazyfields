@@ -7,37 +7,6 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 from .readers import Reader, require_reader
 
 
-class _ReaderAccessor:
-    """Bracket syntax for a reader bound to a lazily resolved physical path."""
-
-    def __init__(self, reader: Reader, path: Callable[[], Path]):
-        self._reader, self._path = reader, path
-
-    def load(self) -> Mapping[str, Any]:
-        return self._reader.load(self._path())
-
-    def get(self, key: str, selection: Any | None = None) -> Any:
-        """Read a physical field, following Reader.get's strict semantics."""
-        return self._reader.get(self._path(), key, selection)
-
-    def items(self) -> Iterable[tuple[str, bool, Any]]:
-        return self._reader.items(self._path())
-
-    def __getitem__(self, keys: Any) -> Any:
-        if isinstance(keys, slice) and keys == slice(None):
-            return self.load()
-        if isinstance(keys, str):
-            return self.get(keys)
-        if isinstance(keys, tuple):
-            if len(keys) < 2 or not isinstance(keys[0], str):
-                raise TypeError("Tuple access must start with a field name and a selection.")
-            selection = keys[1] if len(keys) == 2 else keys[1:]
-            return self.get(keys[0], selection)
-        if isinstance(keys, list) and all(isinstance(key, str) for key in keys):
-            return {key: self.get(key) for key in keys}
-        raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
-
-
 class AssetsCollection:
     """Bind physical files to readers and look them up by relative path or alias.
 
@@ -49,6 +18,36 @@ class AssetsCollection:
     Asset paths must be relative to the directory ``relative_to``, which defaults
     to the working directory at construction. Construction does not load files.
     """
+
+    class _Accesor:
+        """Bracket syntax for a reader bound to a lazily resolved physical path."""
+
+        def __init__(self, reader: Reader, path: Callable[[], Path]):
+            self._reader, self._path = reader, path
+
+        def load(self) -> Mapping[str, Any]:
+            return self._reader.load(self._path())
+
+        def get(self, key: str, selection: Any | None = None) -> Any:
+            """Read a physical field, following Reader.get's strict semantics."""
+            return self._reader.get(self._path(), key, selection)
+
+        def items(self) -> Iterable[tuple[str, bool, Any]]:
+            return self._reader.items(self._path())
+
+        def __getitem__(self, keys: Any) -> Any:
+            if isinstance(keys, slice) and keys == slice(None):
+                return self.load()
+            if isinstance(keys, str):
+                return self.get(keys)
+            if isinstance(keys, tuple):
+                if len(keys) < 2 or not isinstance(keys[0], str):
+                    raise TypeError("Tuple access must start with a field name and a selection.")
+                selection = keys[1] if len(keys) == 2 else keys[1:]
+                return self.get(keys[0], selection)
+            if isinstance(keys, list) and all(isinstance(key, str) for key in keys):
+                return {key: self.get(key) for key in keys}
+            raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
 
     def __init__(
         self,
@@ -119,9 +118,9 @@ class AssetsCollection:
             return path
         raise KeyError(f"Unknown asset: {reference!r}")
 
-    def __call__(self, reference: str | Path) -> _ReaderAccessor:
+    def __call__(self, reference: str | Path) -> "AssetsCollection._Accesor":
         path = self._resolve(reference)
-        return _ReaderAccessor(self._readers[path], lambda: (self.relative_to / path).resolve())
+        return self._Accesor(self._readers[path], lambda: (self.relative_to / path).resolve())
 
     def __iter__(self) -> Iterator[Path]:
         return iter(self._readers)
