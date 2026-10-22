@@ -215,6 +215,14 @@ class StoreAccessor:
         self._compiled_methods[name] = method
         return method
 
+    def unregister_method(self, name: str) -> None:
+        """Remove a registered method by name; raise KeyError if it is missing."""
+        methods = self._methods.copy()
+        del methods[name]
+        self._methods = methods
+        self._obj.attrs["store_methods"] = methods
+        self._compiled_methods.pop(name, None)
+
     def __getattr__(self, name: str) -> Any:
         try:
             source = self._methods[name]

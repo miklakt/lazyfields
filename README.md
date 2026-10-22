@@ -31,6 +31,15 @@ Install with HDF5 support:
 python3 -m pip install -e '.[hdf5]'
 ```
 
+Install with faster JSON decoding:
+
+```bash
+python3 -m pip install -e '.[json]'
+```
+
+JSON readers automatically use `orjson` when installed, otherwise Python's `json`.
+`orjson` expects UTF-8 JSON and rejects nonstandard values such as `NaN` and `Infinity`.
+
 Create the example data and reference table, then run the usage examples:
 
 ```bash
@@ -53,7 +62,7 @@ Pass `file_paths` with an iterable of paths relative to `directory` to select sp
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
 
-> **Implementation note:** Extracted archive contents are reused from a temporary directory while the Python process is running.
+>  Extracted archive contents are reused from a temporary directory while the Python process is running.
 
 The returned DataFrame contains copied values plus three columns:
 
@@ -72,7 +81,7 @@ Use the stored in the indexed files data through `.store`:
 
 Keys containing `/` are rejected when creating a reference table because `/` separates nested path segments.
 
-> **Performance note:** An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
+> An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
 
 You can register methods for use on one row or a selection of rows.
 Each method receives a row as its first argument.
@@ -89,9 +98,87 @@ def length(row, key):
 lengths = reference_df.store.length("some_2darray_key")
 ```
 
+Remove a registered method by name:
+
+```python
+reference_df.store.unregister_method("length")
+```
+
+Use `bind_method` as a helper to adapt an existing free function to a row-wise method.
+The second positional argument selects `"source"` (the default) or
+`"wrap"`.
+Use a column name directly (`a="a"` or `a='["a"]'`) and `.store["b"]` for a value kept in the original file.
+Calling `bind_method(abc, ...)` creates an adapted function without changing
+`abc`, so the original remains independently callable:
+
+```python
+def abc(a, b, c):
+    return a + b + c
+
+reference_df.store.register_method(
+    lf.bind_method(abc, a="a", b='.store["b"]')
+)
+
+abc(1, 2, 10)                        # ordinary function call: 13
+results = reference_df.store.abc(10)  # adds column a, value b from the original file, and 10
+```
+
+The example above stores this generated source in
+`reference_df.attrs["store_methods"]["abc"]`:
+
+```python
+def abc(__row, c):
+    a = __row['a']
+    b = __row.store['b']
+    return a + b + c
+```
+
+The row reference is supplied automatically. Use `.store.method(...)` to call
+an already registered method as an alternative binding:
+
+```python
+bound_abc = lf.bind_method(abc, a="a", b='.store.length("b")')
+```
+
+With `"source"`, `bind_method` adds imports for modules and importable
+functions or classes referenced by the body.
+Global constants and other closure values are not saved.
+
+The generated source is saved with the table when pickled and reconstructed
+when the method is first called after loading.
+
+Pass `"wrap"` when the original function lives in an importable
+module and should remain a dependency. This option does not inspect or copy its
+source; the original function keeps its module globals and defaults:
+
+```python
+from my_analysis import abc
+
+reference_df.store.register_method(
+    lf.bind_method(abc, "wrap", a="a", b='.store["b"]')
+)
+results = reference_df.store.abc(10)
+```
+
+The stored source is a small forwarding wrapper:
+
+```python
+def abc(__row, c):
+    from my_analysis import abc as __method
+    return __method(__row['a'], __row.store['b'], c)
+```
+
+The wrapper's signature is generated once when binding, so calls forward arguments
+directly. Defaults reference the original function's objects when the wrapper is
+defined or reconstructed after loading. The
+`my_analysis` module must remain available after loading; changes to its `abc`
+function affect calls through the wrapper. Keep that function unchanged when
+registering: create a separate wrapper rather than replacing the original function.
+Functions defined only in `__main__` or a local scope cannot be used this way.
+
 A registered method is evaluated on demand for one row or for every row in a selection.
 
-> **Implementation note:** A method's source code is stored in `DataFrame.attrs`.
+> A method's source code is stored in `DataFrame.attrs`.
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
