@@ -9,7 +9,7 @@ Each indexed file must contain one dictionary.
 Scalar values are copied into the DataFrame.
 Other values stay in the original file until requested through `row.store[...]` or `reference_df.store[...]`.
 
-> **Note:** "Scalar" follows `pandas.api.types.is_scalar(...)`: numbers, strings, booleans, timestamps, and `None` are scalar; lists, dictionaries, and arrays are not.
+> **Note:** Numbers, strings, booleans, dates, times, and `None` are scalar; lists, dictionaries, and arrays are not.
 
 ## Quick Start
 

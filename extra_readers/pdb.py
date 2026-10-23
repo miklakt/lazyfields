@@ -52,8 +52,8 @@ def _pdb_read(path, key, selection=None):
 
 
 def _pdb_inspect(path):
-    yield from ((key, True, value) for key, value in _pdb_metadata(path).items())
-    yield from ((key, False, None) for key in _PDB_COLUMNS)
+    yield from ((key, "scalar", value) for key, value in _pdb_metadata(path).items())
+    yield from ((key, "dataset", None) for key in _PDB_COLUMNS)
 
 
 PROTEIN_DATA_BANK = Reader((".pdb", ".ent"), _pdb_load, _pdb_read, _pdb_inspect)

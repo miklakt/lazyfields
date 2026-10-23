@@ -8,9 +8,8 @@ from collections import OrderedDict
 from contextlib import closing
 from pathlib import Path
 
-import pandas as pd
 
-from ..readers import Reader, _path_get, json, json_load
+from ..readers import Reader, value_kind, _path_get, json, json_load
 
 
 _SPACE = b" \t\r\n"
@@ -360,7 +359,7 @@ def JSON_FAST(size_cutoff: int = _DEFAULT_SIZE_CUTOFF,
             values = load(path)
             if not isinstance(values, dict):
                 raise TypeError("expected a mapping row dictionary.")
-            yield from ((key, pd.api.types.is_scalar(value), value) for key, value in values.items())
+            yield from ((key, value_kind(value), value) for key, value in values.items())
             return
         offsets = index(path)
         with Path(path).open("rb") as fh:
@@ -368,10 +367,10 @@ def JSON_FAST(size_cutoff: int = _DEFAULT_SIZE_CUTOFF,
                 fh.seek(start)
                 first = fh.read(1)
                 if first in (b"{", b"["):
-                    yield key, False, None
+                    yield key, "group" if first == b"{" else "dataset", None
                 else:
                     fh.seek(start)
                     value = json.loads(fh.read(end - start))
-                    yield key, pd.api.types.is_scalar(value), value
+                    yield key, value_kind(value), value
 
     return Reader((".json",), load, read, inspect)

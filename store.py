@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterable, Mapping
 import pandas as pd
 
 from .pipe import _apply_pipe
-from .readers import _reader_match, require_reader
+from .readers import _reader_match, require_reader, value_kind
 
 
 def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
@@ -49,38 +49,33 @@ def _reference_row_from_path(
 ) -> dict[str, Any] | None:
     try:
         reader = require_reader(file_path)
-        if not pipe and reader.inspect is not None:
-            row, non_scalar_keys = {}, []
-            for key, is_scalar, value in reader.items(file_path):
-                _validate_keys({key: value})
-                if is_scalar:
-                    row[key] = value
-                else:
-                    non_scalar_keys.append(key)
-        else:
+        if pipe:
             row_data = reader.load(file_path)
             _validate_keys(row_data)
+            if not isinstance(row_data, Mapping):
+                print(f"Skipping {file_path.name}: expected a mapping row dictionary."); return None
+        else:
+            row, non_scalar_keys = {}, []
+            for key, kind, value in reader.items(file_path):
+                _validate_keys({key: value})
+                if kind == "scalar": row[key] = value
+                else: non_scalar_keys.append(key)
     except _InvalidKeyError:
         raise
     except Exception as exc:
         print(f"Failed to load {file_path.name}: {exc}"); return None
 
-    if pipe or reader.inspect is None:
-        if not isinstance(row_data, Mapping):
-            print(f"Skipping {file_path.name}: expected a mapping row dictionary."); return None
-        non_scalar_keys = [k for k, v in row_data.items() if not pd.api.types.is_scalar(v)]
-        if pipe:
-            try:
-                processed_row_data = _apply_pipe(row_data, pipe, reader, file_path)
-            except Exception as exc:
-                if not pipe_error_skip: raise
-                print(f"Failed to apply pipe to {file_path}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                return None
-            if processed_row_data is False: return None
-            _validate_keys(processed_row_data)
-        else:
-            processed_row_data = row_data
-        row = {k: v for k, v in processed_row_data.items() if pd.api.types.is_scalar(v)}
+    if pipe:
+        non_scalar_keys = [key for key, value in row_data.items() if value_kind(value) != "scalar"]
+        try:
+            processed = _apply_pipe(row_data, pipe, reader, file_path)
+        except Exception as exc:
+            if not pipe_error_skip: raise
+            print(f"Failed to apply pipe to {file_path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return None
+        if processed is False: return None
+        _validate_keys(processed)
+        row = {key: value for key, value in processed.items() if value_kind(value) == "scalar"}
     if columns is not None: row = {k: v for k, v in row.items() if k in columns}
     return {
         **row,

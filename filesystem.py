@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .readers import NodeInfo, Reader, require_reader
+from .readers import NodeInfo, NodeKind, Reader, require_reader
 
 __all__ = ["FileSystem", "Node", "SourceLocator"]
 
@@ -99,7 +99,7 @@ class Node:
         return self._filesystem.locate(self.path, selection)
 
     @property
-    def kind(self) -> str:
+    def kind(self) -> NodeKind:
         return self._filesystem._lookup(self.path)._info(list_children=False).kind
 
 

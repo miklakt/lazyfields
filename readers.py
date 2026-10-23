@@ -1,11 +1,12 @@
 import hashlib, pickle, shutil, tarfile, warnings, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date, time, timedelta
+from decimal import Decimal
+from numbers import Number
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Iterable, Iterator, Mapping
-
-import pandas as pd
+from typing import Any, Callable, Iterable, Iterator, Literal, Mapping
 
 try:
     import orjson as json
@@ -17,11 +18,24 @@ def pickle_load(path: str | Path) -> Mapping[str, Any]: return pickle.loads(Path
 def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
 
 
+NodeKind = Literal["scalar", "dataset", "group"]
+
+
+def value_kind(value: Any) -> NodeKind:
+    if isinstance(value, Mapping): return "group"
+    if value is None or isinstance(value, (str, bytes, Number, Decimal, date, time, timedelta)):
+        return "scalar"
+    # Array scalars expose shape but have no container length; 0-D arrays remain datasets.
+    if getattr(value, "shape", None) == () and not hasattr(value, "__len__"):
+        return "scalar"
+    return "dataset"
+
+
 @dataclass(frozen=True)
 class NodeInfo:
     """Node classification and immediate child names, without dataset values."""
 
-    kind: str
+    kind: NodeKind
     children: tuple[str, ...] = ()
 
 
@@ -63,13 +77,16 @@ def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
         return _normalize(_read(node, h5py)[selection])
 
 
-def hdf5_inspect(path: str | Path) -> Iterable[tuple[str, bool, Any]]:
+def _hdf5_kind(node: Any) -> NodeKind:
+    return "group" if isinstance(node, _h5().Group) else "scalar" if node.shape == () else "dataset"
+
+
+def hdf5_inspect(path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
     h5py = _h5()
     with h5py.File(path, "r") as fh:
         for key, node in fh.items():
-            scalar = isinstance(node, h5py.Dataset) and node.shape == ()
-            value = _normalize(node[()]) if scalar else None
-            yield key, scalar and pd.api.types.is_scalar(value), value
+            kind = _hdf5_kind(node)
+            yield key, kind, _normalize(node[()]) if kind == "scalar" else None
 
 
 def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
@@ -78,9 +95,8 @@ def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
         node = file
         for part in filter(None, (key or "").split("/")):
             node = node[part]
-        if isinstance(node, h5py.Group):
-            return NodeInfo("group", tuple(node.keys()))
-        return NodeInfo("scalar" if node.shape == () else "dataset")
+        kind = _hdf5_kind(node)
+        return NodeInfo(kind, tuple(node.keys()) if kind == "group" else ())
 
 
 def _path_get(value: Any, key: str) -> Any:
@@ -109,9 +125,8 @@ class Reader:
     load: Callable[..., Mapping[str, Any]]
     # Optionally reads one key or selection directly, without loading everything
     read: Callable[..., Any] | None = None
-    # Optionally provide when keys and scalars can be inspected without loading large values
-    # HDF5 supports this, while pickle and JSON must load fully.
-    inspect: Callable[..., Iterable[tuple[str, bool, Any]]] | None = None
+    # Optional (name, kind, value) inspection; non-scalar values may be omitted.
+    inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
     # Exceptions that indicate a requested key or selection is missing.
     missing_errors: tuple[type[Exception], ...] = (KeyError, TypeError, IndexError)
     # Optional metadata-only classification/listing at any infile path.
@@ -131,17 +146,24 @@ class Reader:
     def info(self, path: str | Path, key: str | None = None) -> NodeInfo:
         """Use metadata when supported, otherwise classify one loaded value."""
         if self.inspect_node is not None: return self.inspect_node(path, key)
-        if key is None and self.inspect is not None:
-            return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(path)))
+        if self.inspect is not None:
+            if key is None:
+                return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(path)))
+            if key and "/" not in key:
+                for name, kind, _ in self.items(path):
+                    if name == key:
+                        if kind != "group": return NodeInfo(kind)
+                        break
         value = self.get(path, key)
-        if isinstance(value, Mapping): return NodeInfo("group", tuple(str(name) for name in value))
-        return NodeInfo("scalar" if pd.api.types.is_scalar(value) else "dataset")
+        kind = value_kind(value)
+        return NodeInfo(kind, tuple(str(name) for name in value) if kind == "group" else ())
 
-    def items(self, path: str | Path) -> Iterable[tuple[str, bool, Any]]:
+    def items(self, path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
+        """Yield (name, kind, value), with values required only for scalars."""
         if self.inspect is not None: return self.inspect(path)
         values = self.load(path)
         if not isinstance(values, Mapping): raise TypeError("expected a mapping row dictionary.")
-        return ((key, pd.api.types.is_scalar(value), value) for key, value in values.items())
+        return ((key, value_kind(value), value) for key, value in values.items())
 
 
 _ARCHIVE_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip")
@@ -244,7 +266,7 @@ def archive_get(path: str | Path, key: str, selection: Any | None = None) -> Any
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).get(inner_path, key, selection)
 
 
-def archive_inspect(path: str | Path) -> Iterable[tuple[str, bool, Any]]:
+def archive_inspect(path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
     with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).items(inner_path)
 
 

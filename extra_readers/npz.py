@@ -1,10 +1,9 @@
 from zipfile import ZipFile
 
 import numpy as np
-import pandas as pd
 from numpy.lib import format as npy_format
 
-from ..readers import Reader
+from ..readers import NodeInfo, Reader
 
 
 def _npz_headers(path):
@@ -16,7 +15,7 @@ def _npz_headers(path):
                 read_header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
                 shape, _, dtype = read_header(file)
             if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
-            yield member.filename[:-4], shape
+            yield member.filename[:-4], "scalar" if shape == () else "dataset"
 
 
 def _npz_value(value):
@@ -37,9 +36,17 @@ def _npz_read(path, key, selection=None):
 
 def _npz_inspect(path):
     with np.load(path, allow_pickle=False) as archive:
-        for key, shape in _npz_headers(path):
-            value = _npz_value(archive[key]) if shape == () else None
-            yield key, shape == () and pd.api.types.is_scalar(value), value
+        for key, kind in _npz_headers(path):
+            yield key, kind, _npz_value(archive[key]) if kind == "scalar" else None
 
 
-NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect)
+def _npz_info(path, key=None):
+    if key is None:
+        return NodeInfo("group", tuple(name for name, _ in _npz_headers(path)))
+    for name, kind in _npz_headers(path):
+        if name == key:
+            return NodeInfo(kind)
+    raise KeyError(key)
+
+
+NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect, inspect_node=_npz_info)

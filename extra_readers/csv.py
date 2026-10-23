@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..readers import Reader
+from ..readers import Reader, value_kind
 
 
 def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows: int = 0, column_separator: str = ",", suffixes: tuple[str, ...] = (".csv",)) -> Reader:
@@ -15,7 +15,7 @@ def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows
                 if not line.startswith(comment): break
                 key, value = line[len(comment):].split(key_value_separator, 1)
                 value = json.loads(value)
-                if not pd.api.types.is_scalar(value): raise ValueError("CSV header values must be scalar.")
+                if value_kind(value) != "scalar": raise ValueError("CSV header values must be scalar.")
                 values[key.strip()] = value
         return values
 
@@ -29,8 +29,8 @@ def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows
         return value if selection is None else value[selection]
 
     def inspect(path):
-        yield from ((key, True, value) for key, value in metadata(path).items())
+        yield from ((key, "scalar", value) for key, value in metadata(path).items())
         columns = pd.read_csv(path, comment=comment, skiprows=skiprows, sep=column_separator, nrows=0).columns
-        yield from ((key, False, None) for key in columns)
+        yield from ((key, "dataset", None) for key in columns)
 
     return Reader(suffixes, load, read, inspect, (KeyError, TypeError, IndexError, ValueError))
