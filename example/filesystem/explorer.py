@@ -1,11 +1,13 @@
 """Minimal read-only Tk explorer with logical mount markers."""
 
+from pprint import pformat
 from reprlib import repr as short_repr
 
 def explore(filesystem):
-    """Inspect visible nodes; discover children and read values only when visited."""
+    """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
     from tkinter import ttk
+    from tkinter.scrolledtext import ScrolledText
 
     window = tk.Tk()
     window.title("lazyfields")
@@ -17,12 +19,13 @@ def explore(filesystem):
     details.heading("value", text="Value")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
+    kinds = {}
     children = {}
     previews = {}
 
     def insert(parent, path, name):
         node = filesystem.node(path)
-        kind = node.kind
+        kind = kinds[path] = node.kind
         group = kind == "group"
         origin = node.origin
         file_root = origin is not None and origin.infile_path is None
@@ -53,6 +56,24 @@ def explore(filesystem):
             )
         return children[item]
 
+    def preview(path):
+        if kinds[path] == "group":
+            return ""
+        if path not in previews:
+            try:
+                previews[path] = short_repr(filesystem.read(path))[:160]
+            except Exception as exc:
+                return f"Error: {exc}"
+        return previews[path]
+
+    def show_dataset(path, value):
+        popup = tk.Toplevel(window)
+        popup.title(path)
+        text = ScrolledText(popup, width=100, height=30, wrap="word")
+        text.pack(fill="both", expand=True)
+        text.insert("1.0", pformat(value, width=100, sort_dicts=False))
+        text.configure(state="disabled")
+
     def show(event=None):
         item = tree.focus()
         if not item:
@@ -61,20 +82,22 @@ def explore(filesystem):
         try:
             entries = populate(item)
             if entries is None:
-                preview = short_repr(filesystem.read(item))
-                previews[item] = preview[:160]
                 details.insert("", "end", iid="value", text=tree.item(item, "text"),
-                               values=(preview,))
+                               values=(preview(item),))
             else:
                 for child in entries:
                     details.insert("", "end", iid=child, text=tree.item(child, "text"),
-                                   values=(previews.get(child, ""),))
+                                   values=(preview(child),))
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=(str(exc),))
 
     def enter(event):
         item = details.identify_row(event.y)
-        if item and tree.exists(item):
+        if item == "value":
+            item = tree.focus()
+        if kinds.get(item) == "dataset":
+            show_dataset(item, filesystem.read(item))
+        elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             tree.selection_set(item)
             tree.focus(item)

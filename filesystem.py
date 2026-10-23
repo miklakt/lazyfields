@@ -59,6 +59,32 @@ class SourceLocator:
 
 
 @dataclass(frozen=True)
+class _FileSource:
+    """Physical source adapter; selections pass directly to the reader."""
+
+    reader: Reader
+    origin: SourceLocator
+
+    def read(self, selection=None):
+        return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
+
+    def info(self, *, list_children=True):
+        if self.origin.infile_path is None and not list_children:
+            return NodeInfo("group")
+        return self.reader.info(self.origin.file_path, self.origin.infile_path)
+
+    def locate(self, selection=None):
+        if selection is not None and self.origin.infile_path is None:
+            raise ValueError("selection requires a dataset path.")
+        return [replace(self.origin, selection=selection)]
+
+    def descendant(self, path):
+        parent = self.origin.infile_path
+        origin = replace(self.origin, infile_path=f"{parent}/{path}" if parent else path)
+        return FileSystem._from_source(replace(self, origin=origin))
+
+
+@dataclass(frozen=True)
 class Node:
     """Lazy namespace handle; subsequent edits are visible through its path."""
 
@@ -129,8 +155,7 @@ class FileSystem:
         self.is_mount = False
         self.is_logical = False
         self._namespace_path = self.relative_to
-        self._reader: Reader | None = None
-        self._origin: SourceLocator | None = None
+        self._source = None
         self._children: dict[str, FileSystem] | None = {}
         overrides = _reader_overrides(readers)
         if isinstance(filepaths, (str, Path)):
@@ -144,16 +169,27 @@ class FileSystem:
             reader = next((reader for suffix, reader in overrides if path.name.lower().endswith(suffix)), None)
             self.mount(path, self.from_file(self.relative_to / path, reader).node())
 
+    @classmethod
+    def merge(cls, sources: Mapping[str, Node], *, rules: Mapping) -> FileSystem:
+        """Compose named source groups using per-key rules from lazyfields.merge."""
+        from .merge import merge
+        return merge(sources, rules=rules)
+
     @property
     def in_file(self) -> bool:
         return self._origin is not None
 
-    def _descendant(self, path: str) -> FileSystem:
-        """Bind a source descendant without copying or discovering its contents."""
-        result = copy(self)
-        parent = self._origin.infile_path
-        result._origin = replace(self._origin, infile_path=f"{parent}/{path}" if parent else path)
-        result.is_mount = result.is_logical = False
+    @property
+    def _origin(self) -> SourceLocator | None:
+        return self._source.origin if self._source is not None else None
+
+    @classmethod
+    def _from_source(cls, source) -> FileSystem:
+        origin = source.origin
+        result = cls(relative_to=origin.file_path.parent if origin else None)
+        result._source, result._children = source, None
+        if origin:
+            result._namespace_path = origin.file_path / (origin.infile_path or "")
         return result
 
     @classmethod
@@ -162,28 +198,24 @@ class FileSystem:
         if reader is not None and not isinstance(reader, Reader):
             raise TypeError("reader must be a Reader instance.")
         path = Path(path).absolute()
-        result = cls(relative_to=path.parent)
-        result._reader, result._origin = reader or require_reader(path), SourceLocator(path)
-        result._children = None
-        result._namespace_path = path
-        return result
+        return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
 
     def _lookup(self, path: str | Path) -> FileSystem:
         parts = tuple(filter(None, _normalize_path(path).split("/")))
         entry = self
         for index, name in enumerate(parts):
             if entry._children is None:
-                return entry._descendant("/".join(parts[index:]))
+                return entry._source.descendant("/".join(parts[index:]))
             entry = entry._children[name]
         return entry
 
     def _expand(self) -> dict[str, FileSystem]:
         """Discover child trees only when editing their parent."""
         if self._children is None:
-            info = self._info()
+            info = self._source.info()
             if info.kind != "group":
-                raise NotADirectoryError(self._origin.infile_path or str(self._origin.file_path))
-            self._children = {name: self._descendant(name) for name in info.children}
+                raise NotADirectoryError(str(self._origin or "composed dataset"))
+            self._children = {name: self._source.descendant(name) for name in info.children}
         return self._children
 
     def _parent(self, path: str | Path, *, create: bool = False) -> tuple[dict[str, FileSystem], str]:
@@ -213,7 +245,8 @@ class FileSystem:
         """Compare source positions without reading or discovering children."""
         if self._origin is not None:
             return destination != self._origin.file_path / (self._origin.infile_path or "")
-        return any(child._relocated(destination / name) for name, child in self._children.items())
+        return self._source is not None or any(
+            child._relocated(destination / name) for name, child in self._children.items())
 
     def mount(self, path: str | Path, source: Node) -> None:
         """Attach an independent subtree at a vacant path; create missing parents."""
@@ -242,7 +275,7 @@ class FileSystem:
     def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
         entry = self._lookup(path)
         if entry._children is None:
-            return entry._reader.get(entry._origin.file_path, entry._origin.infile_path, selection)
+            return entry._source.read(selection)
         if selection is not None:
             raise ValueError("selection requires a dataset path.")
         return {name: child.read() for name, child in entry._children.items()}
@@ -250,9 +283,7 @@ class FileSystem:
     def _info(self, *, list_children: bool = True) -> NodeInfo:
         if self._children is not None:
             return NodeInfo("group", tuple(self._children) if list_children else ())
-        if self._origin.infile_path is None and not list_children:
-            return NodeInfo("group")
-        return self._reader.info(self._origin.file_path, self._origin.infile_path)
+        return self._source.info(list_children=list_children)
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
         info = self._lookup(path)._info()
@@ -262,8 +293,8 @@ class FileSystem:
 
     def locate(self, path: str | Path = "", selection: Any | None = None) -> list[SourceLocator]:
         entry = self._lookup(path)
-        if selection is not None and (entry._children is not None or entry._origin.infile_path is None):
-            raise ValueError("selection requires a dataset path.")
         if entry._children is None:
-            return [replace(entry._origin, selection=selection)]
+            return entry._source.locate(selection)
+        if selection is not None:
+            raise ValueError("selection requires a dataset path.")
         return [locator for child in entry._children.values() for locator in child.locate()]

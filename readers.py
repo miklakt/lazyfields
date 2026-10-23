@@ -1,4 +1,4 @@
-import hashlib, pickle, shutil, tarfile, warnings, zipfile
+import hashlib, logging, pickle, shutil, sys, tarfile, warnings, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, time, timedelta
@@ -166,6 +166,33 @@ class Reader:
         return ((key, value_kind(value), value) for key, value in values.items())
 
 
+class DebugReader(Reader):
+    """Decorate a Reader with timestamped stdout logs of backend requests."""
+
+    def __init__(self, reader: Reader):
+        logger = logging.getLogger("lazyfields.DebugReader")
+        if not logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        def logged(command, callback):
+            if callback is None: return None
+            def call(*args, **kwargs):
+                logger.info("DebugReader %s %s args=%r kwargs=%r", reader.suffixes, command, args, kwargs)
+                return callback(*args, **kwargs)
+            return call
+
+        super().__init__(
+            suffixes=reader.suffixes,
+            missing_errors=reader.missing_errors,
+            **{name: logged(name, getattr(reader, name))
+               for name in ("load", "read", "inspect", "inspect_node")},
+        )
+
+
 _ARCHIVE_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip")
 _CACHE, _READERS = TemporaryDirectory(prefix="lazyfields-"), {}
 
@@ -177,6 +204,15 @@ def register_reader(reader: Reader) -> Reader:
     if duplicate is not None: raise ValueError(f"A reader for {duplicate!r} is already registered.")
     _READERS.update(dict.fromkeys(suffixes, reader))
     return reader
+
+
+def debug_readers() -> None:
+    """Enable debug logging for registered readers; call before creating filesystems."""
+    for reader in _READERS.values():
+        if not isinstance(reader, DebugReader):
+            debug = DebugReader(reader)
+            for suffix in reader.suffixes:
+                _READERS[suffix.lower()] = debug
 
 
 def _reader_match(path: str | Path, archives: bool = True) -> tuple[Reader | None, str | None]:
