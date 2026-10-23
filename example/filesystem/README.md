@@ -13,8 +13,8 @@ which stored references to resolve and which nodes to replace.
 With the checkout installed in the active Python environment and Tk available:
 
 ```bash
-python3 example/filesystem/use_filesystem.py
-python3 example/filesystem/use_mounts.py
+python3 example/filesystem/minimal_filesystem.py
+python3 example/filesystem/composed_filesystem.py
 ```
 
 The first explorer shows the physical filesystem. The second clones it, then
@@ -109,7 +109,7 @@ support the same native reads and selections as their sources.
 
 ## Reference resolution in the demo
 
-`use_mounts.py` registers only `partitions.json` and clones its `partitions` subtree,
+`composed_filesystem.py` registers only `partitions.json` and clones its `partitions` subtree,
 so alpha, beta, and gamma appear directly at the view root. It reads the partition
 mapping, resolves references relative to the parent of `partitions.json`, and calls `unmount` followed by
 `mount`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the

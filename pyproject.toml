@@ -18,5 +18,5 @@ hdf5 = ["h5py>=3"]
 json = ["orjson>=3"]
 
 [tool.setuptools]
-packages = ["lazyfields", "lazyfields.extra_readers"]
+packages = ["lazyfields", "lazyfields.extra_readers", "lazyfields.filesystem"]
 package-dir = {lazyfields = "."}
