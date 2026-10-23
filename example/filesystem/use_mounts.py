@@ -8,11 +8,8 @@ from explorer import explore
 
 def main() -> None:
     root = Path(__file__).resolve().parent / "data"
-    fs = FileSystem(
-        sorted(path.relative_to(root) for path in root.rglob("*.json")),
-        relative_to=root,
-    )
     source = Path("partitions.json")
+    fs = FileSystem(source, relative_to=root)
     view = fs.clone()
     # Explicit discovery: read the stored references once, then bind lazy targets.
     for name, partition in fs.read(f"{source}/partitions").items():

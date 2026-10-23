@@ -1,9 +1,9 @@
-"""Minimal read-only Tk explorer for a filesystem with listdir() and read()."""
+"""Minimal read-only Tk explorer with logical mount markers."""
 
 from reprlib import repr as short_repr
 
 def explore(filesystem):
-    """Block until closed; list only visited nodes and read only visited leaves."""
+    """Inspect visible nodes; discover children and read values only when visited."""
     import tkinter as tk
     from tkinter import ttk
 
@@ -21,26 +21,36 @@ def explore(filesystem):
     previews = {}
 
     def insert(parent, path, name):
-        tree.insert(parent, "end", iid=path, text=name)
-        tree.insert(path, "end")  # Expansion marker; no child inspection.
+        node = filesystem.node(path)
+        group = node.kind == "group"
+        origin = node.origin
+        file_root = origin is not None and origin.infile_path is None
+        os_directory = group and origin is None and (
+            filesystem._namespace_path / path.lstrip("/")
+        ).is_dir()
+        if file_root:
+            marker = "📄 "
+        elif os_directory:
+            marker = "📁 "
+        else:
+            marker = "⊞ " if group else "· "
+        prefix = "↪ " if node.is_logical else ""
+        tree.insert(parent, "end", iid=path, text=prefix + marker + name)
+        if group:
+            tree.insert(path, "end")  # Children remain undiscovered until visited.
+        else:
+            children[path] = None
         return path
 
     def populate(item):
         if item not in children:
-            try:
-                names = filesystem.listdir(item)
-            except NotADirectoryError:
-                names = None
+            names = filesystem.listdir(item)
             tree.delete(*tree.get_children(item))
-            children[item] = None if names is None else tuple(
+            children[item] = tuple(
                 insert(item, f"{item.rstrip('/')}/{name}", name)
                 for name in names
             )
         return children[item]
-
-    def label(item):
-        marker = ("▪ " if children[item] is None else "▸ ") if item in children else ""
-        return marker + tree.item(item, "text")
 
     def show(event=None):
         item = tree.focus()
@@ -52,11 +62,11 @@ def explore(filesystem):
             if entries is None:
                 preview = short_repr(filesystem.read(item))
                 previews[item] = preview[:160]
-                details.insert("", "end", iid="value", text=label(item),
+                details.insert("", "end", iid="value", text=tree.item(item, "text"),
                                values=(preview,))
             else:
                 for child in entries:
-                    details.insert("", "end", iid=child, text=label(child),
+                    details.insert("", "end", iid=child, text=tree.item(child, "text"),
                                    values=(previews.get(child, ""),))
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=(str(exc),))

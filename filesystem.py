@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -58,27 +59,6 @@ class SourceLocator:
 
 
 @dataclass(frozen=True)
-class _ReaderTree:
-    """Expose a reader's file contents as a lazy tree."""
-
-    reader: Reader
-    locator: SourceLocator
-
-    def descendant(self, path: str) -> _ReaderTree:
-        """Bind an internal path relative to this source."""
-        parent = self.locator.infile_path
-        return replace(self, locator=replace(self.locator, infile_path=f"{parent}/{path}" if parent else path))
-
-    def read(self, selection: Any | None = None) -> Any:
-        return self.reader.get(self.locator.file_path, self.locator.infile_path, selection)
-
-    def info(self, *, list_children: bool = True) -> NodeInfo:
-        if self.locator.infile_path is None and not list_children:
-            return NodeInfo("group")
-        return self.reader.info(self.locator.file_path, self.locator.infile_path)
-
-
-@dataclass(frozen=True)
 class Node:
     """Lazy namespace handle; subsequent edits are visible through its path."""
 
@@ -99,6 +79,31 @@ class Node:
         return self._filesystem.locate(self.path, selection)
 
     @property
+    def is_root(self) -> bool:
+        """Whether this is the namespace root or an attached filesystem root."""
+        return not self.path or self.is_mount
+
+    @property
+    def origin(self) -> SourceLocator | None:
+        """Original source coordinates, retained through namespace edits."""
+        return self._filesystem._lookup(self.path)._origin
+
+    @property
+    def in_file(self) -> bool:
+        """Whether this node originates from file contents, including a file root."""
+        return self.origin is not None
+
+    @property
+    def is_mount(self) -> bool:
+        """Whether this position was explicitly attached through mount()."""
+        return self._filesystem._lookup(self.path).is_mount
+
+    @property
+    def is_logical(self) -> bool:
+        """Whether this attachment relocates physical sources in the namespace."""
+        return self._filesystem._lookup(self.path).is_logical
+
+    @property
     def kind(self) -> NodeKind:
         return self._filesystem._lookup(self.path)._info(list_children=False).kind
 
@@ -111,6 +116,8 @@ class FileSystem:
     children through Reader metadata or fallback reads; values are not cached.
     """
 
+    is_root = True  # A standalone filesystem represents its own root.
+
     def __init__(
         self,
         filepaths: Iterable[str | Path] | str | Path = (),
@@ -119,7 +126,12 @@ class FileSystem:
         relative_to: str | Path | None = None,
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
-        self._tree: _ReaderTree | dict[str, FileSystem] = {}
+        self.is_mount = False
+        self.is_logical = False
+        self._namespace_path = self.relative_to
+        self._reader: Reader | None = None
+        self._origin: SourceLocator | None = None
+        self._children: dict[str, FileSystem] | None = {}
         overrides = _reader_overrides(readers)
         if isinstance(filepaths, (str, Path)):
             filepaths = [filepaths]
@@ -132,10 +144,16 @@ class FileSystem:
             reader = next((reader for suffix, reader in overrides if path.name.lower().endswith(suffix)), None)
             self.mount(path, self.from_file(self.relative_to / path, reader).node())
 
-    @classmethod
-    def _from_tree(cls, tree: _ReaderTree | dict[str, FileSystem], relative_to: Path) -> FileSystem:
-        result = cls(relative_to=relative_to)
-        result._tree = tree
+    @property
+    def in_file(self) -> bool:
+        return self._origin is not None
+
+    def _descendant(self, path: str) -> FileSystem:
+        """Bind a source descendant without copying or discovering its contents."""
+        result = copy(self)
+        parent = self._origin.infile_path
+        result._origin = replace(self._origin, infile_path=f"{parent}/{path}" if parent else path)
+        result.is_mount = result.is_logical = False
         return result
 
     @classmethod
@@ -144,28 +162,29 @@ class FileSystem:
         if reader is not None and not isinstance(reader, Reader):
             raise TypeError("reader must be a Reader instance.")
         path = Path(path).absolute()
-        return cls._from_tree(_ReaderTree(reader or require_reader(path), SourceLocator(path)), path.parent)
+        result = cls(relative_to=path.parent)
+        result._reader, result._origin = reader or require_reader(path), SourceLocator(path)
+        result._children = None
+        result._namespace_path = path
+        return result
 
     def _lookup(self, path: str | Path) -> FileSystem:
         parts = tuple(filter(None, _normalize_path(path).split("/")))
         entry = self
         for index, name in enumerate(parts):
-            if isinstance(entry._tree, _ReaderTree):
-                return self._from_tree(entry._tree.descendant("/".join(parts[index:])), self.relative_to)
-            entry = entry._tree[name]
+            if entry._children is None:
+                return entry._descendant("/".join(parts[index:]))
+            entry = entry._children[name]
         return entry
 
     def _expand(self) -> dict[str, FileSystem]:
         """Discover child trees only when editing their parent."""
-        if isinstance(self._tree, _ReaderTree):
-            info = self._tree.info()
+        if self._children is None:
+            info = self._info()
             if info.kind != "group":
-                raise NotADirectoryError(self._tree.locator.infile_path or str(self._tree.locator.file_path))
-            self._tree = {
-                name: self._from_tree(self._tree.descendant(name), self.relative_to)
-                for name in info.children
-            }
-        return self._tree
+                raise NotADirectoryError(self._origin.infile_path or str(self._origin.file_path))
+            self._children = {name: self._descendant(name) for name in info.children}
+        return self._children
 
     def _parent(self, path: str | Path, *, create: bool = False) -> tuple[dict[str, FileSystem], str]:
         """Expand only the ancestry needed for a namespace edit."""
@@ -183,10 +202,18 @@ class FileSystem:
 
     def clone(self, path: str | Path = "") -> FileSystem:
         """Clone namespace structure while sharing lazy physical sources."""
-        tree = self._lookup(path)._tree
-        if isinstance(tree, dict):
-            tree = {name: child.clone() for name, child in tree.items()}
-        return self._from_tree(tree, self.relative_to)
+        entry = self._lookup(path)
+        result = copy(entry)
+        if entry._children is not None:
+            result._children = {name: child.clone() for name, child in entry._children.items()}
+        result._namespace_path = self._namespace_path / _normalize_path(path)
+        return result
+
+    def _relocated(self, destination: Path) -> bool:
+        """Compare source positions without reading or discovering children."""
+        if self._origin is not None:
+            return destination != self._origin.file_path / (self._origin.infile_path or "")
+        return any(child._relocated(destination / name) for name, child in self._children.items())
 
     def mount(self, path: str | Path, source: Node) -> None:
         """Attach an independent subtree at a vacant path; create missing parents."""
@@ -196,6 +223,10 @@ class FileSystem:
         children, name = self._parent(path, create=True)
         if name in children:
             raise FileExistsError(str(path))
+        destination = self._namespace_path / _normalize_path(path)
+        entry.is_mount = True
+        entry.is_logical = entry._relocated(destination)
+        entry._namespace_path = destination
         children[name] = entry
 
     def unmount(self, path: str | Path) -> None:
@@ -209,17 +240,19 @@ class FileSystem:
         return Node(self, path)
 
     def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
-        tree = self._lookup(path)._tree
-        if isinstance(tree, _ReaderTree):
-            return tree.read(selection)
+        entry = self._lookup(path)
+        if entry._children is None:
+            return entry._reader.get(entry._origin.file_path, entry._origin.infile_path, selection)
         if selection is not None:
             raise ValueError("selection requires a dataset path.")
-        return {name: child.read() for name, child in tree.items()}
+        return {name: child.read() for name, child in entry._children.items()}
 
     def _info(self, *, list_children: bool = True) -> NodeInfo:
-        if isinstance(self._tree, _ReaderTree):
-            return self._tree.info(list_children=list_children)
-        return NodeInfo("group", tuple(self._tree) if list_children else ())
+        if self._children is not None:
+            return NodeInfo("group", tuple(self._children) if list_children else ())
+        if self._origin.infile_path is None and not list_children:
+            return NodeInfo("group")
+        return self._reader.info(self._origin.file_path, self._origin.infile_path)
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
         info = self._lookup(path)._info()
@@ -228,9 +261,9 @@ class FileSystem:
         return info.children
 
     def locate(self, path: str | Path = "", selection: Any | None = None) -> list[SourceLocator]:
-        tree = self._lookup(path)._tree
-        if selection is not None and (isinstance(tree, dict) or tree.locator.infile_path is None):
+        entry = self._lookup(path)
+        if selection is not None and (entry._children is not None or entry._origin.infile_path is None):
             raise ValueError("selection requires a dataset path.")
-        if isinstance(tree, _ReaderTree):
-            return [replace(tree.locator, selection=selection)]
-        return [locator for child in tree.values() for locator in child.locate()]
+        if entry._children is None:
+            return [replace(entry._origin, selection=selection)]
+        return [locator for child in entry._children.values() for locator in child.locate()]

@@ -20,9 +20,10 @@ python3 example/filesystem/use_mounts.py
 The first explorer shows the physical filesystem. The second clones it, then
 replaces the partition reference fields with the referenced files. Expand groups
 on the left or double-click children on the right. Leaf values are read when
-visited. In the right pane, visited directories show `▸` and leaves show `▪`. Returning to a parent
-shows remembered short text previews; full values are not cached. Both explorers
-use only `listdir(path)` and `read(path)`.
+visited. OS directories show `📁`, file roots `📄`, other groups `⊞`, and leaves
+`·` in both panes; only groups
+have expansion arrows. Children are inspected one level at a time. Returning to a parent
+shows remembered short text previews; full values are not cached. Logical mount boundaries also show `↪`, so relocated file roots show `↪ 📄`.
 
 ## Fixtures
 
@@ -108,7 +109,7 @@ support the same native reads and selections as their sources.
 
 ## Reference resolution in the demo
 
-`use_mounts.py` explicitly reads the partition mapping, resolves reference
+`use_mounts.py` registers only `partitions.json`, reads the partition mapping, and resolves reference
 paths relative to the parent of `partitions.json`, and calls `unmount` followed by
 `mount`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
 single `file_ref` target directly. It replaces `file_refs`
@@ -116,22 +117,20 @@ with a group containing the block files under ordered names `0`, `1`, etc.
 
 ```text
 view/
-├── partitions.json/
-│   └── partitions/
-│       └── alpha/                     beta and gamma have the same structure
-│           ├── scalar_a
-│           ├── scalar_b
-│           ├── vector
-│           ├── matrix
-│           ├── file_ref/              metadata/alpha.json
-│           │   └── coefficients
-│           └── file_refs/
-│               ├── 0/                 blocks/alpha_first.json
-│               │   └── values
-│               └── 1/                 blocks/alpha_second.json
-│                   └── values
-├── metadata/                          original file mounts also remain here
-└── blocks/
+└── partitions.json/
+    └── partitions/
+        └── alpha/                     beta and gamma have the same structure
+            ├── scalar_a
+            ├── scalar_b
+            ├── vector
+            ├── matrix
+            ├── file_ref/              metadata/alpha.json
+            │   └── coefficients
+            └── file_refs/
+                ├── 0/                 blocks/alpha_first.json
+                │   └── values
+                └── 1/                 blocks/alpha_second.json
+                    └── values
 ```
 
 The tree is abbreviated; mounted files retain all their fields. Raw references
