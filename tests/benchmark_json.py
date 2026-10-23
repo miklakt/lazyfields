@@ -15,10 +15,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
-from lazyfields.extra_readers import JSON_FAST
-from lazyfields.readers import _READERS
-
-_READERS[".json"] = JSON_FAST()
 
 MiB = 1024 * 1024
 ROW_COUNT = 3
