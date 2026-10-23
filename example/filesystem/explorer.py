@@ -22,7 +22,8 @@ def explore(filesystem):
 
     def insert(parent, path, name):
         node = filesystem.node(path)
-        group = node.kind == "group"
+        kind = node.kind
+        group = kind == "group"
         origin = node.origin
         file_root = origin is not None and origin.infile_path is None
         os_directory = group and origin is None and (
@@ -33,7 +34,7 @@ def explore(filesystem):
         elif os_directory:
             marker = "📁 "
         else:
-            marker = "⊞ " if group else "· "
+            marker = {"group": "⊞ ", "dataset": "▦ ", "scalar": "· "}[kind]
         prefix = "↪ " if node.is_logical else ""
         tree.insert(parent, "end", iid=path, text=prefix + marker + name)
         if group:

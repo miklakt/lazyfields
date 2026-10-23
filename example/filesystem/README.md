@@ -20,9 +20,8 @@ python3 example/filesystem/use_mounts.py
 The first explorer shows the physical filesystem. The second clones it, then
 replaces the partition reference fields with the referenced files. Expand groups
 on the left or double-click children on the right. Leaf values are read when
-visited. OS directories show `📁`, file roots `📄`, other groups `⊞`, and leaves
-`·` in both panes; only groups
-have expansion arrows. Children are inspected one level at a time. Returning to a parent
+visited. OS directories show `📁`, file roots `📄`, other groups `⊞`, datasets
+`▦`, and scalars `·` in both panes; only groups have expansion arrows. Children are inspected one level at a time. Returning to a parent
 shows remembered short text previews; full values are not cached. Logical mount boundaries also show `↪`, so relocated file roots show `↪ 📄`.
 
 ## Fixtures

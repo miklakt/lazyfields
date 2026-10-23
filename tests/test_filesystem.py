@@ -27,6 +27,139 @@ class NamespaceTests(unittest.TestCase):
         self.view = self.fs.clone()
         self.alpha = "partitions.json/partitions/alpha"
 
+    def test_origin_survives_edits_but_locate_tracks_current_children(self):
+        source = self.fs.clone("metadata/alpha.json")
+        origin = source.node().origin
+        self.assertEqual(origin, SourceLocator(self.fs.relative_to / "metadata/alpha.json"))
+        dataset = source.clone("coefficients")
+        self.assertEqual(dataset.node().origin.infile_path, "coefficients")
+        for name in source.listdir():
+            source.unmount(name)
+        self.assertTrue(source.in_file)
+        self.assertEqual(source.node().origin, origin)
+        self.assertEqual(source.locate(), [])
+        empty_view = FileSystem()
+        empty_view.mount("empty_alias", source.node())
+        self.assertTrue(empty_view.node("empty_alias").is_logical)
+        self.assertEqual(empty_view.node("empty_alias").origin, origin)
+        clone = source.clone()
+        clone.mount("nested", dataset.node())
+        self.assertEqual(clone.node().origin, origin)
+        self.assertEqual(clone.locate(), dataset.locate())
+        self.assertEqual(source.read(), {})
+        self.assertEqual(self.fs.node("metadata/alpha.json").origin, origin)
+        self.assertIsNone(self.fs.node("metadata").origin)
+        view = FileSystem()
+        view.mount("alias", clone.node())
+        self.assertEqual(view.node("alias").origin, origin)
+        self.assertTrue(view.node("alias").is_logical)
+        self.assertEqual(view.node("alias/nested").origin, dataset.node().origin)
+
+    def test_roots_distinguish_file_and_namespace_filesystems(self):
+        self.assertTrue(self.fs.is_root)
+        self.assertTrue(self.fs.node().is_root)
+        self.assertFalse(self.fs.node().in_file)
+        self.assertFalse(self.fs.node("metadata").is_root)
+        self.assertTrue(self.fs.node("metadata/alpha.json").is_root)
+        self.assertFalse(self.fs.node("metadata/alpha.json/coefficients").is_root)
+        source = self.fs.clone("metadata/alpha.json")
+        source.unmount("label")
+        self.assertTrue(source.is_root)
+        self.assertTrue(source.clone().node().is_root)
+        self.assertTrue(source.clone("coefficients").is_root)
+        source.mount("synthetic", FileSystem().node())
+        self.assertTrue(source.node("synthetic").is_root)
+        self.assertFalse(source.node("synthetic").in_file)
+        combined = FileSystem()
+        combined.mount("alias", source.node())
+        self.assertTrue(combined.node("alias").is_root)
+        combined.unmount("alias")
+        combined.mount("alias", FileSystem().node())
+        self.assertTrue(combined.node("alias").is_root)
+        self.assertFalse(combined.node("alias").in_file)
+
+    def test_in_file_tracks_source_origin_through_edits_and_mounts(self):
+        self.assertFalse(self.fs.in_file)
+        self.assertFalse(self.fs.node("metadata").in_file)
+        for path in ("metadata/alpha.json", "metadata/alpha.json/coefficients",
+                     "metadata/alpha.json/label"):
+            self.assertTrue(self.fs.node(path).in_file)
+        source = self.fs.clone("metadata/alpha.json")
+        source.unmount("label")
+        self.assertTrue(source.in_file)
+        self.assertTrue(source.clone().in_file)
+        source.mount("synthetic/empty", FileSystem().node())
+        self.assertFalse(source.node("synthetic").in_file)
+        self.assertFalse(source.node("synthetic/empty").in_file)
+        combined = FileSystem()
+        combined.mount("alias", source.node())
+        self.assertTrue(combined.node("alias").in_file)
+        self.assertTrue(combined.node("alias/coefficients").in_file)
+        self.assertFalse(combined.node("alias/synthetic").in_file)
+        combined.mount("namespace", self.fs.node("metadata"))
+        self.assertFalse(combined.node("namespace").in_file)
+        self.assertTrue(combined.node("namespace/alpha.json").in_file)
+
+    def test_mount_flag_survives_clones_and_edits(self):
+        self.assertFalse(self.fs.is_mount)
+        self.assertFalse(self.fs.node("metadata").is_mount)
+        self.assertTrue(self.fs.node("metadata/alpha.json").is_mount)
+        self.assertFalse(self.fs.node("metadata/alpha.json/label").is_mount)
+        source = self.fs.clone("metadata/alpha.json")
+        self.assertTrue(source.is_mount)
+        source.unmount("label")
+        self.assertTrue(source.node().is_mount)
+        source.mount("label", FileSystem().node())
+        self.assertTrue(source.node("label").is_mount)
+        self.assertTrue(source.clone().node("label").is_mount)
+        source.unmount("label")
+        with self.assertRaises(KeyError):
+            _ = source.node("label").is_mount
+
+    def test_logical_mounts_are_inferred_without_reads(self):
+        def fail(*args):
+            self.fail("Mount classification must not read sources")
+
+        source = FileSystem.from_file("unread.custom", Reader((".custom",), fail))
+        fs = FileSystem()
+        fs.mount("unread.custom", source.node())
+        self.assertFalse(fs.node("unread.custom").is_logical)
+        fs.mount("alias", source.node())
+        self.assertTrue(fs.node("alias").is_logical)
+        self.assertFalse(fs.node("alias/unknown").is_logical)
+        self.assertTrue(fs.clone().node("alias").is_logical)
+        self.assertFalse(source.is_logical)
+        self.assertFalse(source.is_mount)
+        self.assertTrue(source.in_file)
+        self.assertEqual(source.node().origin, SourceLocator(Path("unread.custom").absolute()))
+        self.assertTrue(source.is_root)
+        self.assertTrue(fs.node("alias").is_root)
+        self.assertFalse(fs.node("alias/unknown").is_root)
+        self.assertTrue(fs.node("alias/unknown").in_file)
+        self.assertTrue(fs.node("unread.custom").is_mount)
+        self.assertTrue(fs.clone().node("alias").is_mount)
+        self.assertFalse(fs.node("alias/unknown").is_mount)
+        fs.unmount("alias")
+        fs.mount("alias", FileSystem().node())
+        self.assertFalse(fs.node("alias").is_logical)
+
+    def test_logical_mounts_preserve_positions_through_clones_and_edits(self):
+        self.assertFalse(self.fs.node("metadata/alpha.json").is_logical)
+        source = self.fs.clone("metadata/alpha.json")
+        source.unmount("label")
+        source.mount("label", label_source := self.fs.node("metadata/alpha.json/label"))
+        self.assertFalse(source.node("label").is_logical)
+        source.unmount("label")
+        source.mount("alias", label_source)
+        self.assertTrue(source.node("alias").is_logical)
+        self.assertTrue(source.clone().node("alias").is_logical)
+        combined = FileSystem(relative_to=self.fs.relative_to)
+        combined.mount("metadata", self.fs.node("metadata"))
+        self.assertFalse(combined.node("metadata").is_logical)
+        combined.mount("renamed", self.fs.node("metadata"))
+        self.assertTrue(combined.node("renamed").is_logical)
+        self.assertFalse(combined.node("renamed/alpha.json").is_logical)
+
     def test_clone_matches_every_physical_node(self):
         self.assertEqual(self.view.read(), self.fs.read())
         self.assertEqual(self.view.locate(), self.fs.locate())
@@ -196,9 +329,12 @@ class NamespaceTests(unittest.TestCase):
         with patch.dict("sys.modules", {"explorer": SimpleNamespace(explore=opened.append)}):
             runpy.run_path(str(EXAMPLE / "use_mounts.py"), run_name="__main__")
         view, = opened
-        self.assertEqual(view.listdir(), self.fs.listdir())
+        self.assertEqual(view.listdir(), ("partitions.json",))
+        self.assertFalse(view.node("partitions.json").is_logical)
         for name in ("alpha", "beta", "gamma"):
             prefix = f"partitions.json/partitions/{name}"
+            self.assertTrue(view.node(f"{prefix}/file_ref").is_logical)
+            self.assertTrue(view.node(f"{prefix}/file_refs").is_logical)
             raw = self.fs.read(prefix)
             self.assertEqual(view.read(f"{prefix}/file_ref"), self.fs.read(raw["file_ref"]))
             self.assertEqual(view.listdir(f"{prefix}/file_refs"), ("0", "1"))
@@ -208,7 +344,9 @@ class NamespaceTests(unittest.TestCase):
             for index, reference in enumerate(raw["file_refs"]):
                 self.assertEqual(complete["file_refs"][str(index)], self.fs.read(reference))
             self.assertEqual(complete["file_ref"], view.read(f"{prefix}/file_ref"))
-        self.assertEqual(view.read("metadata"), self.fs.read("metadata"))
+        for path in ("metadata", "blocks"):
+            with self.assertRaises(KeyError):
+                view.read(path)
 
 
 class ReaderDelegationTests(unittest.TestCase):
