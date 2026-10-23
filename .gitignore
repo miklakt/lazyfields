@@ -15,6 +15,7 @@ data/
 !example/filesystem/data/**/
 !example/filesystem/data/**/*.json
 tests/benchmark_json_data/
+example/simple_filesystem/json/
 results/
 
 # Byte-compiled / optimized / DLL files

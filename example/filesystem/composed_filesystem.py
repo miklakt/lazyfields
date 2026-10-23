@@ -4,8 +4,8 @@ from pathlib import Path
 
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
-from lazyfields.merge import collect, prefer, prefix, stack
-from explorer import explore
+from lazyfields.filesystem.merge import collect, prefer, prefix, stack
+from lazyfields.filesystem.explorer import explore
 
 
 def main() -> None:
