@@ -245,26 +245,6 @@ input_data -> function -> filter -> [function -> filter] -> function -> output_d
 Applying the pipe only affect the reference table.
 The original indexed files remain unchanged, and `.store[...]` still reads their original data.
 
-## Experimental multiasset foundation
-
-The internal `lazyfields.assets.AssetsCollection` provides a read-only physical
-filesystem: registered relative filenames become mounts, and reader-defined
-infile paths continue below them. Use `node(path)` for lazy handles,
-`listdir(path)` for child names, `read(path, selection)` for data, and
-`locate(path, selection)` for an explicit physical locator.
-See the [development example](example/multiassets/README.md)
-for usage and reader limitations.
-
-All format access stays in `Reader`. Node listing and classification use reader
-metadata when available; HDF5 and NPZ avoid loading dataset values for these
-operations. Other readers fall back to loading the requested value.
-
-The [logical collection design brief](example/logical/README.md) uses generic
-fixtures in `example/logical/data/`: `partitions.json`, `metadata/`, and `blocks/`.
-It explains the implemented physical filesystem and proposes a logical filesystem
-with partition, merge, and link mounts for `alpha`, `beta`, and `gamma`.
-The logical filesystem is not implemented yet.
-
 ## Extra readers
 
 Extra readers for formats such as CSV files with a metadata header containing key-value pairs and NumPy `.npz` archives are available but still in development, so their APIs may change. Register the readers you need before creating a reference table:

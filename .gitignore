@@ -11,9 +11,9 @@
 *.pkl
 *.pickle
 data/
-!example/logical/data/
-!example/logical/data/**/
-!example/logical/data/**/*.json
+!example/filesystem/data/
+!example/filesystem/data/**/
+!example/filesystem/data/**/*.json
 tests/benchmark_json_data/
 results/
 
