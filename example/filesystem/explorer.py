@@ -1,4 +1,4 @@
-"""Minimal read-only Tk explorer with logical mount markers."""
+"""Minimal read-only Tk explorer with relocated mount markers."""
 
 from pprint import pformat
 from reprlib import repr as short_repr
@@ -19,13 +19,19 @@ def explore(filesystem):
     details.heading("value", text="Value")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
+    ttk.Label(details, text="⊞ group   ▦ dataset   · scalar   ↪ relocated   ⋈ merged").place(
+        relx=1, rely=1, anchor="se", x=-6, y=-3)
     kinds = {}
     children = {}
     previews = {}
 
-    def insert(parent, path, name):
+    def insert(parent, path, name, kind=None, value=None):
         node = filesystem.node(path)
-        kind = kinds[path] = node.kind
+        if kind is None:
+            kind = node.kind
+        elif kind != "group" and (kind == "scalar" or value is not None):
+            previews[path] = short_repr(value)[:160]
+        kinds[path] = kind
         group = kind == "group"
         origin = node.origin
         file_root = origin is not None and origin.infile_path is None
@@ -38,7 +44,7 @@ def explore(filesystem):
             marker = "📁 "
         else:
             marker = {"group": "⊞ ", "dataset": "▦ ", "scalar": "· "}[kind]
-        prefix = "↪ " if node.is_logical else ""
+        prefix = ("↪ " if node.is_relocated else "") + ("⋈ " if node.is_merged else "")
         tree.insert(parent, "end", iid=path, text=prefix + marker + name)
         if group:
             tree.insert(path, "end")  # Children remain undiscovered until visited.
@@ -48,11 +54,10 @@ def explore(filesystem):
 
     def populate(item):
         if item not in children:
-            names = filesystem.listdir(item)
             tree.delete(*tree.get_children(item))
             children[item] = tuple(
-                insert(item, f"{item.rstrip('/')}/{name}", name)
-                for name in names
+                insert(item, f"{item.rstrip('/')}/{name}", name, kind, value)
+                for name, kind, value in filesystem.items(item)
             )
         return children[item]
 

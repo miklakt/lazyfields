@@ -34,7 +34,10 @@ def _npz_read(path, key, selection=None):
         return _npz_value(value)
 
 
-def _npz_inspect(path):
+def _npz_inspect(path, key=None):
+    if key is not None:
+        _npz_info(path, key)
+        raise NotADirectoryError(key)
     with np.load(path, allow_pickle=False) as archive:
         for key, kind in _npz_headers(path):
             yield key, kind, _npz_value(archive[key]) if kind == "scalar" else None

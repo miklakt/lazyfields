@@ -23,7 +23,7 @@ on the left or double-click children on the right. Leaf values get short preview
 as they appear in the right pane; group contents wait until opened. Double-click
 a dataset in the right pane to open its formatted text popup. OS directories show `📁`, file roots `📄`, other groups `⊞`, datasets
 `▦`, and scalars `·` in both panes; only groups have expansion arrows. Children are inspected one level at a time. Returning to a parent
-shows remembered short text previews; full values are not cached. Logical mount boundaries also show `↪`, so relocated file roots show `↪ 📄`.
+shows remembered short text previews; full values are not cached. Relocated mount boundaries also show `↪`, so relocated file roots show `↪ 📄`.
 
 ## Fixtures
 

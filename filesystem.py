@@ -78,6 +78,10 @@ class _FileSource:
             return NodeInfo("group")
         return self.reader.info(self.origin.file_path, self.origin.infile_path)
 
+    def items(self):
+        return ((str(name), kind, value) for name, kind, value in
+                self.reader.items(self.origin.file_path, self.origin.infile_path))
+
     def locate(self, selection=None):
         if selection is not None and self.origin.infile_path is None:
             raise ValueError("selection requires a dataset path.")
@@ -105,6 +109,9 @@ class Node:
 
     def listdir(self) -> tuple[str, ...]:
         return self._filesystem.listdir(self.path)
+
+    def items(self) -> Iterable[tuple[str, NodeKind, Any]]:
+        return self._filesystem.items(self.path)
 
     def locate(self, selection: Any | None = None) -> list[SourceLocator]:
         return self._filesystem.locate(self.path, selection)
@@ -135,9 +142,9 @@ class Node:
         return self._filesystem._lookup(self.path).is_mount
 
     @property
-    def is_logical(self) -> bool:
+    def is_relocated(self) -> bool:
         """Whether this attachment relocates physical sources in the namespace."""
-        return self._filesystem._lookup(self.path).is_logical
+        return self._filesystem._lookup(self.path).is_relocated
 
     @property
     def kind(self) -> NodeKind:
@@ -164,7 +171,7 @@ class FileSystem:
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
         self.is_mount = False
-        self.is_logical = False
+        self.is_relocated = False
         self._namespace_path = self.relative_to
         self._source: _FileSource | _MergedDataset | None = None
         self._children: dict[str, FileSystem] | None = {}
@@ -270,7 +277,7 @@ class FileSystem:
             raise FileExistsError(str(path))
         destination = self._namespace_path / _normalize_path(path)
         entry.is_mount = True
-        entry.is_logical = entry._relocated(destination)
+        entry.is_relocated = entry._relocated(destination)
         entry._namespace_path = destination
         children[name] = entry
 
@@ -302,6 +309,15 @@ class FileSystem:
         if info.kind != "group":
             raise NotADirectoryError(str(path))
         return info.children
+
+    def items(self, path: str | Path = "") -> Iterable[tuple[str, NodeKind, Any]]:
+        entry = self._lookup(path)
+        if entry._children is None:
+            yield from entry._source.items()
+        else:
+            for name, child in entry._children.items():
+                kind = child._info(list_children=False).kind
+                yield name, kind, child.read() if kind == "scalar" else None
 
     def locate(self, path: str | Path = "", selection: Any | None = None) -> list[SourceLocator]:
         entry = self._lookup(path)

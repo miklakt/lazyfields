@@ -51,7 +51,11 @@ def _pdb_read(path, key, selection=None):
     return value if selection is None else value[selection]
 
 
-def _pdb_inspect(path):
+def _pdb_inspect(path, key=None):
+    if key is not None:
+        if not any(name == key for name, _, _ in _pdb_inspect(path)):
+            raise KeyError(key)
+        raise NotADirectoryError(key)
     yield from ((key, "scalar", value) for key, value in _pdb_metadata(path).items())
     yield from ((key, "dataset", None) for key in _PDB_COLUMNS)
 

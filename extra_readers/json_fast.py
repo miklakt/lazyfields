@@ -9,7 +9,7 @@ from contextlib import closing
 from pathlib import Path
 
 
-from ..readers import Reader, value_kind, _path_get, json, json_load
+from ..readers import Reader, _mapping_items, value_kind, _path_get, json, json_load
 
 
 _SPACE = b" \t\r\n"
@@ -354,12 +354,9 @@ def JSON_FAST(size_cutoff: int = _DEFAULT_SIZE_CUTOFF,
                         value = json.loads(data[start:end])
         return value if selection is None else select(value, selection)
 
-    def inspect(path):
-        if Path(path).stat().st_size < size_cutoff:
-            values = load(path)
-            if not isinstance(values, dict):
-                raise TypeError("expected a mapping row dictionary.")
-            yield from ((key, value_kind(value), value) for key, value in values.items())
+    def inspect(path, key=None):
+        if key is not None or Path(path).stat().st_size < size_cutoff:
+            yield from _mapping_items(read(path, key) if key is not None else load(path))
             return
         offsets = index(path)
         with Path(path).open("rb") as fh:

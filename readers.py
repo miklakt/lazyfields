@@ -31,6 +31,11 @@ def value_kind(value: Any) -> NodeKind:
     return "dataset"
 
 
+def _mapping_items(value):
+    if not isinstance(value, Mapping): raise NotADirectoryError("items requires a group.")
+    return ((name, value_kind(item), item) for name, item in value.items())
+
+
 @dataclass(frozen=True)
 class NodeInfo:
     """Node classification and immediate child names, without dataset values."""
@@ -81,12 +86,14 @@ def _hdf5_kind(node: Any) -> NodeKind:
     return "group" if isinstance(node, _h5().Group) else "scalar" if node.shape == () else "dataset"
 
 
-def hdf5_inspect(path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
+def hdf5_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
     h5py = _h5()
     with h5py.File(path, "r") as fh:
-        for key, node in fh.items():
+        group = fh[key] if key else fh
+        if not isinstance(group, h5py.Group): raise NotADirectoryError(key)
+        for name, node in group.items():
             kind = _hdf5_kind(node)
-            yield key, kind, _normalize(node[()]) if kind == "scalar" else None
+            yield name, kind, _normalize(node[()]) if kind == "scalar" else None
 
 
 def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
@@ -125,7 +132,7 @@ class Reader:
     load: Callable[..., Mapping[str, Any]]
     # Optionally reads one key or selection directly, without loading everything
     read: Callable[..., Any] | None = None
-    # Optional (name, kind, value) inspection; non-scalar values may be omitted.
+    # Optional inspect(file, key=None): immediate children; non-scalar values may be omitted.
     inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
     # Exceptions that indicate a requested key or selection is missing.
     missing_errors: tuple[type[Exception], ...] = (KeyError, TypeError, IndexError)
@@ -158,12 +165,22 @@ class Reader:
         kind = value_kind(value)
         return NodeInfo(kind, tuple(str(name) for name in value) if kind == "group" else ())
 
-    def items(self, path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
-        """Yield (name, kind, value), with values required only for scalars."""
-        if self.inspect is not None: return self.inspect(path)
-        values = self.load(path)
-        if not isinstance(values, Mapping): raise TypeError("expected a mapping row dictionary.")
-        return ((key, value_kind(value), value) for key, value in values.items())
+    def items(self, path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
+        """Inspect immediate group children as (name, kind, value)"""
+        if key is not None and not isinstance(key, str):
+            raise TypeError("infile_path must be a string or None.")
+        key = key.strip("/") or None if key else None
+        if self.inspect is not None:
+            yield from self.inspect(path, key)
+        elif self.inspect_node is not None:
+            info = self.info(path, key)
+            if info.kind != "group": raise NotADirectoryError(key)
+            for name in info.children:
+                child = f"{key}/{name}" if key else name
+                kind = self.info(path, child).kind
+                yield name, kind, self.get(path, child) if kind == "scalar" else None
+        else:
+            yield from _mapping_items(self.get(path, key))
 
 
 class DebugReader(Reader):
@@ -302,8 +319,8 @@ def archive_get(path: str | Path, key: str, selection: Any | None = None) -> Any
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).get(inner_path, key, selection)
 
 
-def archive_inspect(path: str | Path) -> Iterable[tuple[str, NodeKind, Any]]:
-    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).items(inner_path)
+def archive_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
+    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).items(inner_path, key)
 
 
 def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:

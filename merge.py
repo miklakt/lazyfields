@@ -66,6 +66,9 @@ class _MergedDataset:
     def info(self, *, list_children=True):
         return NodeInfo("dataset")
 
+    def items(self):
+        raise NotADirectoryError("Merged dataset has no children.")
+
     def descendant(self, path):
         raise NotADirectoryError(path)
 
@@ -108,11 +111,13 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             raise TypeError("Rules must be created with the merge rule helpers.")
         if rule.operation == "prefer" and any(name not in sources for name in rule.argument):
             raise ValueError(f"Unknown source in priority rule for {key!r}")
-    occurrences = {}
+    occurrences, kinds = {}, {}
     for name, source in sources.items():
-        for key in source.listdir():
+        for key, kind, _ in source.items():
             node = source.node(key)
-            occurrences.setdefault(key, {})[name] = node._filesystem.clone(node.path)
+            subtree = node._filesystem.clone(node.path)
+            occurrences.setdefault(key, {})[name] = subtree
+            kinds[subtree] = kind
     unknown = rules.keys() - occurrences.keys()
     if unknown:
         raise KeyError(f"Merge rules reference missing keys: {sorted(unknown)}")
@@ -142,7 +147,7 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             if len(subtrees) != len(sources):
                 raise KeyError(f"Merge key {key!r} must exist in every source.")
             expected = "scalar" if rule.operation == "collect" else "dataset"
-            if any(subtree._info(list_children=False).kind != expected for subtree in subtrees.values()):
+            if any(kinds[subtree] != expected for subtree in subtrees.values()):
                 raise TypeError(f"Merge key {key!r} requires {expected} inputs.")
             add(key, FileSystem._from_source(_MergedDataset(tuple(subtrees.values()), rule)))
     return result
