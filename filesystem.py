@@ -6,9 +6,12 @@ import os
 from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from .readers import NodeInfo, NodeKind, Reader, require_reader
+
+if TYPE_CHECKING:
+    from .merge import _MergedDataset
 
 __all__ = ["FileSystem", "Node", "SourceLocator"]
 
@@ -61,6 +64,8 @@ class SourceLocator:
 @dataclass(frozen=True)
 class _FileSource:
     """Physical source adapter; selections pass directly to the reader."""
+
+    is_merged = False
 
     reader: Reader
     origin: SourceLocator
@@ -120,6 +125,11 @@ class Node:
         return self.origin is not None
 
     @property
+    def is_merged(self) -> bool:
+        """Whether this node is a merge-created group or computed dataset."""
+        return self._filesystem._lookup(self.path).is_merged
+
+    @property
     def is_mount(self) -> bool:
         """Whether this position was explicitly attached through mount()."""
         return self._filesystem._lookup(self.path).is_mount
@@ -143,6 +153,7 @@ class FileSystem:
     """
 
     is_root = True  # A standalone filesystem represents its own root.
+    is_merged = False
 
     def __init__(
         self,
@@ -155,7 +166,7 @@ class FileSystem:
         self.is_mount = False
         self.is_logical = False
         self._namespace_path = self.relative_to
-        self._source = None
+        self._source: _FileSource | _MergedDataset | None = None
         self._children: dict[str, FileSystem] | None = {}
         overrides = _reader_overrides(readers)
         if isinstance(filepaths, (str, Path)):
@@ -169,8 +180,8 @@ class FileSystem:
             reader = next((reader for suffix, reader in overrides if path.name.lower().endswith(suffix)), None)
             self.mount(path, self.from_file(self.relative_to / path, reader).node())
 
-    @classmethod
-    def merge(cls, sources: Mapping[str, Node], *, rules: Mapping) -> FileSystem:
+    @staticmethod
+    def merge(sources: Mapping[str, Node], *, rules: Mapping) -> FileSystem:
         """Compose named source groups using per-key rules from lazyfields.merge."""
         from .merge import merge
         return merge(sources, rules=rules)
@@ -184,10 +195,11 @@ class FileSystem:
         return self._source.origin if self._source is not None else None
 
     @classmethod
-    def _from_source(cls, source) -> FileSystem:
+    def _from_source(cls, source: _FileSource | _MergedDataset) -> FileSystem:
         origin = source.origin
         result = cls(relative_to=origin.file_path.parent if origin else None)
         result._source, result._children = source, None
+        result.is_merged = source.is_merged
         if origin:
             result._namespace_path = origin.file_path / (origin.infile_path or "")
         return result
@@ -245,7 +257,7 @@ class FileSystem:
         """Compare source positions without reading or discovering children."""
         if self._origin is not None:
             return destination != self._origin.file_path / (self._origin.infile_path or "")
-        return self._source is not None or any(
+        return self.is_merged or any(
             child._relocated(destination / name) for name, child in self._children.items())
 
     def mount(self, path: str | Path, source: Node) -> None:

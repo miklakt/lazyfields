@@ -147,7 +147,8 @@ Filesystems and their `Node` handles expose `node`, `listdir`,
 names the namespace root. Repeated separators and `.` normalize; `..` is rejected.
 Handle-relative `node(path)` binds a descendant. Selections are separate from paths.
 
-Construction and handle creation do not read data. Untouched subtrees delegate
+File registration and handle creation do not read data. The merge factory inspects
+immediate source keys once; array computation waits until reading. Untouched subtrees delegate
 reads, listings, and metadata inspection directly to their source. Editing a parent
 records its child handles once along the edited path. Readers may need data reads
 to discover those names: JSON generally loads the file, while HDF5 can inspect

@@ -1,11 +1,10 @@
-"""Lazy, per-key composition of structured filesystem nodes.
+"""Per-key namespace merging with lazy dataset evaluation.
 
 Array rules materialize their inputs before applying the logical selection.
 Their locators conservatively report complete inputs, in source order.
 """
 
 from dataclasses import dataclass
-from functools import cached_property
 from operator import index
 from typing import Mapping
 
@@ -57,10 +56,11 @@ def hstack():
 
 
 @dataclass(frozen=True)
-class _Value:
+class _MergedDataset:
     origin = None
+    is_merged = True
 
-    sources: tuple[Node, ...]
+    sources: tuple[FileSystem, ...]
     rule: _Rule
 
     def info(self, *, list_children=True):
@@ -70,7 +70,7 @@ class _Value:
         raise NotADirectoryError(path)
 
     def read(self, selection=None):
-        values = [node.read() for node in self.sources]
+        values = [source.read() for source in self.sources]
         operation, axis = self.rule.operation, self.rule.argument
         if operation == "collect":
             result = values
@@ -82,77 +82,16 @@ class _Value:
 
     def locate(self, selection=None):
         # Selection addresses the assembled value, never each input independently.
-        return [locator for node in self.sources for locator in node.locate()]
-
-
-@dataclass(frozen=True)
-class _Group:
-    origin = None
-
-    sources: tuple[tuple[str, Node], ...]
-    rules: dict[str, _Rule]
-
-    @cached_property
-    def filesystem(self):
-        occurrences = {}
-        for name, source in self.sources:
-            for key in source.listdir():
-                occurrences.setdefault(key, {})[name] = source.node(key)
-        unknown = self.rules.keys() - occurrences.keys()
-        if unknown:
-            raise KeyError(f"Merge rules reference missing keys: {sorted(unknown)}")
-        result = FileSystem()
-
-        def add(key, node):
-            if key in result._children:
-                raise ValueError(f"Merge output collision: {key!r}")
-            result._children[key] = node._filesystem.clone(node.path)
-
-        for key, nodes in occurrences.items():
-            rule = self.rules.get(key)
-            if rule is None:
-                if len(nodes) != 1:
-                    raise ValueError(f"Repeated key {key!r} requires a merge rule.")
-                add(key, next(iter(nodes.values())))
-            elif rule.operation == "prefix":
-                for name, node in nodes.items():
-                    add(f"{name}_{key}", node)
-            elif rule.operation == "prefer":
-                chosen = next((nodes[name] for name in rule.argument if name in nodes), None)
-                if chosen is None:
-                    raise KeyError(f"No preferred source contains {key!r}")
-                add(key, chosen)
-            else:
-                if len(nodes) != len(self.sources):
-                    raise KeyError(f"Merge key {key!r} must exist in every source.")
-                expected = "scalar" if rule.operation == "collect" else "dataset"
-                if any(node.kind != expected for node in nodes.values()):
-                    raise TypeError(f"Merge key {key!r} requires {expected} inputs.")
-                add(key, FileSystem._from_source(_Value(tuple(nodes.values()), rule)).node())
-        return result
-
-    def info(self, *, list_children=True):
-        return self.filesystem._info() if list_children else NodeInfo("group")
-
-    def descendant(self, path):
-        return self.filesystem.clone(path)
-
-    def read(self, selection=None):
-        return self.filesystem.read(selection=selection)
-
-    def locate(self, selection=None):
-        return self.filesystem.locate(selection=selection)
+        return [locator for source in self.sources for locator in source.locate()]
 
 
 def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSystem:
-    """Return a lazy filesystem from named group nodes and explicit per-key rules.
+    """Build an ordinary namespace from immediate source keys and per-key rules.
 
-    Namespace structures are snapshotted; source values remain live. Construction
-    performs no reads. Output names and kinds are resolved once on first access;
-    subsequent operations reuse that namespace without caching values.
-    Subgroups require prefix/prefer when repeated; recursive merging is explicit.
-    Locating a merged group discovers its output keys, which can require metadata
-    reads, but never evaluates the composition operations.
+    Construction inspects keys and kinds once, without traversing subgroups.
+    Readers without metadata inspection may load their files for discovery.
+    Source namespaces are snapshotted; values and array operations remain lazy.
+    Repeated subgroups require prefix/prefer; recursive merging is explicit.
     """
     if not isinstance(sources, Mapping) or not sources:
         raise ValueError("sources must be a nonempty mapping of names to nodes.")
@@ -169,5 +108,41 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             raise TypeError("Rules must be created with the merge rule helpers.")
         if rule.operation == "prefer" and any(name not in sources for name in rule.argument):
             raise ValueError(f"Unknown source in priority rule for {key!r}")
-    snapshots = tuple((name, node._filesystem.clone(node.path).node()) for name, node in sources.items())
-    return FileSystem._from_source(_Group(snapshots, rules))
+    occurrences = {}
+    for name, source in sources.items():
+        for key in source.listdir():
+            node = source.node(key)
+            occurrences.setdefault(key, {})[name] = node._filesystem.clone(node.path)
+    unknown = rules.keys() - occurrences.keys()
+    if unknown:
+        raise KeyError(f"Merge rules reference missing keys: {sorted(unknown)}")
+    result = FileSystem()
+    result.is_merged = True
+
+    def add(key, subtree):
+        if key in result._children:
+            raise ValueError(f"Merge output collision: {key!r}")
+        result._children[key] = subtree
+
+    for key, subtrees in occurrences.items():
+        rule = rules.get(key)
+        if rule is None:
+            if len(subtrees) != 1:
+                raise ValueError(f"Repeated key {key!r} requires a merge rule.")
+            add(key, next(iter(subtrees.values())))
+        elif rule.operation == "prefix":
+            for name, subtree in subtrees.items():
+                add(f"{name}_{key}", subtree)
+        elif rule.operation == "prefer":
+            chosen = next((subtrees[name] for name in rule.argument if name in subtrees), None)
+            if chosen is None:
+                raise KeyError(f"No preferred source contains {key!r}")
+            add(key, chosen)
+        else:
+            if len(subtrees) != len(sources):
+                raise KeyError(f"Merge key {key!r} must exist in every source.")
+            expected = "scalar" if rule.operation == "collect" else "dataset"
+            if any(subtree._info(list_children=False).kind != expected for subtree in subtrees.values()):
+                raise TypeError(f"Merge key {key!r} requires {expected} inputs.")
+            add(key, FileSystem._from_source(_MergedDataset(tuple(subtrees.values()), rule)))
+    return result

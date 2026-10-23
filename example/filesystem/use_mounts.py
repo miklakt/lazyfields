@@ -9,7 +9,7 @@ from explorer import explore
 
 
 def main() -> None:
-    # debug_readers()
+    debug_readers()
     root = Path(__file__).resolve().parent / "data"
     source = Path("partitions.json")
     fs = FileSystem(source, relative_to=root)
