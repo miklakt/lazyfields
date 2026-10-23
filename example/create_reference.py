@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import lazyfields as lf
+from lazyfields.filesystem import FileSystem
 
 
 # %%
@@ -13,30 +14,35 @@ if not data_dir.is_dir() or not any(path.is_file() for path in data_dir.rglob("*
 
 
 # %%
-def unnest_a_0(row: dict) -> None:
-    row["a_0"] = row.get(("some_nested_object_key/a", 0), 0)
+def unnest_a_0(row) -> None:
+    try:
+        row["a_0"] = row.store["some_nested_object_key/a", 0]
+    except (KeyError, IndexError, TypeError):
+        row["a_0"] = 0
 
 
 def keep_a_0_greater_than(value):
-    def f(row: dict) -> bool:
+    def f(row) -> bool:
         return row.get("a_0", 0) > value
 
     return f
 
 
-def add_a_sum(row: dict) -> None:
-    row["a_sum"] = sum(row.get("some_nested_object_key/a", []))
+def add_a_sum(row) -> None:
+    try:
+        row["a_sum"] = sum(row.store["some_nested_object_key/a"])
+    except (KeyError, IndexError, TypeError):
+        row["a_sum"] = 0
 
 
 pipe = [[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
 
-reference_df = lf.create_reference_table(
-    data_dir,
-    # Keep paths to the indexed files relative to the reference table when it is outside the current working directory.
-    relative_to=reference_path,
-    search_subdirectories=True,
-    pipe=pipe,
-)
+# Mount each selected file as a root group; its filesystem path identifies its row.
+filesystem = FileSystem(relative_to=data_dir)
+for path in sorted(data_dir.rglob("*")):
+    if path.is_file():
+        filesystem.mount(path.name, FileSystem.from_file(path).node())
+reference_df = lf.create_reference_table(filesystem, pipe=pipe)
 
 
 # %%

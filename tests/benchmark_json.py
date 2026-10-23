@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import gc
 import json
-import os
 import subprocess
 import sys
 import time
@@ -15,6 +14,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
+from lazyfields.filesystem import FileSystem
+from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
 
 MiB = 1024 * 1024
 ROW_COUNT = 3
@@ -26,32 +27,6 @@ ALL_ROWS_BYTES = ROW_COUNT * TARGET_BYTES
 DATA_DIR = ROOT_DIR / "benchmark_json_data"
 REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_json_reference.pkl"
 
-FLOAT_COUNT = 13_107_200
-OBJECT_ITEM_BYTES = 32 * 1024
-OBJECT_COUNT = 3_200
-OBJECT_TEMPLATE = "x" * OBJECT_ITEM_BYTES
-
-ARRAY2D_SHAPE = (3_200, 4_096)
-ARRAY3D_SHAPE = (200, 256, 256)
-
-
-def write_numeric_array(fh, array: np.ndarray) -> None:
-    if array.ndim == 1:
-        fh.write("[")
-        for start in range(0, len(array), 8192):
-            if start:
-                fh.write(",")
-            fh.write(json.dumps(array[start:start + 8192].tolist(), separators=(",", ":"))[1:-1])
-        fh.write("]")
-    else:
-        fh.write("[")
-        for index, child in enumerate(array):
-            if index:
-                fh.write(",")
-            write_numeric_array(fh, child)
-        fh.write("]")
-
-
 def current_peak_rss_bytes() -> int:
     for line in (Path("/proc/self/status").read_text()).splitlines():
         if line.startswith("VmHWM:"):
@@ -60,51 +35,13 @@ def current_peak_rss_bytes() -> int:
 
 
 def prepare_data() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    missing = [index for index in range(ROW_COUNT)
-               if not (DATA_DIR / f"row_{index:02d}.json").exists()]
-    if missing:
-        base = np.arange(FLOAT_COUNT, dtype=np.float64)
-        arrays = {
-            "array1d": base,
-            "array2d": base.reshape(ARRAY2D_SHAPE),
-            "array3d": base.reshape(ARRAY3D_SHAPE),
-            "array1d_objects": np.full(OBJECT_COUNT, OBJECT_TEMPLATE, dtype=object),
-        }
-    for file_index in missing:
-        row_data = {
-            "x_int": 100 + file_index,
-            "x_float": 10.5 + file_index / 10.0,
-            "x_bool": bool(file_index % 2),
-            "x_str": f"row-{file_index:02d}",
-            "variant_id": file_index,
-        }
-        row_data["array1d_objects"] = np.array(arrays["array1d_objects"], copy=True)
-        prefix = f"file-{file_index:02d}:"
-        row_data["array1d_objects"][0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
-
-        path = DATA_DIR / f"row_{file_index:02d}.json"
-        temp_path = path.with_suffix(".json.tmp")
-        with temp_path.open("w") as fh:
-            fh.write("{")
-            for key, value in row_data.items():
-                if key != "array1d_objects":
-                    fh.write(f"{json.dumps(key)}:{json.dumps(value)},")
-            for key, array in arrays.items():
-                fh.write(f"{json.dumps(key)}:")
-                if key == "array1d_objects":
-                    fh.write(json.dumps(row_data[key].tolist(), separators=(",", ":")))
-                else:
-                    write_numeric_array(fh, array)
-                if key != "array1d_objects":
-                    fh.write(",")
-            fh.write("}")
-        os.replace(temp_path, path)
-
+    generate_dataset(DATA_DIR, "json", overwrite=False)
 
 
 def build_reference() -> pd.DataFrame:
-    table = lf.create_reference_table(DATA_DIR, file_pattern="*.json")
+    table = lf.create_reference_table(FileSystem(
+        sorted(path.name for path in DATA_DIR.glob("*.json")), relative_to=DATA_DIR,
+    ))
     table.to_pickle(REFERENCE_TABLE_PATH)
     return table
 

@@ -1,6 +1,6 @@
 import hashlib, logging, pickle, shutil, sys, tarfile, warnings, zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 from decimal import Decimal
 from numbers import Number
@@ -134,10 +134,8 @@ class Reader:
     read: Callable[..., Any] | None = None
     # Optional inspect(file, key=None): immediate children; non-scalar values may be omitted.
     inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
-    # Exceptions that indicate a requested key or selection is missing.
-    missing_errors: tuple[type[Exception], ...] = (KeyError, TypeError, IndexError)
     # Optional metadata-only classification/listing at any infile path.
-    inspect_node: Callable[..., NodeInfo] | None = None
+    inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
 
     def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
         """Read a file or one field, forwarding selection to direct readers."""
@@ -204,7 +202,6 @@ class DebugReader(Reader):
 
         super().__init__(
             suffixes=reader.suffixes,
-            missing_errors=reader.missing_errors,
             **{name: logged(name, getattr(reader, name))
                for name in ("load", "read", "inspect", "inspect_node")},
         )
@@ -330,6 +327,6 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
 for _reader in (
     Reader((".pkl", ".pickle"), pickle_load),
     Reader((".json",), json_load),
-    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, (KeyError, TypeError), inspect_node=hdf5_info),
-    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, (KeyError, TypeError, IndexError, ValueError), inspect_node=archive_info)
+    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info),
+    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, inspect_node=archive_info)
     ): register_reader(_reader)

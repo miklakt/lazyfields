@@ -61,6 +61,11 @@ class SourceLocator:
     selection: Any | None = None
 
 
+def _registered_file_source(origin: SourceLocator):
+    """Restore registered readers without pickling their callback closures."""
+    return _FileSource(require_reader(origin.file_path), origin)
+
+
 @dataclass(frozen=True)
 class _FileSource:
     """Physical source adapter; selections pass directly to the reader."""
@@ -69,6 +74,16 @@ class _FileSource:
 
     reader: Reader
     origin: SourceLocator
+
+    def __reduce__(self):
+        try:
+            registered = require_reader(self.origin.file_path)
+        except ValueError:
+            registered = None
+        if registered is self.reader:
+            return _registered_file_source, (self.origin,)
+        # Explicit reader overrides retain their own serialization behavior.
+        return type(self), (self.reader, self.origin)
 
     def read(self, selection=None):
         return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
@@ -116,6 +131,9 @@ class Node:
     def locate(self, selection: Any | None = None) -> list[SourceLocator]:
         return self._filesystem.locate(self.path, selection)
 
+    def stat(self) -> os.stat_result | None:
+        return self._filesystem.stat(self.path)
+
     @property
     def is_root(self) -> bool:
         """Whether this is the namespace root or an attached filesystem root."""
@@ -161,6 +179,10 @@ class FileSystem:
 
     is_root = True  # A standalone filesystem represents its own root.
     is_merged = False
+    is_mount = False
+    is_relocated = False
+    _source: _FileSource | _MergedDataset | None = None
+    _children: dict[str, FileSystem] | None = None
 
     def __init__(
         self,
@@ -170,11 +192,8 @@ class FileSystem:
         relative_to: str | Path | None = None,
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
-        self.is_mount = False
-        self.is_relocated = False
         self._namespace_path = self.relative_to
-        self._source: _FileSource | _MergedDataset | None = None
-        self._children: dict[str, FileSystem] | None = {}
+        self._children = {}
         overrides = _reader_overrides(readers)
         if isinstance(filepaths, (str, Path)):
             filepaths = [filepaths]
@@ -203,12 +222,13 @@ class FileSystem:
 
     @classmethod
     def _from_source(cls, source: _FileSource | _MergedDataset) -> FileSystem:
+        """Bind a lazy source without reinitializing a physical namespace."""
         origin = source.origin
-        result = cls(relative_to=origin.file_path.parent if origin else None)
-        result._source, result._children = source, None
+        result = cls.__new__(cls)
+        result.relative_to = origin.file_path.parent if origin else Path.cwd()
+        result._source = source
         result.is_merged = source.is_merged
-        if origin:
-            result._namespace_path = origin.file_path / (origin.infile_path or "")
+        result._namespace_path = origin.file_path / (origin.infile_path or "") if origin else result.relative_to
         return result
 
     @classmethod
@@ -220,6 +240,7 @@ class FileSystem:
         return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
 
     def _lookup(self, path: str | Path) -> FileSystem:
+        """Find a namespace entry or bind its remaining path inside a lazy source."""
         parts = tuple(filter(None, _normalize_path(path).split("/")))
         entry = self
         for index, name in enumerate(parts):
@@ -326,3 +347,7 @@ class FileSystem:
         if selection is not None:
             raise ValueError("selection requires a dataset path.")
         return [locator for child in entry._children.values() for locator in child.locate()]
+
+    def stat(self, path: str | Path = "") -> os.stat_result | None:
+        origin = self._lookup(path)._origin
+        return origin.file_path.stat() if origin is not None else None

@@ -4,7 +4,6 @@ import json
 import pickle
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 
@@ -33,12 +32,17 @@ def write_json_array(fh, array):
     fh.write("]")
 
 
-def main():
-    for folder in ("h5", "json", "pickle"):
-        (ROOT / folder).mkdir(exist_ok=True)
-
+def generate_dataset(directory, file_format, *, overwrite=True):
+    """Write benchmark rows in one format; reused by the benchmark scripts."""
+    suffix = {"h5": ".h5", "json": ".json", "pickle": ".pkl"}[file_format]
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    missing = [index for index in range(ROW_COUNT)
+               if overwrite or not (directory / f"row_{index:02d}{suffix}").exists()]
+    if not missing:
+        return
     base = np.arange(FLOAT_COUNT, dtype=np.float64)
-    for index in range(ROW_COUNT):
+    for index in missing:
         prefix = f"file-{index:02d}:"
         objects = np.full(OBJECT_COUNT, "x" * OBJECT_ITEM_BYTES, dtype=object)
         objects[0] = prefix + "y" * (OBJECT_ITEM_BYTES - len(prefix))
@@ -53,31 +57,40 @@ def main():
             "array3d": base.reshape(ARRAY3D_SHAPE),
             "array1d_objects": objects,
         }
-        name = f"row_{index:02d}"
-        with h5py.File(ROOT / "h5" / f"{name}.h5", "w") as fh:
-            for key, value in row.items():
-                if key == "array1d_objects":
-                    fh.create_dataset(key, data=value, dtype=h5py.string_dtype("utf-8"))
-                else:
-                    fh.create_dataset(key, data=value)
+        path = directory / f"row_{index:02d}{suffix}"
+        if file_format == "h5":
+            import h5py
+            with h5py.File(path, "w") as fh:
+                for key, value in row.items():
+                    if key == "array1d_objects":
+                        fh.create_dataset(key, data=value, dtype=h5py.string_dtype("utf-8"))
+                    else:
+                        fh.create_dataset(key, data=value)
+        elif file_format == "pickle":
+            with path.open("wb") as fh:
+                pickle.dump(row, fh, protocol=4)
+        else:
+            temp_path = path.with_suffix(".json.tmp")
+            with temp_path.open("w") as fh:
+                fh.write("{")
+                for position, (key, value) in enumerate(row.items()):
+                    if position:
+                        fh.write(",")
+                    fh.write(json.dumps(key) + ":")
+                    if key == "array1d_objects":
+                        json.dump(value.tolist(), fh, separators=(",", ":"))
+                    elif isinstance(value, np.ndarray):
+                        write_json_array(fh, value)
+                    else:
+                        json.dump(value, fh)
+                fh.write("}")
+            temp_path.replace(path)
 
-        with (ROOT / "pickle" / f"{name}.pkl").open("wb") as fh:
-            pickle.dump(row, fh, protocol=4)
 
-        with (ROOT / "json" / f"{name}.json").open("w") as fh:
-            fh.write("{")
-            for position, (key, value) in enumerate(row.items()):
-                if position:
-                    fh.write(",")
-                fh.write(json.dumps(key) + ":")
-                if key == "array1d_objects":
-                    json.dump(value.tolist(), fh, separators=(",", ":"))
-                elif isinstance(value, np.ndarray):
-                    write_json_array(fh, value)
-                else:
-                    json.dump(value, fh)
-            fh.write("}")
-        print(f"Created {name} in h5/, json/, and pickle/", flush=True)
+def main():
+    for file_format in ("h5", "json", "pickle"):
+        generate_dataset(ROOT / file_format, file_format)
+        print(f"Created benchmark rows in {file_format}/", flush=True)
 
 
 if __name__ == "__main__":

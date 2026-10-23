@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import gc
 import json
-import pickle
 import shutil
 import subprocess
 import sys
@@ -15,6 +14,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
+from lazyfields.filesystem import FileSystem
+from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
 
 
 MiB = 1024 * 1024
@@ -27,15 +28,6 @@ ALL_ROWS_BYTES = ROW_COUNT * TARGET_BYTES
 DATA_DIR = ROOT_DIR / "benchmark_pickle_data"
 REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_pickle_reference.pkl"
 
-FLOAT_COUNT = 13_107_200
-OBJECT_ITEM_BYTES = 32 * 1024
-OBJECT_COUNT = 3_200
-OBJECT_TEMPLATE = "x" * OBJECT_ITEM_BYTES
-
-ARRAY2D_SHAPE = (3_200, 4_096)
-ARRAY3D_SHAPE = (200, 256, 256)
-
-
 def current_peak_rss_bytes() -> int:
     for line in (Path("/proc/self/status").read_text()).splitlines():
         if line.startswith("VmHWM:"):
@@ -46,33 +38,11 @@ def current_peak_rss_bytes() -> int:
 def prepare_data() -> None:
     if DATA_DIR.exists():
         shutil.rmtree(DATA_DIR)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    base = np.arange(FLOAT_COUNT, dtype=np.float64)
-    arrays = {
-        "array1d": base,
-        "array2d": base.reshape(ARRAY2D_SHAPE),
-        "array3d": base.reshape(ARRAY3D_SHAPE),
-        "array1d_objects": np.full(OBJECT_COUNT, OBJECT_TEMPLATE, dtype=object),
-    }
-    for file_index in range(ROW_COUNT):
-        row_data = {
-            "x_int": 100 + file_index,
-            "x_float": 10.5 + file_index / 10.0,
-            "x_bool": bool(file_index % 2),
-            "x_str": f"row-{file_index:02d}",
-            "variant_id": file_index,
-        }
-        row_data.update(arrays)
-        row_data["array1d_objects"] = np.array(row_data["array1d_objects"], copy=True)
-        prefix = f"file-{file_index:02d}:"
-        row_data["array1d_objects"][0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
-
-        with open(DATA_DIR / f"row_{file_index:02d}.pkl", "wb") as fh:
-            pickle.dump(row_data, fh, protocol=4)
-
+    generate_dataset(DATA_DIR, "pickle")
     gc.collect()
-    lf.create_reference_table(DATA_DIR, file_pattern="*.pkl").to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(FileSystem(
+        sorted(path.name for path in DATA_DIR.glob("*.pkl")), relative_to=DATA_DIR,
+    )).to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:

@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pandas as pd
 
@@ -15,6 +14,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
+from lazyfields.filesystem import FileSystem
+from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
 
 
 MiB = 1024 * 1024
@@ -27,16 +28,6 @@ ALL_ROWS_BYTES = ROW_COUNT * TARGET_BYTES
 DATA_DIR = ROOT_DIR / "benchmark_h5_data"
 REFERENCE_TABLE_PATH = ROOT_DIR / "benchmark_h5_reference.pkl"
 
-FLOAT_COUNT = 13_107_200
-OBJECT_ITEM_BYTES = 32 * 1024
-OBJECT_COUNT = 3_200
-OBJECT_TEMPLATE = "x" * OBJECT_ITEM_BYTES
-STRING_DTYPE = h5py.string_dtype(encoding="utf-8")
-
-ARRAY2D_SHAPE = (3_200, 4_096)
-ARRAY3D_SHAPE = (200, 256, 256)
-
-
 def current_peak_rss_bytes() -> int:
     for line in (Path("/proc/self/status").read_text()).splitlines():
         if line.startswith("VmHWM:"):
@@ -46,37 +37,11 @@ def current_peak_rss_bytes() -> int:
 def prepare_data() -> None:
     if DATA_DIR.exists():
         shutil.rmtree(DATA_DIR)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    base = np.arange(FLOAT_COUNT, dtype=np.float64)
-    arrays = {
-        "array1d": base,
-        "array2d": base.reshape(ARRAY2D_SHAPE),
-        "array3d": base.reshape(ARRAY3D_SHAPE),
-        "array1d_objects": np.full(OBJECT_COUNT, OBJECT_TEMPLATE, dtype=object),
-    }
-    for file_index in range(ROW_COUNT):
-        with h5py.File(DATA_DIR / f"row_{file_index:02d}.h5", "w") as fh:
-            for key, value in {
-                "x_int": 100 + file_index,
-                "x_float": 10.5 + file_index / 10.0,
-                "x_bool": bool(file_index % 2),
-                "x_str": f"row-{file_index:02d}",
-                "variant_id": file_index,
-            }.items():
-                fh.create_dataset(key, data=value)
-            for field, array in arrays.items():
-                if field == "array1d_objects":
-                    dataset = fh.create_dataset(field, data=array, dtype=STRING_DTYPE)
-                else:
-                    dataset = fh.create_dataset(field, data=array)
-                if field == "array1d_objects":
-                    # Make each file's first object-string unique while keeping the fixed 32 KiB content size.
-                    prefix = f"file-{file_index:02d}:"
-                    dataset[0] = prefix + ("y" * (OBJECT_ITEM_BYTES - len(prefix)))
-
+    generate_dataset(DATA_DIR, "h5")
     gc.collect()
-    lf.create_reference_table(DATA_DIR, file_pattern="*.h5").to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(FileSystem(
+        sorted(path.name for path in DATA_DIR.glob("*.h5")), relative_to=DATA_DIR,
+    )).to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:

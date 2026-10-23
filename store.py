@@ -1,30 +1,38 @@
-import ast, inspect, os, sys, textwrap
+import ast, inspect, sys, textwrap
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Mapping
 
 import pandas as pd
 
 from .pipe import _apply_pipe
-from .readers import _reader_match, require_reader, value_kind
+from .filesystem import FileSystem, Node
 
 
-def _row_value(path: str | Path, key: str, *, strict: bool = False, selection: Any | None = None) -> Any:
-    reader = require_reader(path)
+def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | None = None) -> Any:
     try:
-        return reader.get(path, key, selection)
-    except reader.missing_errors:
-        if strict: raise
+        return filesystem.read(f"{path}/{key}", selection)
+    except (KeyError, TypeError, IndexError):
         return pd.NA
+
+
+@dataclass(frozen=True)
+class _StoreContext:
+    filesystem: FileSystem
+
+    def __deepcopy__(self, memo):
+        # pandas copies attrs for rows and selections; the backing tree stays shared.
+        return self
 
 
 class _InvalidKeyError(ValueError):
     pass
 
 
-def _validate_keys(value: Any) -> None:
+def _validate_keys(value):
     pending, seen = [value], set()
     while pending:
         current = pending.pop()
@@ -40,146 +48,83 @@ def _validate_keys(value: Any) -> None:
             pending.extend(current)
 
 
-def _reference_row_from_path(
-    file_path: Path, *,
-    columns: list[str] | None = None,
-    relative_to: Path,
-    pipe: list[Any] | None = None,
-    pipe_error_skip: bool = True,
-) -> dict[str, Any] | None:
+def _creation_time(node):
     try:
-        reader = require_reader(file_path)
-        if pipe:
-            row_data = reader.load(file_path)
-            _validate_keys(row_data)
-            if not isinstance(row_data, Mapping):
-                print(f"Skipping {file_path.name}: expected a mapping row dictionary."); return None
-        else:
-            row, non_scalar_keys = {}, []
-            for key, kind, value in reader.items(file_path):
-                _validate_keys({key: value})
-                if kind == "scalar": row[key] = value
-                else: non_scalar_keys.append(key)
+        paths = {source.file_path for source in node.locate()}
+        return datetime.fromtimestamp(max(path.stat().st_ctime for path in paths)) if paths else pd.NaT
+    except OSError:
+        return pd.NaT
+
+
+def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe_error_skip=True):
+    scalars, non_scalar_keys = {}, []
+    try:
+        for key, kind, value in node.items():
+            _validate_keys({key: value})
+            if kind == "scalar": scalars[key] = value
+            else: non_scalar_keys.append(key)
     except _InvalidKeyError:
         raise
     except Exception as exc:
-        print(f"Failed to load {file_path.name}: {exc}"); return None
-
+        print(f"Failed to load {node.path}: {exc}"); return None
     if pipe:
-        non_scalar_keys = [key for key, value in row_data.items() if value_kind(value) != "scalar"]
+        row = pd.Series({**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys}, dtype="object")
+        row.attrs = {**attrs, "store_path": node.path}
         try:
-            processed = _apply_pipe(row_data, pipe, reader, file_path)
+            row = _apply_pipe(row, pipe)
         except Exception as exc:
             if not pipe_error_skip: raise
-            print(f"Failed to apply pipe to {file_path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(f"Failed to apply pipe to {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return None
-        if processed is False: return None
-        _validate_keys(processed)
-        row = {key: value for key, value in processed.items() if value_kind(value) == "scalar"}
-    if columns is not None: row = {k: v for k, v in row.items() if k in columns}
-    return {
-        **row,
-        "file_path": _relative_file_path(file_path, relative_to),
-        "non_scalar_keys": non_scalar_keys,
-        "creation_time": datetime.fromtimestamp(file_path.stat().st_ctime),
-    }
-
-
-def _selected_paths(directory: str | Path, file_pattern: str | None, file_paths: Iterable[str | Path] | None, search_subdirectories: bool) -> list[Path]:
-    if file_paths is not None:
-        if file_pattern is not None:
-            raise ValueError("file_paths and file_pattern are mutually exclusive.")
-        return [Path(directory) / path for path in file_paths]
-    scan = Path(directory).rglob if search_subdirectories else Path(directory).glob
-    return list(scan(file_pattern or "*"))
-
-
-def _relative_file_path(path: Path, relative_to: Path) -> str:
-    return os.path.relpath(path.resolve(), start=relative_to)
-
-
-def _stat_fingerprint(path: Path) -> tuple[int, int]:
-    stat = path.stat()
-    return stat.st_size, stat.st_mtime_ns
+        if row is False: return None
+        _validate_keys(row.to_dict())
+        scalars = {key: value for key, value in row.items() if pd.api.types.is_scalar(value)}
+    if columns is not None: scalars = {key: value for key, value in scalars.items() if key in columns}
+    return {**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys,
+            "creation_time": _creation_time(node)}
 
 
 def create_reference_table(
-    directory: str | Path = "data", 
-    columns: list[str] | None = None, 
-    *, relative_to: str | Path | None = None,
-    file_pattern: str | None = None,
-    file_paths: Iterable[str | Path] | None = None,
-    search_subdirectories: bool = False,
+    filesystem: FileSystem,
+    columns: list[str] | None = None,
+    *,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    if workers is not None and workers < 1:
-        raise ValueError("workers must be None or a positive integer.")
-
-    relative_to = Path.cwd().resolve() if relative_to is None else Path(relative_to).resolve().parent
-    selected_paths = _selected_paths(directory, file_pattern, file_paths, search_subdirectories)
-    paths = sorted(path for path in selected_paths if _reader_match(path)[0] is not None)
-
-    def make_row(file_path: Path) -> dict[str, Any] | None:
-        return _reference_row_from_path(
-            file_path,
-            columns=columns,
-            relative_to=relative_to,
-            pipe=pipe,
-            pipe_error_skip=pipe_error_skip,
-        )
-
-    if workers not in (None, 1):
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            df = pd.DataFrame(row for row in executor.map(make_row, paths) if row is not None)
-    else:
-        df = pd.DataFrame(row for row in map(make_row, paths) if row is not None)
-
-    df.attrs["relative_to"] = str(relative_to)
-    df.attrs["stat_fingerprints"] = {
-        _relative_file_path(path, relative_to): _stat_fingerprint(path)
-        for path in paths
-    }
-    return df
+    """Index immediate root groups, retaining the filesystem for lazy reads."""
+    return update_reference_table(
+        pd.DataFrame(), filesystem, columns, pipe=pipe,
+        pipe_error_skip=pipe_error_skip, workers=workers,
+    )
 
 
 def update_reference_table(
     reference_df: pd.DataFrame,
-    directory: str | Path = "data",
+    filesystem: FileSystem,
     columns: list[str] | None = None,
     *,
-    relative_to: str | Path | None = None,
-    file_pattern: str | None = None,
-    file_paths: Iterable[str | Path] | None = None,
-    search_subdirectories: bool = False,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
+    workers: int | None = None,
 ) -> pd.DataFrame:
-    original_attrs = reference_df.attrs.copy()
-    relative_to = Path(relative_to).resolve().parent if relative_to is not None else Path(reference_df.attrs["relative_to"])
-    old_rows = reference_df.set_index("file_path", drop=False) if "file_path" in reference_df else pd.DataFrame()
-    previous_paths = {(Path(reference_df.attrs["relative_to"]) / path).resolve() for path in old_rows.index}
-    selected_paths = _selected_paths(directory, file_pattern, file_paths, search_subdirectories)
-    for path in selected_paths:
-        if path.resolve() in previous_paths and _reader_match(path)[0] is None:
-            raise ValueError(f"No reader registered for previously indexed file: {path}")
-    old_fingerprints = reference_df.attrs.get("stat_fingerprints", {})
-    rows = []
-    fingerprints = {}
-    for path in sorted(path for path in selected_paths if _reader_match(path)[0] is not None):
-        stored_path = _relative_file_path(path, relative_to)
-        fingerprint = _stat_fingerprint(path)
-        fingerprints[stored_path] = fingerprint
-        if stored_path in old_rows.index and old_fingerprints.get(stored_path) == fingerprint:
-            rows.append(old_rows.loc[stored_path].to_dict())
-        else:
-            row = _reference_row_from_path(path, columns=columns, relative_to=relative_to, pipe=pipe, pipe_error_skip=pipe_error_skip)
-            if row is not None: rows.append(row)
-    df = pd.DataFrame(rows)
-    df.attrs = original_attrs
-    df.attrs["relative_to"] = str(relative_to)
-    df.attrs["stat_fingerprints"] = fingerprints
+    """Reindex current filesystem groups, retaining table attributes and methods."""
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be None or a positive integer.")
+    if not isinstance(filesystem, FileSystem):
+        raise TypeError("Pass a FileSystem whose immediate children are row groups.")
+    paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
+    attrs = {**reference_df.attrs, "store_context": _StoreContext(filesystem)}
+
+    def make_row(path):
+        return _reference_row_from_node(filesystem.node(path), attrs=attrs, columns=columns,
+                                        pipe=pipe, pipe_error_skip=pipe_error_skip)
+
+    pool = ThreadPoolExecutor(max_workers=workers) if workers not in (None, 1) else nullcontext()
+    with pool as executor:
+        rows = (executor.map if executor else map)(make_row, paths)
+        df = pd.DataFrame(row for row in rows if row is not None)
+    df.attrs = attrs
     return df
 
 
@@ -246,22 +191,20 @@ class StoreAccessor:
     def get_registered_methods(self):
         return list(self._methods.keys())
 
-    def set_relative_to(self, relative_to: str | Path) -> pd.DataFrame | pd.Series:
-        self._obj.attrs["relative_to"] = str(Path(relative_to).resolve().parent)
-        return self._obj
-
-    def _path(self, stored_path: str | Path) -> Path:
-        path = Path(stored_path)
+    @property
+    def filesystem(self) -> FileSystem:
+        """The backing filesystem shared by this table and its selections."""
         try:
-            return Path(self._obj.attrs["relative_to"]) / path
+            return self._obj.attrs["store_context"].filesystem
         except KeyError:
-            raise RuntimeError("Call .store.set_relative_to(path) after loading this table.") from None
+            raise RuntimeError("This table has no backing filesystem.") from None
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
-        files = self._path(self._obj["file_path"]) if series else self._obj["file_path"].map(self._path)
+        filesystem = self.filesystem
+        paths = self._obj.attrs["store_path"] if series and "store_path" in self._obj.attrs else self._obj["file_path"]
         if keys == slice(None):
-            return require_reader(files).load(files) if series else [require_reader(path).load(path) for path in files]
+            return filesystem.read(paths) if series else [filesystem.read(path) for path in paths]
 
         selection = None
         if isinstance(keys, tuple):
@@ -271,9 +214,9 @@ class StoreAccessor:
 
         if isinstance(keys, str):
             if series:
-                return _row_value(files, keys, strict=True, selection=selection)
+                return filesystem.read(f"{paths}/{keys}", selection)
             values = pd.Series(
-                (_row_value(path, keys, selection=selection) for path in files),
+                (_row_value(filesystem, path, keys, selection=selection) for path in paths),
                 index=self._obj.index,
                 dtype="object",
             )

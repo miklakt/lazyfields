@@ -142,6 +142,12 @@ remain accessible through the unedited original filesystem and its explorer.
 
 ## Access and laziness
 
+`fs.stat(path)` and `node.stat()` expose the physical file's `os.stat_result`.
+File-backed descendants inherit their source file's stats; groups composed from
+multiple sources have no single file stat and return `None`. Stats are read on
+request and are not cached. `locate(path)` supplies source paths when aggregate
+information is needed, such as the latest source creation time for a table row.
+
 Filesystems and their `Node` handles expose `node`, `listdir`,
 `read`, and `locate`. Handles also expose `path` and `kind`. An empty path or `/`
 names the namespace root. Repeated separators and `.` normalize; `..` is rejected.
@@ -172,6 +178,6 @@ to inspect the current namespace.
 
 ## Scope
 
-Reference discovery belongs to user code. Deferred resolvers, automatic refresh,
-stacking, array composition, and read coalescing are future work. Establish those
-semantics with small examples before adding schema or execution abstractions.
+Reference discovery belongs to user code. Per-key merge rules provide collection,
+prefixing, source preference, stacking, and concatenation. Deferred resolvers,
+automatic refresh, and read coalescing are not implemented.

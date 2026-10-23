@@ -1,13 +1,13 @@
 # lazyfields
 
-`lazyfields` is a lightweight pandas extension for indexing collections of structured data files and loading their contents on demand
+`lazyfields` is a lightweight pandas extension for indexing structured filesystem groups and loading their contents on demand.
 
 It is meant for data that naturally lives as a set of files, such as results from a numerical simulation or other batch process.
 You can inspect and filter the results through a lightweight pandas DataFrame without loading everything into RAM at once.
 
-Each indexed file must contain one dictionary.
+Each immediate group beneath the supplied filesystem root becomes one row.
 Scalar values are copied into the DataFrame.
-Other values stay in the original file until requested through `row.store[...]` or `reference_df.store[...]`.
+Other values stay in the backing filesystem until requested through `row.store[...]` or `reference_df.store[...]`.
 
 > **Note:** Numbers, strings, booleans, dates, times, and `None` are scalar; lists, dictionaries, and arrays are not.
 
@@ -51,14 +51,29 @@ python3 example/use_reference.py
 ## How It Works
 
 ```python
+from pathlib import Path
 import lazyfields as lf
+from lazyfields.filesystem import FileSystem
 
-reference_df = lf.create_reference_table("path_to_data")
+directory = Path("path_to_data")
+filesystem = FileSystem(
+    sorted(path.name for path in directory.glob("*.h5")),
+    relative_to=directory,
+)
+reference_df = lf.create_reference_table(filesystem)
 ```
 
-`create_reference_table(...)` finds supported files and creates one table row per file.
-Pass `file_pattern` to narrow the search or `search_subdirectories=True` to include nested folders.
-Pass `file_paths` with an iterable of paths relative to `directory` to select specific files; it cannot be combined with `file_pattern`. The same options are available when updating a table.
+`create_reference_table(filesystem)` copies immediate scalar children of each root
+group into one table row. Datasets and nested groups remain accessible through
+`.store[path, selection]`, relative to each row group. Non-group root children are
+skipped. Select files when constructing the filesystem; use `filesystem.clone("h5")`
+to index the HDF5 subtree of `example/simple_filesystem`.
+
+`reference_df.store.filesystem` exposes the backing filesystem. Mounted and merged
+groups work the same way as file roots. `update_reference_table(reference_df, filesystem)`
+reindexes the current groups, retaining registered methods. There is no fingerprint
+cache or automatic change tracking; calling update explicitly reinspects each row.
+
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
 
@@ -66,9 +81,9 @@ An archive must contain exactly one supported data file.
 
 The returned DataFrame contains copied values plus three columns:
 
-- `file_path` identifies the original file.
+- `file_path` identifies the row group within the filesystem.
 - `non_scalar_keys` lists the names of lists, dictionaries, arrays, and other nested values kept in that file.
-- `creation_time` contains the file creation time.
+- `creation_time` contains the latest physical source creation time, or `NaT` when unknown.
 
 Use the stored in the indexed files data through `.store`:
 
@@ -182,39 +197,43 @@ A registered method is evaluated on demand for one row or for every row in a sel
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
-Paths are relative to the folder where Python is run unless `relative_to` is provided.
-Pass the reference-table filename when creating the table so the paths to the indexed files remain valid after loading.
-For now, reference tables support only pickle serialization:
+One shared context in `DataFrame.attrs` holds the backing filesystem. Rows,
+filtered tables, and copies share that same filesystem; pandas does not copy its
+namespace. Use `filesystem.clone()` when an independent namespace is needed.
+Pickle round trips retain this sharing within the loaded table. Physical source paths are absolute;
+moving the source files requires constructing and indexing a new filesystem.
+Existing tables created with the directory-based API must be rebuilt.
+Register custom readers before loading a saved table, as with the CSV example.
 
 ```python
 import pandas as pd
 
 destination = "reference.pkl"
-reference_df = lf.create_reference_table("data", relative_to=destination)
+reference_df = lf.create_reference_table(filesystem)
 reference_df.to_pickle(destination)
 reference_df = pd.read_pickle(destination)
 ```
 
 Only load trusted pickle files because they can execute code.
 
-Use `pipe=[...]` to process each file as the reference table is built, compute additional values, and add them to the index.
-The functions run in the listed order.
-Pipe functions can read nested values with slash paths, such as
-`row["key/subkey/0"]`; numeric segments follow the same rules as `.store[...]`.
-They can also index or slice a resolved value with `row["key/subkey", 1:5]`.
-Use `row.get(("key/subkey", 1:5), default)` for a selection that may be missing;
-the tuple holds the selection, and the second `get` argument is the fallback.
-Assign extracted values to top-level columns, for example
-`row["indexing_object"] = row["key/subkey/0"]`.
+Use `pipe=[...]` to process each row group as the reference table is built, compute additional values, and add them to the index.
+Callbacks receive ordinary pandas Series containing the indexed scalars and row
+metadata. Read or assign indexed and computed fields with `row["field"]`, and read
+source data through the existing accessor: `row.store["group/array", :10]`.
+HDF5 selections read only the requested part of the dataset. Assigning a computed
+field changes the reference row; `.store[...]` continues to read source values.
 Pipe errors skip the affected file by default and print a one-line error.
 Pass `pipe_error_skip=False` to `create_reference_table` or `update_reference_table`
 to raise the original exception instead.
 
 ```python
 def unnest_a_0(row):
-    # For example, row["some_nested_object_key"] may be {"a": [2.1, 2.2], "b": [2.3, 2.4]}.
+    # For example, row.store["some_nested_object_key"] may be {"a": [2.1, 2.2], "b": [2.3, 2.4]}.
     # Read the first value of the nested "a" array, or use 0 if it is missing.
-    row["a_0"] = row.get(("some_nested_object_key/a", 0), 0)
+    try:
+        row["a_0"] = row.store["some_nested_object_key/a", 0]
+    except (KeyError, IndexError, TypeError):
+        row["a_0"] = 0
 
 def keep_a_0_greater_than(value):
     # Create a filter for the extracted value.
@@ -224,19 +243,22 @@ def keep_a_0_greater_than(value):
 
 def add_a_sum(row):
     # Add the sum of the nested "a" array to the reference table.
-    row["a_sum"] = sum(row.get("some_nested_object_key/a", []))
+    try:
+        row["a_sum"] = sum(row.store["some_nested_object_key/a"])
+    except (KeyError, IndexError, TypeError):
+        row["a_sum"] = 0
 
 # Keep files whose first nested "a" value is greater than 2.0.
 # The nested list uses a temporary row, so only a_sum is added to the table.
 reference_df = lf.create_reference_table(
-    "data",
+    filesystem,
     pipe=[[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum],
 )
 ```
 
-- A function augments the input data in place and returns `None`, or returns a new dictionary that replaces it for the following steps and the reference-table row.
+- A function modifies the Series in place and returns `None`, or returns a new Series or dictionary that replaces its indexed fields. Source access through `.store` is retained.
 - A filter returns `True` to continue or `False` to filter out the row.
-- A nested list runs functions followed by a filter on a temporary copy, so its changes do not appear in the output data.
+- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. The filesystem stays shared.
 
 ```text
 input_data -> function -> filter -> [function -> filter] -> function -> output_data -> reference table
