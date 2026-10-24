@@ -111,12 +111,10 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             raise TypeError("Rules must be created with the merge rule helpers.")
         if rule.operation == "prefer" and any(name not in sources for name in rule.argument):
             raise ValueError(f"Unknown source in priority rule for {key!r}")
-    occurrences, kinds = {}, {}
+    occurrences = {}
     for name, source in sources.items():
         for key, kind, _ in source.items():
-            subtree = source._filesystem.clone(f"{source.path}/{key}")
-            occurrences.setdefault(key, {})[name] = subtree
-            kinds[subtree] = kind
+            occurrences.setdefault(key, {})[name] = (source._filesystem.clone(f"{source.path}/{key}"), kind)
     unknown = rules.keys() - occurrences.keys()
     if unknown:
         raise KeyError(f"Merge rules reference missing keys: {sorted(unknown)}")
@@ -128,7 +126,8 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             raise ValueError(f"Merge output collision: {key!r}")
         result._children[key] = subtree
 
-    for key, subtrees in occurrences.items():
+    for key, found in occurrences.items():
+        subtrees = {name: subtree for name, (subtree, _) in found.items()}
         rule = rules.get(key)
         if rule is None:
             if len(subtrees) != 1:
@@ -146,7 +145,7 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
             if len(subtrees) != len(sources):
                 raise KeyError(f"Merge key {key!r} must exist in every source.")
             expected = "scalar" if rule.operation == "collect" else "dataset"
-            if any(kinds[subtree] != expected for subtree in subtrees.values()):
+            if any(kind != expected for _, kind in found.values()):
                 raise TypeError(f"Merge key {key!r} requires {expected} inputs.")
             add(key, FileSystem._from_source(_MergedDataset(tuple(subtrees.values()), rule)))
     return result

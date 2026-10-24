@@ -17,6 +17,10 @@ python3 example/filesystem/minimal_filesystem.py
 python3 example/filesystem/composed_filesystem.py
 ```
 
+Each script saves its composition next to itself as a specification
+(`minimal_filesystem.json`, `composed_filesystem.json`) and reuses it on later
+runs instead of composing again. Pass `--rebuild` to compose and save it anew.
+
 The first explorer shows the physical filesystem. The second clones it, then
 replaces the partition reference fields with the referenced files. Expand groups
 on the left or double-click children on the right. Leaf values get short previews
@@ -231,6 +235,12 @@ Node types are inferred from fields and parent context:
   or `**/*.json`. Patterns select supported files, skip directories and unsupported
   formats, and combine matches in sorted order without duplicates.
   Parent groups and mount boundaries are reconstructed from the filenames.
+  An optional `directory` names the folder that the paths and patterns are
+  relative to, without adding it to the tree: `{"directory": "blocks", "paths":
+  ["*.json"]}` places the block files at the root. Like `path`, it may use `..`.
+  `to_spec()` writes it when a filesystem's files live below a different
+  directory than the export base, as with `from_directory("data/blocks")`
+  exported relative to `data`.
 - `op` and ordered `sources` identify a computed dataset, with `axis` for
   `stack` or `concatenate`. Other supported operations are `collect`, `vstack`,
   and `hstack`. Axis zero is the default and is omitted on export.

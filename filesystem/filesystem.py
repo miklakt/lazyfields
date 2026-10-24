@@ -38,21 +38,6 @@ def _relative_file_path(path: str | Path) -> Path:
     return path
 
 
-def _reader_overrides(readers: Reader | Iterable[Reader] | None) -> list[tuple[str, Reader]]:
-    """Validate local readers and order their suffixes from most to least specific."""
-    readers = (readers,) if isinstance(readers, Reader) else readers or ()
-    overrides = {}
-    for reader in readers:
-        if not isinstance(reader, Reader):
-            raise TypeError("readers must contain Reader instances.")
-        for suffix in reader.suffixes:
-            suffix = suffix.lower()
-            if not suffix.startswith(".") or suffix in overrides:
-                raise ValueError(f"Invalid or duplicate reader suffix: {suffix!r}")
-            overrides[suffix] = reader
-    return sorted(overrides.items(), key=lambda item: len(item[0]), reverse=True)
-
-
 @dataclass(frozen=True)
 class SourceLocator:
     """An absolute filename, infile path, and selection independent of the namespace."""
@@ -121,14 +106,13 @@ class Node:
         return self._filesystem.stat(self.path)
 
     @property
-    def is_root(self) -> bool:
-        """Whether this is the namespace root or an attached filesystem root."""
-        return not self.path or self.is_mount
+    def _entry(self) -> FileSystem:
+        return self._filesystem._lookup(self.path)
 
     @property
     def origin(self) -> SourceLocator | None:
         """Original source coordinates, retained through namespace edits."""
-        return self._filesystem._lookup(self.path)._origin
+        return self._entry._origin
 
     @property
     def in_file(self) -> bool:
@@ -138,21 +122,21 @@ class Node:
     @property
     def is_merged(self) -> bool:
         """Whether this node is a merge-created group or computed dataset."""
-        return self._filesystem._lookup(self.path).is_merged
+        return self._entry.is_merged
 
     @property
     def is_mount(self) -> bool:
         """Whether this position was explicitly attached through mount()."""
-        return self._filesystem._lookup(self.path).is_mount
+        return self._entry.is_mount
 
     @property
     def is_relocated(self) -> bool:
         """Whether this attachment relocates physical sources in the namespace."""
-        return self._filesystem._lookup(self.path).is_relocated
+        return self._entry.is_relocated
 
     @property
     def kind(self) -> NodeKind:
-        return self._filesystem._lookup(self.path)._info(list_children=False).kind
+        return self._entry._info(list_children=False).kind
 
 
 class FileSystem:
@@ -163,7 +147,6 @@ class FileSystem:
     children through Reader metadata or fallback reads; values are not cached.
     """
 
-    is_root = True  # A standalone filesystem represents its own root.
     is_merged = False
     is_mount = False
     is_relocated = False
@@ -171,18 +154,18 @@ class FileSystem:
     _children: dict[str, FileSystem] | None = None
     _source_children: tuple[str, ...] | None = None
     _path_patterns: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    _files_root: Path | None = None  # Directory that registered file paths are relative to.
 
     def __init__(
         self,
         filepaths: Iterable[str | Path] | str | Path = (),
-        readers: Reader | Iterable[Reader] | None = None,
         *,
         relative_to: str | Path | None = None,
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
         self._namespace_path = self.relative_to
+        self._files_root = self.relative_to
         self._children = {}
-        overrides = _reader_overrides(readers)
         if isinstance(filepaths, (str, Path)):
             filepaths = [filepaths]
         if isinstance(filepaths, Mapping):
@@ -191,18 +174,13 @@ class FileSystem:
         if any(parent in paths for path in paths for parent in path.parents):
             raise ValueError("Registered file paths cannot overlap.")
         for path in paths:
-            reader = next((reader for suffix, reader in overrides if path.name.lower().endswith(suffix)), None)
-            self.mount(path, self.from_file(self.relative_to / path, reader).node())
+            self.mount(path, self.from_file(self.relative_to / path).node())
 
     @staticmethod
     def merge(sources: Mapping[str, Node], *, rules: Mapping) -> FileSystem:
         """Compose named source groups using rules from lazyfields.filesystem.merge."""
         from .merge import merge
         return merge(sources, rules=rules)
-
-    @property
-    def in_file(self) -> bool:
-        return self._origin is not None
 
     @property
     def _origin(self) -> SourceLocator | None:
@@ -233,11 +211,25 @@ class FileSystem:
         root = Path(path)
         if not root.is_dir():
             raise NotADirectoryError(str(root))
-        paths = sorted(file.relative_to(root) for file in root.glob(pattern)
-                       if file.is_file() and _reader_match(file)[0] is not None)
-        result = cls(paths, relative_to=root)
-        if has_magic(pattern):
-            result._path_patterns = ((pattern,), tuple(file.as_posix() for file in paths))
+        return cls._from_paths(root, [pattern])
+
+    @classmethod
+    def _from_paths(cls, root: Path, paths: Iterable[str]) -> FileSystem:
+        """Register literal filenames and the supported files matching glob patterns."""
+        paths = [_relative_file_path(path).as_posix() for path in paths]
+        if not any(map(has_magic, paths)):
+            return cls(paths, relative_to=root)
+        if not root.is_dir():
+            raise NotADirectoryError(str(root))
+        matches = sorted({
+            match for path in paths
+            for match in ([file.relative_to(root) for file in root.glob(path)
+                           if file.is_file() and _reader_match(file)[0] is not None]
+                          if has_magic(path) else [Path(path)])
+        })
+        result = cls(matches, relative_to=root)
+        # Retain patterns so an unedited registration exports them, not its matches.
+        result._path_patterns = (tuple(paths), tuple(file.as_posix() for file in matches))
         return result
 
     def to_spec(

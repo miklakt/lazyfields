@@ -1,6 +1,7 @@
 """Expose partitions at root with referenced metadata and merged block files."""
 
 import json
+import sys
 from pathlib import Path
 
 from lazyfields.readers import debug_readers
@@ -9,9 +10,7 @@ from lazyfields.filesystem.merge import collect, prefer, prefix, stack
 from lazyfields.filesystem.explorer import explore
 
 
-def main() -> None:
-    debug_readers()
-    root = Path(__file__).resolve().parent / "data"
+def compose(root: Path) -> FileSystem:
     source = Path("partitions.json")
     fs = FileSystem(source, relative_to=root)
     view = fs.clone(f"{source}/partitions")
@@ -30,8 +29,19 @@ def main() -> None:
             "values": stack(axis=0),
         })
         view.replace(f"{name}/file_refs", blocks.node())
+    return view
+
+
+def main() -> None:
+    debug_readers()
+    root = Path(__file__).resolve().parent / "data"
     spec_path = Path(__file__).with_suffix(".json")
-    spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
+    # Reuse the saved specification; pass --rebuild to compose and save it again.
+    if spec_path.exists() and "--rebuild" not in sys.argv:
+        view = FileSystem.from_spec(json.loads(spec_path.read_text(encoding="utf-8")), relative_to=root)
+    else:
+        view = compose(root)
+        spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
     explore(view)
 
 

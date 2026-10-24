@@ -6,6 +6,8 @@ of an expanded group. Merge groups have already resolved prefix/prefer rules.
 Node types follow their fields and parent source; an explicit ``type`` is only
 needed to distinguish a virtual group beneath a file-backed parent.
 ``overrides`` and ``unmount`` instead inherit the source namespace on restoration.
+A ``paths`` node may name a ``directory`` that its paths and patterns are relative
+to; the directory locates files without adding a level to the namespace.
 """
 
 import os
@@ -13,7 +15,7 @@ from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import SourceLocator, _FileSource, _relative_file_path
+from .filesystem import SourceLocator, _FileSource
 from .merge import _MergedDataset, collect, concatenate, hstack, stack, vstack
 from ..readers import Reader, _reader_match, require_reader
 
@@ -22,7 +24,7 @@ _FLAGS = ("is_mount", "is_relocated", "is_merged")
 _COMMON = {"type", "namespace_path", *_FLAGS}
 _FIELDS = {
     "file": {"path", "infile_path", "reader", "children", "overrides", "unmount"},
-    "files": {"paths"},
+    "files": {"directory", "paths"},
     "group": {"children"},
     "merge": {"op", "axis", "sources"},
 }
@@ -107,15 +109,15 @@ def _validate_node(data, parent):
     return kind
 
 
-def _registered_paths(spec, prefix=""):
+def _registered_paths(spec, prefix="", directory=""):
     """Recognize an ordinary file registration tree without losing empty groups."""
     if set(spec) == {"path"}:
-        return [prefix] if spec["path"] == prefix else None
+        return [prefix] if spec["path"] == (f"{directory}/{prefix}" if directory else prefix) else None
     if set(spec) != {"children"} or not spec["children"]:
         return None
     paths = []
     for name, child in spec["children"].items():
-        found = _registered_paths(child, f"{prefix}/{name}" if prefix else name)
+        found = _registered_paths(child, f"{prefix}/{name}" if prefix else name, directory)
         if found is None:
             return None
         paths.extend(found)
@@ -126,86 +128,83 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
     """Infer compact source edits or exact children, without source reads."""
     base = Path(relative_to).resolve() if relative_to is not None else filesystem.relative_to
     readers = _readers(readers)
-    active = set()
 
     def path(value):
         return Path(os.path.relpath(value, base)).as_posix()
 
     def visit(entry, parent=None, name=None, namespace=None):
-        if id(entry) in active:
-            raise ValueError("Cyclic filesystem composition cannot be serialized.")
-        active.add(id(entry))
-        try:
-            source = entry._source
-            if isinstance(source, _FileSource):
-                origin = source.origin
-                inherited = _inherited_source(parent, name)
-                result = {}
-                if not _same_source(source, inherited):
-                    result["path"] = path(origin.file_path)
-                    if origin.infile_path is not None:
-                        result["infile_path"] = origin.infile_path
-                    reader_name = next((key for key, reader in readers.items()
-                                        if reader is source.reader), None)
-                    if reader_name is not None:
-                        result["reader"] = reader_name
-                    elif _reader_match(origin.file_path)[0] is not source.reader:
-                        raise ValueError(f"Supply a reader name for {origin.file_path!s} in readers.")
-            elif isinstance(source, _MergedDataset):
-                rule = source.rule
-                result = {
-                    "op": rule.operation,
-                    "sources": [visit(child) for child in source.sources],
-                }
-                if rule.operation in ("stack", "concatenate") and rule.argument != 0:
-                    result["axis"] = rule.argument
-            elif source is None:
-                result = {"type": "group"} if _node_type({}, parent) == "file" else {}
-            else:
-                raise TypeError(f"Unsupported filesystem source: {type(source).__name__}")
+        source = entry._source
+        if isinstance(source, _FileSource):
+            origin = source.origin
+            inherited = _inherited_source(parent, name)
+            result = {}
+            if not _same_source(source, inherited):
+                result["path"] = path(origin.file_path)
+                if origin.infile_path is not None:
+                    result["infile_path"] = origin.infile_path
+                reader_name = next((key for key, reader in readers.items()
+                                    if reader is source.reader), None)
+                if reader_name is not None:
+                    result["reader"] = reader_name
+                elif _reader_match(origin.file_path)[0] is not source.reader:
+                    raise ValueError(f"Supply a reader name for {origin.file_path!s} in readers.")
+        elif isinstance(source, _MergedDataset):
+            rule = source.rule
+            result = {
+                "op": rule.operation,
+                "sources": [visit(child) for child in source.sources],
+            }
+            if rule.operation in ("stack", "concatenate") and rule.argument != 0:
+                result["axis"] = rule.argument
+        elif source is None:
+            result = {"type": "group"} if _node_type({}, parent) == "file" else {}
+        else:
+            raise TypeError(f"Unsupported filesystem source: {type(source).__name__}")
 
-            if namespace is None:
-                default_namespace = (source.origin.file_path / (source.origin.infile_path or "")
-                                     if isinstance(source, _FileSource) else entry.relative_to)
-                namespace = default_namespace if isinstance(source, _FileSource) else base
-                if entry._namespace_path != default_namespace:
-                    namespace = entry._namespace_path
-                    result["namespace_path"] = path(namespace)
-            if entry._children is not None:
-                children = {
-                    child_name: visit(child, entry, child_name, namespace / child_name)
-                    for child_name, child in entry._children.items()
-                }
-                if isinstance(source, _FileSource) and entry._source_children is not None:
-                    overrides = {key: child for key, child in children.items() if child}
-                    unmounted = [key for key in entry._source_children if key not in children]
-                    if overrides:
-                        result["overrides"] = overrides
-                    if unmounted:
-                        result["unmount"] = unmounted
-                else:
-                    result["children"] = children
-            if entry.is_mount != _default_mount(entry, parent, name):
-                result["is_mount"] = entry.is_mount
-            relocated = entry.is_mount and entry._relocated(namespace)
-            if entry.is_relocated != relocated:
-                result["is_relocated"] = entry.is_relocated
-            if entry.is_merged != isinstance(source, _MergedDataset):
-                result["is_merged"] = entry.is_merged
-            return result
-        finally:
-            active.remove(id(entry))
+        if namespace is None:
+            default_namespace = (source.origin.file_path / (source.origin.infile_path or "")
+                                 if isinstance(source, _FileSource)
+                                 else entry._files_root or entry.relative_to)
+            namespace = (default_namespace if isinstance(source, _FileSource)
+                         else entry._files_root or base)
+            if entry._namespace_path != default_namespace:
+                namespace = entry._namespace_path
+                result["namespace_path"] = path(namespace)
+        if entry._children is not None:
+            children = {
+                child_name: visit(child, entry, child_name, namespace / child_name)
+                for child_name, child in entry._children.items()
+            }
+            if isinstance(source, _FileSource) and entry._source_children is not None:
+                overrides = {key: child for key, child in children.items() if child}
+                unmounted = [key for key in entry._source_children if key not in children]
+                if overrides:
+                    result["overrides"] = overrides
+                if unmounted:
+                    result["unmount"] = unmounted
+            else:
+                result["children"] = children
+        if entry.is_mount != _default_mount(entry, parent, name):
+            result["is_mount"] = entry.is_mount
+        relocated = entry.is_mount and entry._relocated(namespace)
+        if entry.is_relocated != relocated:
+            result["is_relocated"] = entry.is_relocated
+        if entry.is_merged != isinstance(source, _MergedDataset):
+            result["is_merged"] = entry.is_merged
+        return result
 
     spec = visit(filesystem)
-    paths = _registered_paths(spec)
+    directory = path(filesystem._files_root or filesystem.relative_to)
+    files = {} if directory == "." else {"directory": directory}
+    paths = _registered_paths(spec, directory=files.get("directory", ""))
     patterns = filesystem._path_patterns
     if patterns is not None:
         if spec == {"children": {}}:
             paths = []
         if paths is not None and tuple(paths) == patterns[1]:
-            return {"paths": list(patterns[0])}
+            return {**files, "paths": list(patterns[0])}
     # Literal glob characters in filenames must remain explicit file bindings.
-    return {"paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
+    return {**files, "paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
 
 
 def from_spec(cls, spec, *, relative_to=None, readers=None):
@@ -254,22 +253,7 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                 paths = data.get("paths")
                 if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
                     raise TypeError("paths must be a list of relative filenames.")
-                if any(map(has_magic, paths)):
-                    if not base.is_dir():
-                        raise NotADirectoryError(str(base))
-                    patterns = tuple(_relative_file_path(item).as_posix() for item in paths)
-                    matches = set()
-                    for pattern in patterns:
-                        if has_magic(pattern):
-                            matches.update(file.relative_to(base) for file in base.glob(pattern)
-                                           if file.is_file() and _reader_match(file)[0] is not None)
-                        else:
-                            matches.add(_relative_file_path(pattern))
-                    matches = sorted(matches)
-                    entry = cls(matches, relative_to=base)
-                    entry._path_patterns = (patterns, tuple(file.as_posix() for file in matches))
-                else:
-                    entry = cls(paths, relative_to=base)
+                entry = cls._from_paths(path(data["directory"]) if "directory" in data else base, paths)
             elif kind == "merge":
                 operation = data.get("op")
                 if not isinstance(operation, str) or operation not in _RULES:
@@ -294,7 +278,7 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
             if namespace is not None:
                 entry._namespace_path = namespace
             elif kind != "file":
-                entry._namespace_path = base
+                entry._namespace_path = entry._files_root or base
             if "namespace_path" in data:
                 entry._namespace_path = path(data["namespace_path"])
             entry.is_merged = data.get("is_merged", entry.is_merged)
