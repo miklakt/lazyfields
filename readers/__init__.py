@@ -21,8 +21,15 @@ def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(pat
 NodeKind = Literal["scalar", "dataset", "group"]
 
 
+def _group_entries(value: Any) -> Iterable[tuple[Any, Any]]:
+    # Lists of mappings are groups whose children are named by index.
+    return value.items() if isinstance(value, Mapping) else ((str(index), item) for index, item in enumerate(value))
+
+
 def value_kind(value: Any) -> NodeKind:
     if isinstance(value, Mapping): return "group"
+    if isinstance(value, (list, tuple)) and value and all(isinstance(item, Mapping) for item in value):
+        return "group"
     if value is None or isinstance(value, (str, bytes, Number, Decimal, date, time, timedelta)):
         return "scalar"
     # Array scalars expose shape but have no container length; 0-D arrays remain datasets.
@@ -32,8 +39,8 @@ def value_kind(value: Any) -> NodeKind:
 
 
 def _mapping_items(value):
-    if not isinstance(value, Mapping): raise NotADirectoryError("items requires a group.")
-    return ((name, value_kind(item), item) for name, item in value.items())
+    if value_kind(value) != "group": raise NotADirectoryError("items requires a group.")
+    return ((name, value_kind(item), item) for name, item in _group_entries(value))
 
 
 @dataclass(frozen=True)
@@ -165,7 +172,7 @@ class Reader:
                         break
         value = self.get(path, key)
         kind = value_kind(value)
-        return NodeInfo(kind, tuple(str(name) for name in value) if kind == "group" else ())
+        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)) if kind == "group" else ())
 
     def items(self, path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
         """Inspect immediate group children as (name, kind, value)"""
