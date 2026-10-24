@@ -146,6 +146,10 @@ class Reader:
         if key is None: return self.load(path)
         if self.read is not None: return self.read(path, key, selection)
         value = _path_get(self.load(path), key)
+        if isinstance(value, (list, tuple)) and isinstance(selection, tuple):
+            # JSON arrays are lists and need array indexing for multiple axes.
+            import numpy as np
+            value = np.asarray(value)
         return value if selection is None else value[selection]
 
     def info(self, path: str | Path, key: str | None = None) -> NodeInfo:

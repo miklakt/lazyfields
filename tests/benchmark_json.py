@@ -38,9 +38,7 @@ def prepare_data() -> None:
 
 
 def build_reference() -> pd.DataFrame:
-    table = lf.create_reference_table(
-        {"paths": sorted(path.name for path in DATA_DIR.glob("*.json"))}, relative_to=DATA_DIR.resolve(),
-    )
+    table = lf.create_reference_table(DATA_DIR, relative_to=ROOT_DIR)
     table.to_pickle(REFERENCE_TABLE_PATH)
     return table
 
@@ -105,10 +103,12 @@ def run_case(case_name: str) -> dict[str, object]:
 def run_case_subprocess(case_name: str) -> dict[str, object]:
     completed = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--case", case_name],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if completed.returncode:
+        raise RuntimeError(f"Benchmark case {case_name!r} failed:\n{completed.stderr}")
     return json.loads(completed.stdout)
 
 
@@ -116,7 +116,8 @@ def print_results(cases: tuple[str, ...]) -> None:
     print(f"Data directory: {DATA_DIR}")
     print("Each row file stores the same 100.00 MiB logical arrays as the HDF5 and pickle benchmarks.")
     print("JSON file byte sizes differ from the logical array sizes shown below.")
-    print(f"Small array accesses are expected to load {SMALL_BYTES} bytes, about 1 MiB.")
+    print("JSON rows are fully parsed before selection, so even small accesses materialize the full row.")
+    print(f"Small array results contain {SMALL_BYTES} logical bytes, about 1 MiB.")
     print()
     print(f"{'case':28} {'expected MiB':>12} {'seconds':>10} {'peak MiB':>10}")
     print("-" * 65, flush=True)

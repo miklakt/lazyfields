@@ -39,9 +39,7 @@ def prepare_data() -> None:
         shutil.rmtree(DATA_DIR)
     generate_dataset(DATA_DIR, "pickle")
     gc.collect()
-    lf.create_reference_table(
-        {"paths": sorted(path.name for path in DATA_DIR.glob("*.pkl"))}, relative_to=DATA_DIR.resolve(),
-    ).to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(DATA_DIR, relative_to=ROOT_DIR).to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:
