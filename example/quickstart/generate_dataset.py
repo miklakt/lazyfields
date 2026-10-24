@@ -7,7 +7,6 @@ import h5py
 root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
 data_dir.mkdir(parents=True, exist_ok=True)
-nested_data_dir = data_dir / "subdirectory"
 for path in sorted(data_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
     if path.is_file():
         path.unlink()
@@ -100,6 +99,4 @@ for idx, row_data in enumerate(sample_rows, start=1):
             for key, value in row_data.items():
                 write_h5_node(fh, key, value)
     else:
-        target_dir = nested_data_dir if idx == len(sample_rows) - 1 else data_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-        (target_dir / f"result_{idx:03d}.json").write_text(json.dumps(row_data))
+        (data_dir / f"result_{idx:03d}.json").write_text(json.dumps(row_data))
