@@ -21,7 +21,8 @@ def browse_filesystem(filesystem):
 def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
-    Double-clicking a dataset opens its preferred viewer; right-clicking offers every suitable one.
+    Double-clicking a dataset opens its preferred viewer; right-clicking offers every suitable one and
+    copying any node's path.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -134,21 +135,30 @@ def panes(master, filesystem):
 
     menu = tk.Menu(details, tearoff=False)
 
-    def open_with(event):
+    def copy(path):
+        details.clipboard_clear()
+        details.clipboard_append(path)
+
+    def open_menu(event):
+        """Every suitable viewer for a dataset, and copying any node's path in the filesystem."""
         item = row(event)
-        if kinds.get(item) != "dataset":
+        if item not in kinds:
             return
-        value = filesystem.read(item)
+        details.selection_set(details.identify_row(event.y))
         menu.delete(0, "end")
-        for name, viewer in suitable_viewers(value):
-            menu.add_command(label=f"Open with {name}",
-                             command=lambda viewer=viewer: open_value(master, item, value, viewer))
+        if kinds[item] == "dataset":
+            value = filesystem.read(item)
+            for name, viewer in suitable_viewers(value):
+                menu.add_command(label=f"Open with {name}",
+                                 command=lambda viewer=viewer: open_value(master, item, value, viewer))
+            menu.add_separator()
+        menu.add_command(label=f"Copy path  {item}", command=lambda: copy(item))
         menu.tk_popup(event.x_root, event.y_root)
 
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
     details.bind("<Double-1>", enter)
-    details.bind("<Button-3>", open_with)
+    details.bind("<Button-3>", open_menu)
     return set_root
 
 
