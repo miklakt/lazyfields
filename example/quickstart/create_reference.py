@@ -10,7 +10,7 @@ root_dir = Path(__file__).parent
 data_dir = root_dir / "data"
 reference_path = root_dir / "reference_table.pkl"
 if not data_dir.is_dir() or not any(path.is_file() for path in data_dir.rglob("*")):
-    raise FileNotFoundError("Example data is missing. Run example/generate_dataset.py first.")
+    raise FileNotFoundError("Example data is missing. Run example/quickstart/generate_dataset.py first.")
 
 
 # %%

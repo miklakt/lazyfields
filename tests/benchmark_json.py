@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
-from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
+from lazyfields.example.large_arrays.generate_dataset import generate_dataset
 
 MiB = 1024 * 1024
 ROW_COUNT = 3

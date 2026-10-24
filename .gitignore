@@ -11,16 +11,18 @@
 *.pkl
 *.pickle
 data/
-!example/filesystem/data/
-!example/filesystem/data/**/
-!example/filesystem/data/**/*.json
+!example/composed_filesystem/data/
+!example/composed_filesystem/data/**/
+!example/composed_filesystem/data/**/*.json
 tests/benchmark_json_data/
-example/simple_filesystem/json/
+example/large_arrays/json/
 results/
 
 # Generated example filesystem specifications
-/example/**/minimal_filesystem.json
-/example/**/composed_filesystem.json
+/example/composed_filesystem/mount_all.json
+/example/composed_filesystem/resolve_and_merge.json
+/example/large_arrays/mount_by_folder.json
+/example/large_arrays/mount_flat.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -13,12 +13,12 @@ which stored references to resolve and which nodes to replace.
 With the checkout installed in the active Python environment and Tk available:
 
 ```bash
-python3 example/filesystem/minimal_filesystem.py
-python3 example/filesystem/composed_filesystem.py
+python3 example/composed_filesystem/mount_all.py
+python3 example/composed_filesystem/resolve_and_merge.py
 ```
 
 Each script saves its composition next to itself as a specification
-(`minimal_filesystem.json`, `composed_filesystem.json`) and reuses it on later
+(`mount_all.json`, `resolve_and_merge.json`) and reuses it on later
 runs instead of composing again. Pass `--rebuild` to compose and save it anew.
 
 The first explorer shows the physical filesystem. The second clones it, then
@@ -31,7 +31,7 @@ shows remembered short text previews; full values are not cached. Relocated moun
 
 ## Fixtures
 
-All paths are relative to `example/filesystem/data/`:
+All paths are relative to `example/composed_filesystem/data/`:
 
 ```text
 partitions.json
@@ -50,7 +50,7 @@ and `values`. The distinct fixture values help verify source order and selection
 ```python
 from lazyfields.filesystem import FileSystem
 
-contents = FileSystem.from_file("example/filesystem/data/metadata/alpha.json")
+contents = FileSystem.from_file("example/composed_filesystem/data/metadata/alpha.json")
 contents.read("coefficients", 0)  # 1.01
 
 fs = FileSystem()
@@ -78,7 +78,7 @@ the specification discovers the currently matching files.
 from pathlib import Path
 from lazyfields.filesystem import FileSystem
 
-root = Path("example/filesystem/data").resolve()
+root = Path("example/composed_filesystem/data").resolve()
 fs = FileSystem(
     sorted(path.relative_to(root) for path in root.rglob("*.json")),
     relative_to=root,
@@ -126,7 +126,7 @@ support the same native reads and selections as their sources.
 
 ## Reference resolution in the demo
 
-`composed_filesystem.py` registers only `partitions.json` and clones its `partitions` subtree,
+`resolve_and_merge.py` registers only `partitions.json` and clones its `partitions` subtree,
 so alpha, beta, and gamma appear directly at the view root. It reads the partition
 mapping, resolves references relative to the parent of `partitions.json`, and calls
 `replace`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
@@ -202,7 +202,7 @@ required. Existing imperative construction works unchanged:
 ```python
 import json
 
-# After constructing view in composed_filesystem.py:
+# After constructing view in resolve_and_merge.py:
 spec = view.to_spec(relative_to=root)
 Path("composed.json").write_text(json.dumps(spec, indent=2))
 

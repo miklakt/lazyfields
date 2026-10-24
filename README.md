@@ -43,9 +43,9 @@ JSON readers automatically use `orjson` when installed, otherwise Python's `json
 Create the example data and reference table, then run the usage examples:
 
 ```bash
-python3 example/generate_dataset.py
-python3 example/create_reference.py
-python3 example/use_reference.py
+python3 example/quickstart/generate_dataset.py
+python3 example/quickstart/create_reference.py
+python3 example/quickstart/use_reference.py
 ```
 
 ## How It Works
