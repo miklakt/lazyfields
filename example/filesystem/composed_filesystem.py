@@ -1,5 +1,6 @@
 """Expose partitions at root with referenced metadata and merged block files."""
 
+import json
 from pathlib import Path
 
 from lazyfields.readers import debug_readers
@@ -16,9 +17,8 @@ def main() -> None:
     view = fs.clone(f"{source}/partitions")
     # Explicit discovery: read the stored references once, then bind lazy targets.
     for name, partition in fs.read(f"{source}/partitions").items():
-        view.unmount(f"{name}/file_ref")
         target = FileSystem.from_file(root / source.parent / partition["file_ref"])
-        view.mount(f"{name}/file_ref", target.node())
+        view.replace(f"{name}/file_ref", target.node())
         sources = {
             Path(reference).stem: FileSystem.from_file(root / source.parent / reference).node()
             for reference in partition["file_refs"]
@@ -29,8 +29,9 @@ def main() -> None:
             "coordinates": prefer(*sources),
             "values": stack(axis=0),
         })
-        view.unmount(f"{name}/file_refs")
-        view.mount(f"{name}/file_refs", blocks.node())
+        view.replace(f"{name}/file_refs", blocks.node())
+    spec_path = Path(__file__).with_suffix(".json")
+    spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
     explore(view)
 
 

@@ -61,11 +61,6 @@ class SourceLocator:
     selection: Any | None = None
 
 
-def _registered_file_source(origin: SourceLocator):
-    """Restore registered readers without pickling their callback closures."""
-    return _FileSource(require_reader(origin.file_path), origin)
-
-
 @dataclass(frozen=True)
 class _FileSource:
     """Physical source adapter; selections pass directly to the reader."""
@@ -74,16 +69,6 @@ class _FileSource:
 
     reader: Reader
     origin: SourceLocator
-
-    def __reduce__(self):
-        try:
-            registered = require_reader(self.origin.file_path)
-        except ValueError:
-            registered = None
-        if registered is self.reader:
-            return _registered_file_source, (self.origin,)
-        # Explicit reader overrides retain their own serialization behavior.
-        return type(self), (self.reader, self.origin)
 
     def read(self, selection=None):
         return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
@@ -183,6 +168,7 @@ class FileSystem:
     is_relocated = False
     _source: _FileSource | _MergedDataset | None = None
     _children: dict[str, FileSystem] | None = None
+    _source_children: tuple[str, ...] | None = None
 
     def __init__(
         self,
@@ -249,6 +235,29 @@ class FileSystem:
                        if file.is_file() and _reader_match(file)[0] is not None)
         return cls(paths, relative_to=root)
 
+    def to_spec(
+        self, *, relative_to: str | Path | None = None,
+        readers: Mapping[str, Reader] | None = None,
+    ) -> dict:
+        """Return a data-only snapshot of current composition, without source reads.
+
+        Paths are relative to relative_to, defaulting to this filesystem's base.
+        Custom readers require names in readers; supply the same names when
+        restoring the specification. Source groups with retained discovery use
+        overrides/unmount; other groups retain exact children.
+        """
+        from .specification import to_spec
+        return to_spec(self, relative_to=relative_to, readers=readers)
+
+    @classmethod
+    def from_spec(
+        cls, spec: Mapping, *, relative_to: str | Path | None = None,
+        readers: Mapping[str, Reader] | None = None,
+    ) -> FileSystem:
+        """Restore relative to relative_to or cwd; overlays discover source children."""
+        from .specification import from_spec
+        return from_spec(cls, spec, relative_to=relative_to, readers=readers)
+
     def _lookup(self, path: str | Path) -> FileSystem:
         """Find a namespace entry or bind its remaining path inside a lazy source."""
         parts = tuple(filter(None, _normalize_path(path).split("/")))
@@ -266,13 +275,14 @@ class FileSystem:
             if info.kind != "group":
                 raise NotADirectoryError(str(self._origin or "composed dataset"))
             self._children = {name: self._source.descendant(name) for name in info.children}
+            self._source_children = tuple(info.children)
         return self._children
 
-    def _parent(self, path: str | Path, *, create: bool = False) -> tuple[dict[str, FileSystem], str]:
+    def _parent(self, path: str | Path, *, create: bool = False) -> tuple[FileSystem, str]:
         """Expand only the ancestry needed for a namespace edit."""
         path = _normalize_path(path)
         if not path:
-            raise ValueError("Mount and unmount require a non-root path.")
+            raise ValueError("Namespace edits require a non-root path.")
         *parents, name = path.split("/")
         entry = self
         for part in parents:
@@ -280,7 +290,8 @@ class FileSystem:
             if create and part not in children:
                 children[part] = FileSystem(relative_to=self.relative_to)
             entry = children[part]
-        return entry._expand(), name
+        entry._expand()
+        return entry, name
 
     def clone(self, path: str | Path = "") -> FileSystem:
         """Clone namespace structure while sharing lazy physical sources."""
@@ -298,24 +309,46 @@ class FileSystem:
         return self.is_merged or any(
             child._relocated(destination / name) for name, child in self._children.items())
 
-    def mount(self, path: str | Path, source: Node) -> None:
-        """Attach an independent subtree at a vacant path; create missing parents."""
+    def _attachment(self, path: str | Path, source: Node) -> FileSystem:
+        """Prepare a mounted snapshot before changing the destination namespace."""
         if not isinstance(source, Node):
             raise TypeError("Mount sources must be nodes obtained with node(path).")
         entry = source._filesystem.clone(source.path)
-        children, name = self._parent(path, create=True)
-        if name in children:
-            raise FileExistsError(str(path))
         destination = self._namespace_path / _normalize_path(path)
         entry.is_mount = True
         entry.is_relocated = entry._relocated(destination)
         entry._namespace_path = destination
+        return entry
+
+    def _replace_child(self, name: str, entry: FileSystem) -> None:
+        """Commit an existing child's replacement, appended as a fresh mount."""
+        children = self._children.copy()
+        del children[name]
         children[name] = entry
+        self._children = children
+
+    def mount(self, path: str | Path, source: Node) -> None:
+        """Attach an independent subtree at a vacant path; create missing parents."""
+        entry = self._attachment(path, source)
+        parent, name = self._parent(path, create=True)
+        if name in parent._children:
+            raise FileExistsError(str(path))
+        parent._children[name] = entry
+
+    def replace(self, path: str | Path, source: Node) -> None:
+        """Atomically replace an existing subtree with an independent mounted copy.
+
+        Preparation failures retain the old attachment. Like unmount then mount,
+        replacement moves the child to the end of its parent's listing.
+        """
+        entry = self._attachment(path, source)
+        parent, name = self._parent(path)
+        parent._replace_child(name, entry)
 
     def unmount(self, path: str | Path) -> None:
         """Remove a namespace subtree without writing its source files."""
-        children, name = self._parent(path)
-        del children[name]
+        parent, name = self._parent(path)
+        del parent._children[name]
 
     def node(self, path: str | Path = "") -> Node:
         path = _normalize_path(path)

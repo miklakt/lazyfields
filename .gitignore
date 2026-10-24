@@ -18,6 +18,10 @@ tests/benchmark_json_data/
 example/simple_filesystem/json/
 results/
 
+# Generated example filesystem specifications
+/example/**/minimal_filesystem.json
+/example/**/composed_filesystem.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 __func_cache__/

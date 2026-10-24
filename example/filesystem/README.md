@@ -65,7 +65,7 @@ and directories are skipped. Use `pattern="*.json"` to select JSON files, or
 `pattern="**/*.json"` to include nested folders. Construction does not read file
 contents.
 
-## Clone, unmount, mount
+## Clone, mount, replace, unmount
 
 ```python
 from pathlib import Path
@@ -80,18 +80,23 @@ view = fs.clone()
 
 path = "partitions.json/partitions/alpha/file_ref"
 reference = view.read(path)  # 'metadata/alpha.json'
-view.unmount(path)
-view.mount(path, fs.node(reference))
+view.replace(path, fs.node(reference))
 
 view.read(f"{path}/coefficients", 0)  # 1.01
 fs.read(path)  # 'metadata/alpha.json'
 ```
 
 `mount` requires a vacant path. Mounting over an existing node raises
-`FileExistsError`; explicitly unmount it first. Missing parent groups are created,
+`FileExistsError`; use `replace` to replace an existing entry. Missing parent groups are created,
 but mounting a child beneath a scalar or dataset raises `NotADirectoryError`.
 Unmounting a group removes its whole logical subtree. Physical files are unchanged.
-Mounting or unmounting the root is rejected; use `clone(path)` to choose a subtree root.
+Mounting, replacing, or unmounting the root is rejected; use `clone(path)` to choose a subtree root.
+
+`replace(path, source)` prepares an independent mounted copy and swaps it into an
+existing path in one namespace update. Preparation failures leave the old attachment
+intact. It raises `KeyError` for a missing destination and does not create parents.
+Like unmount followed by mount, it moves the entry to the end of its parent's
+listing. The source can be inside the subtree being replaced.
 
 Use `FileSystem()` for an empty namespace. `clone(path)` returns another
 `FileSystem` rooted at that subtree. A mount target must be a node obtained
@@ -99,15 +104,14 @@ with `node(path)` from any filesystem:
 
 ```python
 view = fs.clone("partitions.json/partitions/alpha")
-view.unmount("file_ref")
-view.mount("file_ref", fs.node("metadata/alpha.json"))
+view.replace("file_ref", fs.node("metadata/alpha.json"))
 
 combined = FileSystem()
 combined.mount("alpha", view.node())
 combined.mount("metadata", fs.node("metadata"))
 ```
 
-`mount` and `unmount` work on the original filesystem too. Cloning or mounting a
+`mount`, `replace`, and `unmount` work on the original filesystem too. Cloning or mounting a
 node copies its current namespace structure, including edits. Subsequent namespace
 changes are independent. Immutable physical source bindings remain shared and values
 are read afresh; dataset values are never copied. Rooted scalar and dataset clones
@@ -117,8 +121,8 @@ support the same native reads and selections as their sources.
 
 `composed_filesystem.py` registers only `partitions.json` and clones its `partitions` subtree,
 so alpha, beta, and gamma appear directly at the view root. It reads the partition
-mapping, resolves references relative to the parent of `partitions.json`, and calls `unmount` followed by
-`mount`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
+mapping, resolves references relative to the parent of `partitions.json`, and calls
+`replace`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
 single `file_ref` target directly. It replaces `file_refs`
 with a merged group for each partition: descriptions get filename prefixes,
 block indices are collected into a list, coordinates come from the first block,
@@ -181,6 +185,177 @@ even when filesystems use the same relative filename under different roots.
 An untouched subtree can remain one locator; edited groups collect dependencies
 from their current children. Repeated source uses remain repeated. Use `listdir`
 to inspect the current namespace.
+
+## Composition specifications
+
+Every filesystem can export its current composition as a plain, JSON-compatible
+dictionary. No operation history, parent pointers, Python source, or pickle is
+required. Existing imperative construction works unchanged:
+
+```python
+import json
+
+# After constructing view in composed_filesystem.py:
+spec = view.to_spec(relative_to=root)
+Path("composed.json").write_text(json.dumps(spec, indent=2))
+
+restored = FileSystem.from_spec(
+    json.loads(Path("composed.json").read_text()),
+    relative_to=root,
+)
+restored.read("alpha/file_refs/values")
+```
+
+All exported paths are relative. `to_spec()` uses the filesystem's `relative_to`
+directory by default; pass `relative_to` to choose a different export base.
+`from_spec()` resolves paths against the supplied `relative_to` directory, or
+the current working directory when omitted. The base itself is not saved, and
+absolute paths in specifications are rejected. Sources outside the chosen base
+use `..`; preserve that relative layout when moving them, or choose a common base.
+Export performs no source reads, metadata inspection, or directory discovery.
+Restoring exact snapshots is likewise read-free. Restoring source overlays
+discovers immediate child names in each edited source group; readers without
+metadata support may load file contents for this discovery. Array computations
+remain lazy.
+Export returns a detached dictionary; later edits to it or the filesystem do not
+affect one another. Call `to_spec()` again to capture later edits.
+
+Node types are inferred from fields and parent context:
+
+- `path` identifies a file, with optional `infile_path` and a named `reader`.
+- `paths` registers files at their physical relative paths.
+  Parent groups and mount boundaries are reconstructed from the filenames.
+- `op` and ordered `sources` identify a computed dataset, with `axis` for
+  `stack` or `concatenate`. Other supported operations are `collect`, `vstack`,
+  and `hstack`. Axis zero is the default and is omitted on export.
+- Otherwise, a child of a file-backed parent inherits its file binding. At the
+  root or under a virtual group, the default is a virtual group.
+
+An explicit `type` overrides inference. Export uses `"type": "group"` only
+when a virtual group beneath a file-backed parent needs to prevent inheritance.
+Conflicting or unsupported fields are rejected.
+
+A namespace containing ordinary file registrations is compacted automatically:
+
+```json
+{
+  "paths": ["blocks/alpha_first.json", "metadata/alpha.json", "partitions.json"]
+}
+```
+
+This is a snapshot of the selected filenames, not a directory glob. Empty groups,
+aliases, custom reader bindings, and edits use the general hierarchical format
+so their meaning is retained.
+
+For example, a file subtree alone needs only:
+
+```json
+{
+  "path": "partitions.json",
+  "infile_path": "partitions"
+}
+```
+
+A file or group can have `children`, a mapping from child names to specifications.
+For a file, absent `children` delegates to the original source.
+Present `children` records the exact current
+namespace, including removals; `children: {}` represents an empty group. Mapping
+insertion order determines child order; merge inputs always use ordered arrays.
+The file binding remains available for origin and stat information. A natural
+file child needs only `{}`: its filename, infile path, and reader are inherited
+from the parent and its child name. For example:
+
+```json
+{
+  "path": "partitions.json",
+  "infile_path": "partitions/alpha",
+  "children": {
+    "scalar_a": {},
+    "vector": {},
+    "file_ref": {"path": "metadata/alpha.json"}
+  }
+}
+```
+
+This snapshot retains exactly those three child names. An empty file-backed group
+has a file binding and `children: {}`; an empty virtual group beneath a file has
+`"type": "group"` and `children: {}`, and has no physical origin.
+
+`to_spec()` automatically omits unchanged children when the source group's
+original child names are known, recording only overrides and unmounts. Otherwise
+it retains exact `children` listings. No export mode is required. The loader
+accepts both forms, including a mixture at different nodes:
+
+```json
+{
+  "path": "partitions.json",
+  "infile_path": "partitions/alpha",
+  "overrides": {
+    "file_ref": {"path": "metadata/alpha.json"}
+  },
+  "unmount": ["vector"]
+}
+```
+
+This inherits all current source children, replaces `file_ref`, and hides `vector`.
+`overrides` also supports nested edits to an inherited group. `unmount` contains
+immediate child names, matching the existing method's namespace-only behavior;
+it never deletes source data. A missing name is still hidden if it reappears in
+the source on a later reconstruction. A name cannot be both overridden and
+unmounted at the same node. `children` cannot be combined with either edit field
+at that node. Overlays require a file-backed source; virtual groups and resolved
+merge groups retain explicit children.
+
+Overlay discovery happens once per reconstruction. Newly added source fields are
+visible on reconstruction; there is no automatic refresh afterward. Unchanged
+children retain source order, while explicitly mounted replacements are appended
+in override order, matching `replace`. Nested edits to an inherited
+group keep that group's position.
+
+When first expanding a source group, the runtime retains its original child names
+as an immutable tuple. Export derives overrides and hidden names from that tuple
+and the current tree, without a command log or source reread. If a node came from
+an exact specification and its original names are unknown, export keeps
+that node's exact `children` listing rather than guessing which names were removed.
+
+Namespace positions follow the hierarchy. Physical base directories are never
+repeated per node. A standalone root with an aliased namespace position can retain
+an optional relative `namespace_path`.
+
+Mounts are inferred for foreign file bindings and merged subtrees. Natural file
+children, structural groups, and children produced by a merge are not implicitly
+mounts. `is_mount` is emitted only when the actual boundary differs from that
+inference. Relocation follows the mount's position and sources; `is_relocated`
+is likewise only an override. Computed datasets imply `is_merged`; merged groups
+retain `is_merged: true`, since resolved preference/prefix outputs alone cannot
+identify their merge provenance.
+
+Merges are saved after key discovery: prefixing has already produced named
+children, and preference has selected a source subtree. Computed datasets retain
+their ordered input specifications and operation. Restoration therefore does not
+repeat discovery or validate input shapes until they are read.
+
+The composed example exports an overlay with concrete references for alpha, beta,
+and gamma. New manifest partitions can appear when it is reconstructed, but their
+reference fields remain ordinary source values. Existing resolved references keep
+their selected filenames. Rebuild the view with the Python construction code to
+resolve new or changed references. Values in selected files remain live and lazy.
+An exact snapshot instead retains its discovered partition and field names.
+Directory discovery is likewise captured as the selected files, not as a glob.
+
+Custom readers need explicit names on both sides:
+
+```python
+readers = {"custom": custom_reader}
+spec = filesystem.to_spec(readers=readers)
+restored = FileSystem.from_spec(spec, readers=readers)
+```
+
+Readers inferred from the current suffix registry need no name; restoration uses
+that registry again. An unregistered reader override without a supplied name
+raises an error instead of silently changing behavior. No reader callbacks are
+serialized. Specifications capture the supported filesystem state, not arbitrary
+Python attributes, monkeypatched methods, or subclass-specific behavior.
 
 ## Scope
 

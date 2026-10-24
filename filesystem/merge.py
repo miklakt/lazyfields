@@ -114,8 +114,7 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
     occurrences, kinds = {}, {}
     for name, source in sources.items():
         for key, kind, _ in source.items():
-            node = source.node(key)
-            subtree = node._filesystem.clone(node.path)
+            subtree = source._filesystem.clone(f"{source.path}/{key}")
             occurrences.setdefault(key, {})[name] = subtree
             kinds[subtree] = kind
     unknown = rules.keys() - occurrences.keys()
