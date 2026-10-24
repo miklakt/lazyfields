@@ -55,7 +55,7 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
     try:
         items = list(node.items())
     except Exception as exc:
-        print(f"Failed to load {node.path}: {exc}"); return None
+        print(f"Failed to load {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr); return None
     _validate_keys({key: value for key, _, value in items})
     scalars = {key: value for key, kind, value in items if kind == "scalar"}
     store_keys = [key for key, kind, _ in items if kind != "scalar"]
