@@ -59,6 +59,12 @@ The reader is inferred from the filename unless supplied explicitly. Neither
 is shorthand for wrapping and mounting each relative filename this way. Repeated
 filenames are registered once; overlapping file paths are rejected before mounting.
 
+`FileSystem.from_directory(path, pattern="*")` mounts matching files supported by
+registered readers, preserving their physical relative paths. Unsupported files
+and directories are skipped. Use `pattern="*.json"` to select JSON files, or
+`pattern="**/*.json"` to include nested folders. Construction does not read file
+contents.
+
 ## Clone, unmount, mount
 
 ```python

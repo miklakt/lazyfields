@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import NodeInfo, NodeKind, Reader, require_reader
+from ..readers import NodeInfo, NodeKind, Reader, _reader_match, require_reader
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset
@@ -238,6 +238,16 @@ class FileSystem:
             raise TypeError("reader must be a Reader instance.")
         path = Path(path).absolute()
         return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
+
+    @classmethod
+    def from_directory(cls, path: str | Path, pattern: str = "*") -> FileSystem:
+        """Mount matching supported files at their relative paths without reading them."""
+        root = Path(path)
+        if not root.is_dir():
+            raise NotADirectoryError(str(root))
+        paths = sorted(file.relative_to(root) for file in root.glob(pattern)
+                       if file.is_file() and _reader_match(file)[0] is not None)
+        return cls(paths, relative_to=root)
 
     def _lookup(self, path: str | Path) -> FileSystem:
         """Find a namespace entry or bind its remaining path inside a lazy source."""
