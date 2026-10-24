@@ -301,4 +301,4 @@ reference_df = lf.create_reference_table(
 
 `example/composed_filesystem/README.md` describes filesystems and the specification
 format. `example/large_arrays/README.md` shows how to browse a specification in the
-OS file manager with `lazyfields-mount`.
+OS file manager with `lf-mount`.

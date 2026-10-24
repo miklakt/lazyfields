@@ -19,8 +19,10 @@ json = ["orjson>=3"]
 fuse = ["mfusepy>=3"]
 
 [project.scripts]
-lazyfields-mount = "lazyfields.filesystem.os_mount:main"
+lf-mount = "lazyfields.filesystem.os_mount:main"
+lf-browse-fs = "lazyfields.browser.filesystem:main"
+lf-browse-table = "lazyfields.browser.table:main"
 
 [tool.setuptools]
-packages = ["lazyfields", "lazyfields.explorer", "lazyfields.filesystem", "lazyfields.readers"]
+packages = ["lazyfields", "lazyfields.browser", "lazyfields.filesystem", "lazyfields.readers"]
 package-dir = {lazyfields = "."}

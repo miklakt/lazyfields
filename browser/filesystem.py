@@ -1,19 +1,24 @@
-"""Minimal read-only Tk explorer with relocated mount markers."""
+"""Minimal read-only Tk filesystem browser with relocated mount markers."""
 
+import argparse
+import json
+from pathlib import Path
 from pprint import pformat
 from reprlib import repr as short_repr
 
-def explore(filesystem):
+from ..filesystem import FileSystem
+
+def browse_filesystem(filesystem):
     """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
 
     window = tk.Tk()
     window.title("lazyfields")
-    browser(window, filesystem)("/")
+    panes(window, filesystem)("/")
     window.mainloop()
 
 
-def browser(master, filesystem):
+def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group."""
     import tkinter as tk
     from tkinter import ttk
@@ -131,3 +136,19 @@ def browser(master, filesystem):
     tree.bind("<<TreeviewSelect>>", show)
     details.bind("<Double-1>", enter)
     return set_root
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="lf-browse-fs", description="Browse a filesystem specification read-only.")
+    parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
+    parser.add_argument("--relative-to", type=Path,
+                        help="base directory of specification paths "
+                             "(default: the file's directory, or the working directory for inline JSON)")
+    args = parser.parse_args(argv)
+
+    if args.spec.lstrip().startswith("{"):
+        spec, base = json.loads(args.spec), Path.cwd()
+    else:
+        spec, base = json.loads(Path(args.spec).read_text(encoding="utf-8")), Path(args.spec).resolve().parent
+    browse_filesystem(FileSystem.from_spec(spec, relative_to=args.relative_to or base))

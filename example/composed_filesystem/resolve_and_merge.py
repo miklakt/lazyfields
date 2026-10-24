@@ -10,7 +10,7 @@ import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.explorer import explore_table
+from lazyfields.browser import browse_table
 
 
 def compose(root: Path) -> FileSystem:
@@ -35,10 +35,11 @@ def compose(root: Path) -> FileSystem:
     return view
 
 
-def add_metadata(row) -> None:
-    # Index scalars from the resolved metadata file next to the partition's own scalars.
-    row["label"] = row.store["file_ref/label"]
-    row["weight"] = row.store["file_ref/weight"]
+def add_to_index(path):
+    """Pipe step: copy a scalar buried at path into a column named after its last key."""
+    def step(row) -> None:
+        row[path.rsplit("/", 1)[-1]] = row.store[path]
+    return step
 
 
 def main() -> None:
@@ -57,9 +58,11 @@ def main() -> None:
     if reference_path.exists() and not rebuild:
         reference_df = pd.read_pickle(reference_path)
     else:
-        reference_df = lf.create_reference_table(view.to_spec(), relative_to=root, pipe=[add_metadata])
+        # file_ref/label lands in row["label"], file_ref/weight in row["weight"].
+        pipe = [add_to_index("file_ref/label"), add_to_index("file_ref/weight")]
+        reference_df = lf.create_reference_table(view.to_spec(), relative_to=root, pipe=pipe)
         reference_df.to_pickle(reference_path)
-    explore_table(reference_df)
+    browse_table(reference_df)
 
 
 if __name__ == "__main__":

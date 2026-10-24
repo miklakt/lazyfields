@@ -1,12 +1,13 @@
-"""Read-only Tk explorer for reference tables; a selected row opens its group."""
+"""Read-only Tk browser for reference tables; a selected row opens its group."""
 
+import argparse
 from pathlib import Path
 from reprlib import repr as short_repr
 
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
-from .browser import browser
+from .filesystem import panes
 
 
 def _cell(column, value):
@@ -22,7 +23,7 @@ def _sorted(df, column, ascending):
         return df.sort_values(column, ascending=ascending, kind="stable", key=lambda s: s.astype(str))
 
 
-def explore_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
+def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below."""
     import tkinter as tk
     from tkinter import ttk
@@ -54,7 +55,7 @@ def explore_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000)
     table.pack(fill="both", expand=True)
 
     bottom = ttk.Frame(split)
-    set_root = browser(bottom, reference_df.store.filesystem)
+    set_root = panes(bottom, reference_df.store.filesystem)
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
@@ -101,3 +102,12 @@ def explore_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000)
     render()
     entry.focus_set()
     window.mainloop()
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="lf-browse-table", description="Browse a pickled reference table read-only.")
+    parser.add_argument("table", type=Path, help="reference table pickle")
+    parser.add_argument("--max-rows", type=int, default=5000, help="rows to show at once (default: 5000)")
+    args = parser.parse_args(argv)
+    browse_table(args.table, max_rows=args.max_rows)

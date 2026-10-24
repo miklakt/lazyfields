@@ -6,7 +6,7 @@ Presenters add further files beside a leaf, such as ``preview``. Listing reads n
 dataset values; content is produced when a file is opened. Requires the optional
 ``mfusepy`` package and a FUSE implementation (libfuse, macFUSE, WinFsp).
 
-Command line: ``lazyfields-mount SPEC MOUNTPOINT [--relative-to DIR]``, where SPEC
+Command line: ``lf-mount SPEC MOUNTPOINT [--relative-to DIR]``, where SPEC
 is a specification file or an inline JSON string.
 """
 
@@ -162,7 +162,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
-        prog="lazyfields-mount",
+        prog="lf-mount",
         description="Mount a filesystem specification read-only in the OS. "
                     "The mount ends with the process: Ctrl+C, closing the terminal, or kill.")
     parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
