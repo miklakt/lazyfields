@@ -3,10 +3,9 @@
 import argparse
 import json
 from pathlib import Path
-from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
-from .viewers import open_value, suitable_viewers
+from .viewers import open_value, preview, suitable_viewers, type_name
 
 
 def browse_filesystem(filesystem):
@@ -30,9 +29,11 @@ def panes(master, filesystem):
     panes = ttk.Panedwindow(master, orient="horizontal")
     panes.pack(fill="both", expand=True)
     tree = ttk.Treeview(panes, show="tree")
-    details = ttk.Treeview(panes, columns=("value",))
+    details = ttk.Treeview(panes, columns=("type", "value"), displaycolumns=("value", "type"))
     details.heading("#0", text="Node")
+    details.heading("type", text="Type")
     details.heading("value", text="Value")
+    details.column("type", width=110, stretch=False)
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
     ttk.Label(details, text="⊞ group   ▦ dataset   · scalar   ↪ relocated   ⋈ merged").place(
@@ -46,7 +47,7 @@ def panes(master, filesystem):
         if kind is None:
             kind = node.kind
         elif kind != "group" and (kind == "scalar" or value is not None):
-            previews[path] = short_repr(value)[:160]
+            previews[path] = type_name(value), preview(value)
         kinds[path] = kind
         group = kind == "group"
         origin = node.origin
@@ -77,14 +78,16 @@ def panes(master, filesystem):
             )
         return children[item]
 
-    def preview(path):
+    def columns(path):
+        """Type and value columns of a details row."""
         if kinds[path] == "group":
-            return ""
+            return "", ""
         if path not in previews:
             try:
-                previews[path] = short_repr(filesystem.read(path))[:160]
+                value = filesystem.read(path)
             except Exception as exc:
-                return f"Error: {exc}"
+                return "", f"Error: {exc}"
+            previews[path] = type_name(value), preview(value)
         return previews[path]
 
     def show(event=None):
@@ -96,13 +99,13 @@ def panes(master, filesystem):
             entries = populate(item)
             if entries is None:
                 details.insert("", "end", iid="value", text=tree.item(item, "text"),
-                               values=(preview(item),))
+                               values=columns(item))
             else:
                 for child in entries:
                     details.insert("", "end", iid=child, text=tree.item(child, "text"),
-                                   values=(preview(child),))
+                                   values=columns(child))
         except Exception as exc:
-            details.insert("", "end", iid="error", text="Error", values=(str(exc),))
+            details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
 
     def row(event):
         item = details.identify_row(event.y)

@@ -4,19 +4,19 @@ import argparse
 import inspect
 import sys
 from pathlib import Path
-from reprlib import repr as short_repr
 
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
 from .filesystem import panes
 from .methods import ask_arguments, run_and_show
+from .viewers import preview
 
 
 def _cell(column, value):
     if column == "lf_store_keys" and isinstance(value, (list, tuple)):
         return f"{len(value)} keys"
-    return short_repr(value)[:80]
+    return preview(value, 80)
 
 
 def _sorted(df, column, ascending):
