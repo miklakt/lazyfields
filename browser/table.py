@@ -33,6 +33,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
     window = tk.Tk()
     window.title("lazyfields: reference table")
+    # A fixed size; otherwise the window widens to fit every column.
+    window.geometry(f"{window.winfo_screenwidth() * 2 // 5}x{window.winfo_screenheight() * 2 // 5}")
     split = ttk.Panedwindow(window, orient="vertical")
     split.pack(fill="both", expand=True)
 
