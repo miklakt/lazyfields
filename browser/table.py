@@ -11,7 +11,7 @@ from .filesystem import panes
 
 
 def _cell(column, value):
-    if column == "non_scalar_keys" and isinstance(value, (list, tuple)):
+    if column == "lf_store_keys" and isinstance(value, (list, tuple)):
         return f"{len(value)} keys"
     return short_repr(value)[:80]
 
@@ -46,7 +46,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     status = ttk.Label(bar)
     status.pack(side="right", padx=6)
 
-    columns = [column for column in reference_df.columns if column != "file_path"]
+    columns = [column for column in reference_df.columns if column != "lf_path"]
     ids = [f"c{i}" for i in range(len(columns))]
     table = ttk.Treeview(top, columns=ids, show="tree headings")
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
@@ -72,7 +72,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         view["shown"] = df.head(max_rows)
         table.delete(*table.get_children())
         for position, (_, row) in enumerate(view["shown"].iterrows()):
-            table.insert("", "end", iid=str(position), text=row["file_path"],
+            table.insert("", "end", iid=str(position), text=row["lf_path"],
                          values=[_cell(column, row[column]) for column in columns])
         shown = f" (showing {max_rows})" if len(df) > max_rows else ""
         status.configure(text=f"{len(df)} / {len(reference_df)} rows{shown}")
@@ -89,7 +89,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     def sort_by(column):
         ascending = view["sort"] != (column, True)
         view["sort"] = (column, ascending)
-        for heading, name in (("#0", "file_path"), *zip(ids, columns)):
+        for heading, name in (("#0", "lf_path"), *zip(ids, columns)):
             arrow = (" ▲" if ascending else " ▼") if name == column else ""
             table.heading(heading, text=name + arrow)
         render()
@@ -97,9 +97,9 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     def open_row(event=None):
         item = table.focus()
         if item:
-            set_root("/" + view["shown"].iloc[int(item)]["file_path"].lstrip("/"))
+            set_root("/" + view["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
 
-    for heading, name in (("#0", "file_path"), *zip(ids, columns)):
+    for heading, name in (("#0", "lf_path"), *zip(ids, columns)):
         table.heading(heading, text=name, command=lambda name=name: sort_by(name))
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)

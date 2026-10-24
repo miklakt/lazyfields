@@ -67,19 +67,21 @@ base = Path(__file__).parent
 reference_df = lf.create_reference_table(base / "path_to_data", relative_to=base)
 ```
 
-`update_reference_table(reference_df)` searches the folder again and rebuilds the table, keeping registered methods:
-new files are added and deleted files are removed.
-There is no automatic change tracking.
+`update_reference_table(reference_df)` searches the folder again and updates the table, keeping registered methods:
+new files are added, deleted files are removed, and rows whose files changed are read again.
+Other rows are kept without reading their files, so changes to the pipe or columns are not picked up;
+use `create_reference_table` to reindex everything.
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
 
 >  Extracted archive contents are reused from a temporary directory while the Python process is running.
 
-The returned DataFrame contains copied values plus three columns:
+The returned DataFrame contains copied values plus four columns:
 
-- `file_path` identifies the original file, such as `path_to_data/a.h5`.
-- `non_scalar_keys` lists the names of lists, dictionaries, arrays, and other nested values kept in that file.
-- `creation_time` contains the file creation time.
+- `lf_path` identifies the row in its filesystem, such as `path_to_data/a.h5`.
+- `lf_store_keys` lists the keys whose values stay in the file, such as lists, dictionaries, and arrays; read them with `.store[...]`.
+- `lf_mtime` contains the latest modification time of the row's files.
+- `lf_digest` fingerprints the row's file sizes, modification times, and structure; `update_reference_table` uses it to skip unchanged rows.
 
 Use the stored in the indexed files data through `.store`:
 
@@ -91,6 +93,7 @@ Use the stored in the indexed files data through `.store`:
 - `row.store[:]` loads all data for one row.
 
 Keys containing `/` are rejected when creating a reference table because `/` separates nested path segments.
+Indexed fields named like the four columns above are rejected as well.
 
 > An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
 

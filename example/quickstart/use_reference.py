@@ -27,7 +27,7 @@ show(reference_df.store.length("some_nested_object_key/a"))
 show(reference_df[["some_string_key", "a_sum"]])
 # %%
 # Show the data file referenced by the first row.
-show(reference_df.iloc[0]["file_path"])
+show(reference_df.iloc[0]["lf_path"])
 # %%
 # Load a 1D array for every row.
 show(reference_df.store["some_1darray_key"])
@@ -45,9 +45,9 @@ show(reference_df.iloc[1:3].store[:])
 # %%
 # Keep only rows that contain a particular stored value.
 rows_with_1darrays = reference_df[
-    reference_df["non_scalar_keys"].apply(lambda keys: "some_1darray_key" in keys)
+    reference_df["lf_store_keys"].apply(lambda keys: "some_1darray_key" in keys)
 ]
-rows_with_1darrays[["some_string_key", "non_scalar_keys"]]
+rows_with_1darrays[["some_string_key", "lf_store_keys"]]
 # %%
 # Access a nested value by separating each key with a slash.
 reference_df.store["some_nested_object_key/a"]

@@ -17,6 +17,8 @@ from .pipe import _PipeRow, _apply_pipe
 from .filesystem import FileSystem, Node
 from .filesystem.filesystem import _normalize_path
 
+# Columns added to every row; indexed fields cannot use these names.
+_RESERVED = ("lf_path", "lf_store_keys", "lf_mtime", "lf_digest")
 
 def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | None = None) -> Any:
     try:
@@ -41,10 +43,10 @@ def _validate_keys(value):
             pending.extend(current)
 
 
-def _creation_time(node):
+def _modification_time(node):
     try:
         paths = {source.file_path for source in node.locate()}
-        return datetime.fromtimestamp(max(path.stat().st_ctime for path in paths)) if paths else pd.NaT
+        return datetime.fromtimestamp(max(path.stat().st_mtime for path in paths)) if paths else pd.NaT
     except OSError:
         return pd.NaT
 
@@ -56,7 +58,7 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
         print(f"Failed to load {node.path}: {exc}"); return None
     _validate_keys({key: value for key, _, value in items})
     scalars = {key: value for key, kind, value in items if kind == "scalar"}
-    non_scalar_keys = [key for key, kind, _ in items if kind != "scalar"]
+    store_keys = [key for key, kind, _ in items if kind != "scalar"]
     if pipe:
         try:
             row = _apply_pipe(_PipeRow(node, scalars), pipe)
@@ -68,8 +70,10 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
         _validate_keys(row)
         scalars = {key: value for key, value in row.items() if pd.api.types.is_scalar(value)}
     if columns is not None: scalars = {key: value for key, value in scalars.items() if key in columns}
-    return {**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys,
-            "creation_time": _creation_time(node)}
+    if scalars.keys() & _RESERVED:
+        raise ValueError(f"Keys {sorted(scalars.keys() & _RESERVED)} of {node.path} are reserved for lazyfields columns.")
+    return {**scalars, "lf_path": node.path, "lf_store_keys": store_keys,
+            "lf_mtime": _modification_time(node), "lf_digest": node.digest()}
 
 
 def _directory_source(directory: str | Path, relative_to: str | None) -> tuple[dict, str]:
@@ -112,7 +116,8 @@ def update_reference_table(
     """Rebuild the saved specification, or a new directory or specification, and reindex.
 
     Rows are the groups directly under subtree, the filesystem root by default; a
-    directory source indexes its own subtree.
+    directory source indexes its own subtree. Rows with an unchanged digest are kept
+    as they are; only new or changed rows are read.
     """
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
@@ -131,11 +136,16 @@ def update_reference_table(
     filesystem = FileSystem.from_spec(filesystem_spec, relative_to=relative_to)
     paths = sorted(f"{subtree}/{name}" if subtree else name
                    for name, kind, _ in filesystem.items(subtree) if kind == "group")
+    old_rows = {row["lf_path"]: row for row in reference_df.to_dict("records")} if "lf_digest" in reference_df else {}
     attrs = {**reference_df.attrs, "filesystem_spec": filesystem_spec,
              "filesystem_relative_to": relative_to, "filesystem_subtree": subtree}
 
     def make_row(path):
-        return _reference_row_from_node(filesystem.node(path), columns=columns,
+        # The digest covers the row's file stats and namespace, so equal digests need no read.
+        node = filesystem.node(path)
+        if path in old_rows and old_rows[path]["lf_digest"] == node.digest():
+            return old_rows[path]
+        return _reference_row_from_node(node, columns=columns,
                                         pipe=pipe, pipe_error_skip=pipe_error_skip)
 
     pool = ThreadPoolExecutor(max_workers=workers) if workers not in (None, 1) else nullcontext()
@@ -228,7 +238,7 @@ class StoreAccessor:
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
         filesystem = self.filesystem
-        paths = self._obj.attrs["store_path"] if series and "store_path" in self._obj.attrs else self._obj["file_path"]
+        paths = self._obj["lf_path"]
         if keys == slice(None):
             return filesystem.read(paths) if series else [filesystem.read(path) for path in paths]
 

@@ -167,7 +167,7 @@ file changes all of them. Only file stats are read, and only below the node.
 File-backed descendants inherit their source file's stats; groups composed from
 multiple sources have no single file stat and return `None`. Stats are read on
 request and are not cached. `locate(path)` supplies source paths when aggregate
-information is needed, such as the latest source creation time for a table row.
+information is needed, such as the latest source modification time for a table row.
 
 Filesystems and their `Node` handles expose `node`, `listdir`,
 `read`, and `locate`. Handles also expose `path` and `kind`. An empty path or `/`
