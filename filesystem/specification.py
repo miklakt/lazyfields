@@ -6,8 +6,6 @@ of an expanded group. Merge groups have already resolved prefix/prefer rules.
 Node types follow their fields and parent source; an explicit ``type`` is only
 needed to distinguish a virtual group beneath a file-backed parent.
 ``overrides`` and ``unmount`` instead inherit the source namespace on restoration.
-A ``paths`` node may name a ``directory`` that its paths and patterns are relative
-to; the directory locates files without adding a level to the namespace.
 """
 
 import os
@@ -24,7 +22,7 @@ _FLAGS = ("is_mount", "is_relocated", "is_merged")
 _COMMON = {"type", "namespace_path", *_FLAGS}
 _FIELDS = {
     "file": {"path", "infile_path", "reader", "children", "overrides", "unmount"},
-    "files": {"directory", "paths"},
+    "files": {"paths"},
     "group": {"children"},
     "merge": {"op", "axis", "sources"},
 }
@@ -109,15 +107,15 @@ def _validate_node(data, parent):
     return kind
 
 
-def _registered_paths(spec, prefix="", directory=""):
+def _registered_paths(spec, prefix=""):
     """Recognize an ordinary file registration tree without losing empty groups."""
     if set(spec) == {"path"}:
-        return [prefix] if spec["path"] == (f"{directory}/{prefix}" if directory else prefix) else None
+        return [prefix] if spec["path"] == prefix else None
     if set(spec) != {"children"} or not spec["children"]:
         return None
     paths = []
     for name, child in spec["children"].items():
-        found = _registered_paths(child, f"{prefix}/{name}" if prefix else name, directory)
+        found = _registered_paths(child, f"{prefix}/{name}" if prefix else name)
         if found is None:
             return None
         paths.extend(found)
@@ -162,12 +160,9 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
             raise TypeError(f"Unsupported filesystem source: {type(source).__name__}")
 
         if namespace is None:
-            default_namespace = (source.origin.file_path / (source.origin.infile_path or "")
-                                 if isinstance(source, _FileSource)
-                                 else entry._files_root or entry.relative_to)
-            namespace = (default_namespace if isinstance(source, _FileSource)
-                         else entry._files_root or base)
-            if entry._namespace_path != default_namespace:
+            namespace = (source.origin.file_path / (source.origin.infile_path or "")
+                         if isinstance(source, _FileSource) else entry.relative_to)
+            if entry._namespace_path != namespace:
                 namespace = entry._namespace_path
                 result["namespace_path"] = path(namespace)
         if entry._children is not None:
@@ -194,17 +189,16 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
         return result
 
     spec = visit(filesystem)
-    directory = path(filesystem._files_root or filesystem.relative_to)
-    files = {} if directory == "." else {"directory": directory}
-    paths = _registered_paths(spec, directory=files.get("directory", ""))
+    paths = _registered_paths(spec)
     patterns = filesystem._path_patterns
-    if patterns is not None:
+    # Patterns are relative to the registration base, so only that base can export them.
+    if patterns is not None and filesystem.relative_to == base:
         if spec == {"children": {}}:
             paths = []
         if paths is not None and tuple(paths) == patterns[1]:
-            return {**files, "paths": list(patterns[0])}
+            return {"paths": list(patterns[0])}
     # Literal glob characters in filenames must remain explicit file bindings.
-    return {**files, "paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
+    return {"paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
 
 
 def from_spec(cls, spec, *, relative_to=None, readers=None):
@@ -253,7 +247,7 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                 paths = data.get("paths")
                 if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
                     raise TypeError("paths must be a list of relative filenames.")
-                entry = cls._from_paths(path(data["directory"]) if "directory" in data else base, paths)
+                entry = cls._from_paths(base, paths)
             elif kind == "merge":
                 operation = data.get("op")
                 if not isinstance(operation, str) or operation not in _RULES:
@@ -278,7 +272,7 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
             if namespace is not None:
                 entry._namespace_path = namespace
             elif kind != "file":
-                entry._namespace_path = entry._files_root or base
+                entry._namespace_path = base
             if "namespace_path" in data:
                 entry._namespace_path = path(data["namespace_path"])
             entry.is_merged = data.get("is_merged", entry.is_merged)

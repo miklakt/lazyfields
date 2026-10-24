@@ -1,5 +1,6 @@
 import ast
 import inspect
+import os
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,7 @@ import pandas as pd
 
 from .pipe import _apply_pipe
 from .filesystem import FileSystem, Node
+from .filesystem.filesystem import _normalize_path
 
 
 def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | None = None) -> Any:
@@ -65,7 +67,7 @@ def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe
     if pipe:
         row = pd.Series({**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys}, dtype="object")
         row.attrs = {**attrs, "store_path": node.path}
-        row.__dict__["_store_filesystem"] = node._filesystem
+        row.__dict__["_filesystem"] = node._filesystem
         try:
             row = _apply_pipe(row, pipe)
         except Exception as exc:
@@ -80,47 +82,67 @@ def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe
             "creation_time": _creation_time(node)}
 
 
+def _directory_source(directory: str | Path, relative_to: str | None) -> tuple[dict, str]:
+    """Specify a directory's immediate supported files and the subtree that holds them."""
+    directory = Path(directory)
+    if directory.is_absolute():
+        directory = Path(os.path.relpath(directory, Path(relative_to or ".").resolve()))
+    subtree = _normalize_path(directory)
+    return {"paths": [f"{subtree}/*" if subtree else "*"]}, subtree
+
+
 def create_reference_table(
-    filesystem_spec: Mapping,
+    source: str | Path | Mapping,
     columns: list[str] | None = None,
     *,
     relative_to: str | Path | None = None,
+    subtree: str | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Index root groups from a specification saved in the table's attributes."""
+    """Index the groups under subtree of a directory's files or of a filesystem specification."""
     return update_reference_table(
-        pd.DataFrame(), filesystem_spec, columns, relative_to=relative_to, pipe=pipe,
+        pd.DataFrame(), source, columns, relative_to=relative_to, subtree=subtree, pipe=pipe,
         pipe_error_skip=pipe_error_skip, workers=workers,
     )
 
 
 def update_reference_table(
     reference_df: pd.DataFrame,
-    filesystem_spec: Mapping | None = None,
+    source: str | Path | Mapping | None = None,
     columns: list[str] | None = None,
     *,
     relative_to: str | Path | None = None,
+    subtree: str | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Rebuild the saved specification and reindex, retaining table attributes."""
+    """Rebuild the saved specification, or a new directory or specification, and reindex.
+
+    Rows are the groups directly under subtree, the filesystem root by default; a
+    directory source indexes its own subtree.
+    """
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
-    if filesystem_spec is None:
-        filesystem_spec = reference_df.attrs.get("filesystem_spec")
-    if not isinstance(filesystem_spec, Mapping):
-        raise TypeError("filesystem_spec must be a filesystem specification mapping.")
-    filesystem_spec = deepcopy(dict(filesystem_spec))
     if relative_to is None:
         relative_to = reference_df.attrs.get("filesystem_relative_to")
     relative_to = str(relative_to) if relative_to is not None else None
+    if isinstance(source, (str, Path)):
+        source, subtree = _directory_source(source, relative_to)
+    elif subtree is None:
+        subtree = reference_df.attrs.get("filesystem_subtree", "") if source is None else ""
+    subtree = _normalize_path(subtree)
+    filesystem_spec = reference_df.attrs.get("filesystem_spec") if source is None else source
+    if not isinstance(filesystem_spec, Mapping):
+        raise TypeError("source must be a directory or a filesystem specification mapping.")
+    filesystem_spec = deepcopy(dict(filesystem_spec))
     filesystem = FileSystem.from_spec(filesystem_spec, relative_to=relative_to)
-    paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
+    paths = sorted(f"{subtree}/{name}" if subtree else name
+                   for name, kind, _ in filesystem.items(subtree) if kind == "group")
     attrs = {**reference_df.attrs, "filesystem_spec": filesystem_spec,
-             "filesystem_relative_to": relative_to}
+             "filesystem_relative_to": relative_to, "filesystem_subtree": subtree}
 
     def make_row(path):
         return _reference_row_from_node(filesystem.node(path), attrs=attrs, columns=columns,
@@ -131,7 +153,7 @@ def update_reference_table(
         rows = (executor.map if executor else map)(make_row, paths)
         df = pd.DataFrame(row for row in rows if row is not None)
     df.attrs = attrs
-    df.__dict__["_store_filesystem"] = filesystem
+    df.__dict__["_filesystem"] = filesystem
     return df
 
 
@@ -188,7 +210,7 @@ class StoreAccessor:
             values = []
             for _, row in self._obj.iterrows():
                 row.attrs = self._obj.attrs.copy()
-                row.__dict__["_store_filesystem"] = self.filesystem
+                row.__dict__["_filesystem"] = self.filesystem
                 row.store._methods = self._methods
                 row.store._compiled_methods = self._compiled_methods
                 values.append(method(row, *args, **kwargs))
@@ -203,15 +225,15 @@ class StoreAccessor:
     def filesystem(self) -> FileSystem:
         """Reconstruct the saved specification once for this pandas object."""
         cache = self._obj.__dict__
-        if "_store_filesystem" not in cache:
+        if "_filesystem" not in cache:
             try:
                 spec = self._obj.attrs["filesystem_spec"]
             except KeyError:
                 raise RuntimeError("This table has no filesystem specification.") from None
-            cache["_store_filesystem"] = FileSystem.from_spec(
+            cache["_filesystem"] = FileSystem.from_spec(
                 spec, relative_to=self._obj.attrs.get("filesystem_relative_to"),
             )
-        return cache["_store_filesystem"]
+        return cache["_filesystem"]
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)

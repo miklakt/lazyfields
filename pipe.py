@@ -4,15 +4,24 @@ from copy import deepcopy
 import pandas as pd
 
 
+def _carry_filesystem(source: pd.Series, target: pd.Series) -> pd.Series:
+    """Share the cached filesystem, which pandas does not propagate to new objects."""
+    if "_filesystem" in source.__dict__:
+        target.__dict__["_filesystem"] = source.__dict__["_filesystem"]
+    return target
+
+
 def _apply_pipe(row: pd.Series, pipe: list, *, scoped: bool = False):
     """Apply callbacks to ordinary pandas rows, isolating scoped row values."""
     last_was_filter = False
     for step in pipe:
-        result = _apply_pipe(row.map(deepcopy), step, scoped=True) if isinstance(step, list) else step(row)
+        result = (_apply_pipe(_carry_filesystem(row, row.map(deepcopy)), step, scoped=True)
+                  if isinstance(step, list) else step(row))
         if result is None: last_was_filter = False
         elif isinstance(result, (Mapping, pd.Series)):
             attrs = row.attrs
-            row = result if isinstance(result, pd.Series) else pd.Series(result, dtype="object")
+            new_row = result if isinstance(result, pd.Series) else pd.Series(result, dtype="object")
+            row = _carry_filesystem(row, new_row)
             row.attrs = attrs.copy()
             last_was_filter = False
         elif pd.api.types.is_bool(result):

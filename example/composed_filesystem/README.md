@@ -234,13 +234,11 @@ Node types are inferred from fields and parent context:
 - `paths` registers relative filenames or glob patterns, such as `blocks/*.json`
   or `**/*.json`. Patterns select supported files, skip directories and unsupported
   formats, and combine matches in sorted order without duplicates.
-  Parent groups and mount boundaries are reconstructed from the filenames.
-  An optional `directory` names the folder that the paths and patterns are
-  relative to, without adding it to the tree: `{"directory": "blocks", "paths":
-  ["*.json"]}` places the block files at the root. Like `path`, it may use `..`.
-  `to_spec()` writes it when a filesystem's files live below a different
-  directory than the export base, as with `from_directory("data/blocks")`
-  exported relative to `data`.
+  Parent groups and mount boundaries are reconstructed from the filenames, so
+  `{"paths": ["blocks/*.json"]}` places the block files under `blocks`. Patterns
+  are exported only relative to the registration's own base; exported relative
+  to another base, as with `from_directory("data/blocks")` relative to `data`,
+  the files are written as explicit `path` children.
 - `op` and ordered `sources` identify a computed dataset, with `axis` for
   `stack` or `concatenate`. Other supported operations are `collect`, `vstack`,
   and `hstack`. Axis zero is the default and is omitted on export.

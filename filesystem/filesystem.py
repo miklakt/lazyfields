@@ -115,11 +115,6 @@ class Node:
         return self._entry._origin
 
     @property
-    def in_file(self) -> bool:
-        """Whether this node originates from file contents, including a file root."""
-        return self.origin is not None
-
-    @property
     def is_merged(self) -> bool:
         """Whether this node is a merge-created group or computed dataset."""
         return self._entry.is_merged
@@ -154,7 +149,6 @@ class FileSystem:
     _children: dict[str, FileSystem] | None = None
     _source_children: tuple[str, ...] | None = None
     _path_patterns: tuple[tuple[str, ...], tuple[str, ...]] | None = None
-    _files_root: Path | None = None  # Directory that registered file paths are relative to.
 
     def __init__(
         self,
@@ -164,7 +158,6 @@ class FileSystem:
     ):
         self.relative_to = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
         self._namespace_path = self.relative_to
-        self._files_root = self.relative_to
         self._children = {}
         if isinstance(filepaths, (str, Path)):
             filepaths = [filepaths]

@@ -51,28 +51,46 @@ python3 example/quickstart/use_reference.py
 ## How It Works
 
 ```python
-from pathlib import Path
 import lazyfields as lf
-from lazyfields.filesystem import FileSystem
 
-directory = Path("path_to_data")
-filesystem = FileSystem(
-    sorted(path.name for path in directory.glob("*.h5")),
-    relative_to=directory,
-)
-reference_df = lf.create_reference_table(filesystem)
+reference_df = lf.create_reference_table("path_to_data")
 ```
 
-`create_reference_table(filesystem)` copies immediate scalar children of each root
-group into one table row. Datasets and nested groups remain accessible through
-`.store[path, selection]`, relative to each row group. Non-group root children are
-skipped. Select files when constructing the filesystem; use `filesystem.clone("h5")`
-to index the HDF5 subtree of `example/simple_filesystem`.
+Passing a directory indexes every supported file directly inside it, one row per
+file. It is shorthand for the specification
+`{"paths": ["path_to_data/*"]}` with `subtree="path_to_data"`. Pass a
+specification instead to select files or compose a filesystem:
+
+```python
+filesystem_spec = {"paths": ["path_to_data/*.h5"]}
+reference_df = lf.create_reference_table(filesystem_spec, subtree="path_to_data")
+```
+
+Specification paths are relative to `relative_to`, or to the current working
+directory when it is omitted. The table saves `relative_to` as given; an absolute
+directory is saved relative to it, so saved tables contain no absolute paths.
+`subtree` names the group whose child groups become rows, the filesystem root by
+default. `file_path` holds each row's full path in the filesystem, such as
+`path_to_data/a.h5`.
+
+`create_reference_table(filesystem_spec)` reconstructs a filesystem and copies
+immediate scalar children of each group directly under `subtree` into one table
+row. Datasets and nested groups remain accessible through
+`.store[path, selection]`, relative to each row group. Non-group children of `subtree` are
+skipped. Pass a specification dictionary, such as one loaded with `json.load()`.
+For an imperatively composed filesystem, pass `filesystem.to_spec()` and its base
+directory as `relative_to`. Filesystem instances and callable constructors are
+not accepted.
 
 `reference_df.store.filesystem` exposes the backing filesystem. Mounted and merged
-groups work the same way as file roots. `update_reference_table(reference_df, filesystem)`
-reindexes the current groups, retaining registered methods. There is no fingerprint
-cache or automatic change tracking; calling update explicitly reinspects each row.
+groups work the same way as file roots. `update_reference_table(reference_df)`
+reconstructs the saved specification and reindexes its groups, retaining registered
+methods. Supply a new directory, specification, `relative_to`, or `subtree` to change the
+configuration; a new specification indexes the root unless `subtree` is given.
+There is no automatic change tracking. Glob patterns in `paths` discover current
+membership on reconstruction, so explicit updates include matching new files and
+exclude deleted matches. Literal filenames remain fixed bindings. Use
+`**/*.h5` to include nested directories.
 
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
@@ -197,24 +215,39 @@ A registered method is evaluated on demand for one row or for every row in a sel
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
-One shared context in `DataFrame.attrs` holds the backing filesystem. Rows,
-filtered tables, and copies share that same filesystem; pandas does not copy its
-namespace. Use `filesystem.clone()` when an independent namespace is needed.
-Pickle round trips retain this sharing within the loaded table. Physical source paths are absolute;
-moving the source files requires constructing and indexing a new filesystem.
-Existing tables created with the directory-based API must be rebuilt.
-Register custom readers before loading a saved table, as with the CSV example.
+`DataFrame.attrs["filesystem_spec"]` holds a detached copy of the specification.
+`DataFrame.attrs["filesystem_relative_to"]` holds the supplied base directory as a
+string, or `None` to use the current working directory. A relative base remains
+relative to the working directory when the table is loaded.
+`DataFrame.attrs["filesystem_subtree"]` holds the indexed subtree, `""` for the root.
+
+The runtime filesystem is cached privately on each DataFrame or Series and is
+not persisted. After loading, the first `.store` data access reconstructs it from
+the saved attributes. Rows, filtered tables, and copies retain the specification
+and can reconstruct their own runtime filesystem. Source values stay live;
+the scalar columns in the saved reference table remain an index snapshot.
+Register custom suffix readers before accessing stored data, as in the CSV example.
 
 ```python
 import pandas as pd
 
 destination = "reference.pkl"
-reference_df = lf.create_reference_table(filesystem)
+reference_df = lf.create_reference_table(filesystem_spec, relative_to=directory)
 reference_df.to_pickle(destination)
 reference_df = pd.read_pickle(destination)
 ```
 
 Only load trusted pickle files because they can execute code.
+
+To move the source files, update the base and rebuild the index:
+
+```python
+reference_df = lf.update_reference_table(reference_df, relative_to="new_data_location")
+```
+
+Runtime namespace edits through `.store.filesystem` do not change the saved
+specification. To retain them, supply that filesystem's `to_spec()` result to
+`update_reference_table` with the corresponding base directory.
 
 Use `pipe=[...]` to process each row group as the reference table is built, compute additional values, and add them to the index.
 Callbacks receive ordinary pandas Series containing the indexed scalars and row
@@ -251,14 +284,14 @@ def add_a_sum(row):
 # Keep files whose first nested "a" value is greater than 2.0.
 # The nested list uses a temporary row, so only a_sum is added to the table.
 reference_df = lf.create_reference_table(
-    filesystem,
+    filesystem_spec, relative_to=directory,
     pipe=[[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum],
 )
 ```
 
 - A function modifies the Series in place and returns `None`, or returns a new Series or dictionary that replaces its indexed fields. Source access through `.store` is retained.
 - A filter returns `True` to continue or `False` to filter out the row.
-- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. The filesystem stays shared.
+- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. Source access remains available through the saved specification.
 
 ```text
 input_data -> function -> filter -> [function -> filter] -> function -> output_data -> reference table
