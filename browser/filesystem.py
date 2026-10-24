@@ -6,7 +6,8 @@ from pathlib import Path
 from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
-from .viewers import suitable_viewers
+from .viewers import open_value, suitable_viewers
+
 
 def browse_filesystem(filesystem):
     """Preview visible leaves; discover group children only when visited."""
@@ -86,11 +87,6 @@ def panes(master, filesystem):
                 return f"Error: {exc}"
         return previews[path]
 
-    def open_dataset(path, viewer, value):
-        window = tk.Toplevel(master)
-        window.title(path)
-        viewer(window, value)
-
     def show(event=None):
         item = tree.focus()
         if not item:
@@ -115,8 +111,7 @@ def panes(master, filesystem):
     def enter(event):
         item = row(event)
         if kinds.get(item) == "dataset":
-            value = filesystem.read(item)
-            open_dataset(item, suitable_viewers(value)[0][1], value)
+            open_value(master, item, filesystem.read(item))
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             tree.selection_set(item)
@@ -143,7 +138,8 @@ def panes(master, filesystem):
         value = filesystem.read(item)
         menu.delete(0, "end")
         for name, viewer in suitable_viewers(value):
-            menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_dataset(item, viewer, value))
+            menu.add_command(label=f"Open with {name}",
+                             command=lambda viewer=viewer: open_value(master, item, value, viewer))
         menu.tk_popup(event.x_root, event.y_root)
 
     tree.bind("<<TreeviewOpen>>", show)

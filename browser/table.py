@@ -1,6 +1,7 @@
 """Read-only Tk browser for reference tables; a selected row opens its group."""
 
 import argparse
+import inspect
 from pathlib import Path
 from reprlib import repr as short_repr
 
@@ -8,6 +9,7 @@ import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
 from .filesystem import panes
+from .methods import ask_arguments, run_and_show
 
 
 def _cell(column, value):
@@ -24,9 +26,12 @@ def _sorted(df, column, ascending):
 
 
 def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
-    """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below."""
+    """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
+
+    Right-clicking runs a registered method on the selected rows and shows its result.
+    """
     import tkinter as tk
-    from tkinter import ttk
+    from tkinter import messagebox, ttk
 
     if isinstance(reference_df, (str, Path)):
         reference_df = pd.read_pickle(reference_df)
@@ -61,7 +66,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     table.pack(fill="both", expand=True)
 
     bottom = ttk.Frame(split)
-    set_root = panes(bottom, reference_df.store.filesystem)
+    filesystem = reference_df.store.filesystem
+    set_root = panes(bottom, filesystem)
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
@@ -101,10 +107,52 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         if item:
             set_root("/" + view["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
 
+    menu = tk.Menu(table, tearoff=False)
+    arguments = {}
+
+    def run(name):
+        positions = sorted(int(item) for item in table.selection())
+        rows = view["shown"].iloc[positions[0] if len(positions) == 1 else positions]
+        rows.__dict__["_filesystem"] = filesystem  # The store accessor's cache; spares rebuilding it.
+        method = getattr(rows.store, name)
+        parameters = list(inspect.signature(method).parameters.values())[1:]  # Without the row.
+        target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
+
+        def call(args, kwargs, text):
+            window.configure(cursor="watch")
+            window.update_idletasks()
+            try:
+                run_and_show(window, f"{target} · {name}({text})", lambda: method(*args, **kwargs))
+            except Exception as exc:
+                messagebox.showerror(name, f"{type(exc).__name__}: {exc}", parent=window)
+            finally:
+                window.configure(cursor="")
+
+        if parameters:
+            ask_arguments(window, name, parameters, arguments.setdefault(name, {}), call)
+        else:
+            call([], {}, "")
+
+    def open_menu(event):
+        item = table.identify_row(event.y)
+        if not item:
+            return
+        if item not in table.selection():
+            table.focus(item)
+            table.selection_set(item)
+        menu.delete(0, "end")
+        names = reference_df.store.get_registered_methods()
+        for name in names:
+            menu.add_command(label=f"Run {name}", command=lambda name=name: run(name))
+        if not names:
+            menu.add_command(label="No registered methods", state="disabled")
+        menu.tk_popup(event.x_root, event.y_root)
+
     for heading, name in (("#0", "lf_path"), *zip(ids, columns)):
         table.heading(heading, text=name, command=lambda name=name: sort_by(name))
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
+    table.bind("<Button-3>", open_menu)
     render()
     entry.focus_set()
     window.mainloop()
