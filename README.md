@@ -113,6 +113,9 @@ def length(row, key):
 lengths = reference_df.store.length("some_2darray_key")
 ```
 
+Inside a method, other registered methods are called on the row, such as `row.length("key")`.
+Method names cannot shadow the row's own attributes, such as `get`, `items`, or `node`.
+
 Remove a registered method by name:
 
 ```python
@@ -149,10 +152,12 @@ def abc(__row, c):
     return a + b + c
 ```
 
-The row reference is supplied automatically. A row expression selects part of a value:
+The row reference is supplied automatically. A row expression selects part of a
+value or calls an already registered method:
 
 ```python
 bound_abc = lf.bind_method(abc, a="a", b='["b", 0]')
+bound_abc = lf.bind_method(abc, a="a", b='.length("b")')
 ```
 
 With `"source"`, `bind_method` adds imports for modules and importable

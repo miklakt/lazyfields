@@ -170,7 +170,7 @@ class StoreAccessor:
         name = getattr(method, "__name__", None)
         if not callable(method) or not isinstance(name, str) or not name.isidentifier():
             raise TypeError("A store method must be a named callable.")
-        if hasattr(type(self), name) or name in self._methods:
+        if hasattr(type(self), name) or hasattr(_NodeRow(None), name) or name in self._methods:
             raise ValueError(f"A store method named {name!r} already exists.")
         try:
             node = ast.parse(textwrap.dedent(inspect.getsource(method))).body[0]
@@ -192,16 +192,19 @@ class StoreAccessor:
         self._obj.attrs["store_methods"] = methods
         self._compiled_methods.pop(name, None)
 
-    def __getattr__(self, name: str) -> Any:
-        try:
-            source = self._methods[name]
-        except KeyError:
-            raise AttributeError(f"{type(self).__name__!r} has no attribute {name!r}") from None
+    def _method(self, name: str) -> Callable[..., Any]:
+        """Compile a registered method once; raise KeyError if it is missing."""
         if name not in self._compiled_methods:
             namespace: dict[str, Any] = {}
-            exec(source, namespace)
+            exec(self._methods[name], namespace)
             self._compiled_methods[name] = namespace[name]
-        method = self._compiled_methods[name]
+        return self._compiled_methods[name]
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            method = self._method(name)
+        except KeyError:
+            raise AttributeError(f"{type(self).__name__!r} has no attribute {name!r}") from None
 
         @wraps(method)
         def call(*args: Any, **kwargs: Any) -> Any:
@@ -209,7 +212,8 @@ class StoreAccessor:
                 # Like a pipe row: present columns over lazy reads from the row's group.
                 fields = {key: value for key, value in row.items()
                           if not (pd.api.types.is_scalar(value) and pd.isna(value))}
-                return method(_NodeRow(self.filesystem.node(row["lf_path"]), fields), *args, **kwargs)
+                node = self.filesystem.node(row["lf_path"])
+                return method(_NodeRow(node, fields, self._method), *args, **kwargs)
 
             if isinstance(self._obj, pd.Series):
                 return apply(self._obj)

@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import partial
 
 import pandas as pd
 
@@ -7,9 +8,18 @@ import pandas as pd
 class _NodeRow(dict):
     """Row fields over lazy reads from the row's node, for pipes and store methods."""
 
-    def __init__(self, node, fields=()):
+    def __init__(self, node, fields=(), methods=None):
         super().__init__(fields)
-        self.node = node
+        self.node, self._methods = node, methods
+
+    def __getattr__(self, name):
+        # Registered store methods, applied to this row.
+        methods = self.__dict__.get("_methods")
+        try:
+            if methods is None: raise KeyError(name)
+            return partial(methods(name), self)
+        except KeyError:
+            raise AttributeError(f"Row has no registered method {name!r}.") from None
 
     def __getitem__(self, key):
         if isinstance(key, tuple):
