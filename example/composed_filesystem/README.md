@@ -160,6 +160,10 @@ remain accessible through the unedited original filesystem and its explorer.
 ## Access and laziness
 
 `fs.stat(path)` and `node.stat()` expose the physical file's `os.stat_result`.
+`fs.digest(path)` and `node.digest()` return a hex string that changes when a file
+beneath the node changes, is deleted, or the namespace below it is edited. Nodes
+inside a file share that file's size and modification time, so any change to the
+file changes all of them. Only file stats are read, and only below the node.
 File-backed descendants inherit their source file's stats; groups composed from
 multiple sources have no single file stat and return `None`. Stats are read on
 request and are not cached. `locate(path)` supplies source paths when aggregate

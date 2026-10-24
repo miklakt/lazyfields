@@ -4,6 +4,7 @@ Array rules materialize their inputs before applying the logical selection.
 Their locators conservatively report complete inputs, in source order.
 """
 
+import hashlib
 from dataclasses import dataclass
 from operator import index
 from typing import Mapping
@@ -82,6 +83,10 @@ class _MergedDataset:
             function = getattr(np, operation)
             result = function(values, axis=axis) if axis is not None else function(values)
         return result if selection is None else result[selection]
+
+    def digest(self):
+        state = (self.rule, [source.digest() for source in self.sources])
+        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
 
     def locate(self, selection=None):
         # Selection addresses the assembled value, never each input independently.

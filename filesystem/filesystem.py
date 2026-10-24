@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from copy import copy
 from dataclasses import dataclass, field, replace
@@ -73,6 +74,16 @@ class _FileSource:
             raise ValueError("selection requires a dataset path.")
         return [replace(self.origin, selection=selection)]
 
+    def digest(self):
+        # Every node inside a file changes with the file; a deleted file has no stat.
+        try:
+            stat = self.origin.file_path.stat()
+            signature = (stat.st_size, stat.st_mtime_ns)
+        except FileNotFoundError:
+            signature = None
+        state = (str(self.origin.file_path), self.origin.infile_path, signature)
+        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
+
     def descendant(self, path):
         parent = self.origin.infile_path
         origin = replace(self.origin, infile_path=f"{parent}/{path}" if parent else path)
@@ -104,6 +115,9 @@ class Node:
 
     def stat(self) -> os.stat_result | None:
         return self._filesystem.stat(self.path)
+
+    def digest(self) -> str:
+        return self._filesystem.digest(self.path)
 
     @property
     def _entry(self) -> FileSystem:
@@ -384,3 +398,11 @@ class FileSystem:
     def stat(self, path: str | Path = "") -> os.stat_result | None:
         origin = self._lookup(path)._origin
         return origin.file_path.stat() if origin is not None else None
+
+    def digest(self, path: str | Path = "") -> str:
+        """Change digest from file stats and namespace structure, without source reads."""
+        entry = self._lookup(path)
+        if entry._children is None:
+            return entry._source.digest()
+        state = [(name, child.digest()) for name, child in entry._children.items()]
+        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
