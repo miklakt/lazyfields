@@ -4,8 +4,8 @@ from copy import deepcopy
 import pandas as pd
 
 
-class _PipeRow(dict):
-    """Fields assigned so far, over lazy reads from the row's node."""
+class _NodeRow(dict):
+    """Row fields over lazy reads from the row's node, for pipes and store methods."""
 
     def __init__(self, node, fields=()):
         super().__init__(fields)
@@ -24,14 +24,14 @@ class _PipeRow(dict):
             return default
 
 
-def _apply_pipe(row: _PipeRow, pipe: list, *, scoped: bool = False):
+def _apply_pipe(row: _NodeRow, pipe: list, *, scoped: bool = False):
     """Apply callbacks to a row, isolating scoped row values."""
     last_was_filter = False
     for step in pipe:
-        result = (_apply_pipe(_PipeRow(row.node, deepcopy(dict(row))), step, scoped=True)
+        result = (_apply_pipe(_NodeRow(row.node, deepcopy(dict(row))), step, scoped=True)
                   if isinstance(step, list) else step(row))
         if result is None: last_was_filter = False
-        elif isinstance(result, Mapping): row, last_was_filter = _PipeRow(row.node, result), False
+        elif isinstance(result, Mapping): row, last_was_filter = _NodeRow(row.node, result), False
         elif pd.api.types.is_bool(result):
             if not result: return False
             last_was_filter = True

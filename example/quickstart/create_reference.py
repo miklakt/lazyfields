@@ -44,7 +44,7 @@ reference_df = lf.create_reference_table(data_dir, relative_to=root_dir, pipe=pi
 def length(row, key):
     """Finds the length of the array provided by the key"""
     try:
-        return len(row.store[key])
+        return len(row[key])
     except (KeyError, TypeError):
         return None
 

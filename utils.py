@@ -30,7 +30,7 @@ def _method_imports(method: Callable[..., Any]) -> list[ast.stmt]:
 def bind_method(
     function: Callable[..., Any], mode: str = "source", /, **mapping: str
 ) -> Callable[..., Any]:
-    """Bind parameters to columns ("a") or row expressions ('.store["b"]').
+    """Bind parameters to row fields ("a", "group/b") or row expressions ('["b", 0]').
 
     "source" stores the function body and recoverable imports.
     "wrap" stores a wrapper; the original module must stay available.

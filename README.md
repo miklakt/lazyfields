@@ -98,14 +98,15 @@ Indexed fields named like the four columns above are rejected as well.
 > An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
 
 You can register methods for use on one row or a selection of rows.
-Each method receives a row as its first argument.
+Each method receives a row as its first argument, like a pipe callback: a dict of the
+row's columns, backed by its group, so other fields are read on demand with `row["key"]`.
 On a DataFrame, its result is a Series with the same index.
 
 ```python
 @reference_df.store.register_method
 def length(row, key):
     try:
-        return len(row.store[key])
+        return len(row[key])
     except (KeyError, TypeError):
         return None
 
@@ -121,7 +122,8 @@ reference_df.store.unregister_method("length")
 Use `bind_method` as a helper to adapt an existing free function to a row-wise method.
 The second positional argument selects `"source"` (the default) or
 `"wrap"`.
-Use a column name directly (`a="a"` or `a='["a"]'`) and `.store["b"]` for a value kept in the original file.
+Bind a field by name (`a="a"`, `b="group/b"`), whether it is a column or kept in the original file,
+or by a row expression such as `b='["b", 0]'`.
 Calling `bind_method(abc, ...)` creates an adapted function without changing
 `abc`, so the original remains independently callable:
 
@@ -130,7 +132,7 @@ def abc(a, b, c):
     return a + b + c
 
 reference_df.store.register_method(
-    lf.bind_method(abc, a="a", b='.store["b"]')
+    lf.bind_method(abc, a="a", b="b")
 )
 
 abc(1, 2, 10)                        # ordinary function call: 13
@@ -143,15 +145,14 @@ The example above stores this generated source in
 ```python
 def abc(__row, c):
     a = __row['a']
-    b = __row.store['b']
+    b = __row['b']
     return a + b + c
 ```
 
-The row reference is supplied automatically. Use `.store.method(...)` to call
-an already registered method as an alternative binding:
+The row reference is supplied automatically. A row expression selects part of a value:
 
 ```python
-bound_abc = lf.bind_method(abc, a="a", b='.store.length("b")')
+bound_abc = lf.bind_method(abc, a="a", b='["b", 0]')
 ```
 
 With `"source"`, `bind_method` adds imports for modules and importable
@@ -169,7 +170,7 @@ source; the original function keeps its module globals and defaults:
 from my_analysis import abc
 
 reference_df.store.register_method(
-    lf.bind_method(abc, "wrap", a="a", b='.store["b"]')
+    lf.bind_method(abc, "wrap", a="a", b="b")
 )
 results = reference_df.store.abc(10)
 ```
@@ -179,7 +180,7 @@ The stored source is a small forwarding wrapper:
 ```python
 def abc(__row, c):
     from my_analysis import abc as __method
-    return __method(__row['a'], __row.store['b'], c)
+    return __method(__row['a'], __row['b'], c)
 ```
 
 The wrapper's signature is generated once when binding, so calls forward arguments

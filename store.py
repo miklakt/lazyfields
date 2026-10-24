@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from .pipe import _PipeRow, _apply_pipe
+from .pipe import _NodeRow, _apply_pipe
 from .filesystem import FileSystem, Node
 from .filesystem.filesystem import _normalize_path
 
@@ -61,7 +61,7 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
     store_keys = [key for key, kind, _ in items if kind != "scalar"]
     if pipe:
         try:
-            row = _apply_pipe(_PipeRow(node, scalars), pipe)
+            row = _apply_pipe(_NodeRow(node, scalars), pipe)
         except Exception as exc:
             if not pipe_error_skip: raise
             print(f"Failed to apply pipe to {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -205,16 +205,16 @@ class StoreAccessor:
 
         @wraps(method)
         def call(*args: Any, **kwargs: Any) -> Any:
+            def apply(row: pd.Series) -> Any:
+                # Like a pipe row: present columns over lazy reads from the row's group.
+                fields = {key: value for key, value in row.items()
+                          if not (pd.api.types.is_scalar(value) and pd.isna(value))}
+                return method(_NodeRow(self.filesystem.node(row["lf_path"]), fields), *args, **kwargs)
+
             if isinstance(self._obj, pd.Series):
-                return method(self._obj, *args, **kwargs)
-            values = []
-            for _, row in self._obj.iterrows():
-                row.attrs = self._obj.attrs.copy()
-                row.__dict__["_filesystem"] = self.filesystem
-                row.store._methods = self._methods
-                row.store._compiled_methods = self._compiled_methods
-                values.append(method(row, *args, **kwargs))
-            return pd.Series(values, index=self._obj.index, dtype="object", name=name)
+                return apply(self._obj)
+            return pd.Series([apply(row) for _, row in self._obj.iterrows()],
+                             index=self._obj.index, dtype="object", name=name)
 
         return call
 
