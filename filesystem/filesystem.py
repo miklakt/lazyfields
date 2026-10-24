@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from copy import copy
 from dataclasses import dataclass, field, replace
+from glob import has_magic
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
@@ -169,6 +170,7 @@ class FileSystem:
     _source: _FileSource | _MergedDataset | None = None
     _children: dict[str, FileSystem] | None = None
     _source_children: tuple[str, ...] | None = None
+    _path_patterns: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
     def __init__(
         self,
@@ -233,7 +235,10 @@ class FileSystem:
             raise NotADirectoryError(str(root))
         paths = sorted(file.relative_to(root) for file in root.glob(pattern)
                        if file.is_file() and _reader_match(file)[0] is not None)
-        return cls(paths, relative_to=root)
+        result = cls(paths, relative_to=root)
+        if has_magic(pattern):
+            result._path_patterns = ((pattern,), tuple(file.as_posix() for file in paths))
+        return result
 
     def to_spec(
         self, *, relative_to: str | Path | None = None,

@@ -14,7 +14,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
-from lazyfields.filesystem import FileSystem
 from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
 
 
@@ -40,9 +39,9 @@ def prepare_data() -> None:
         shutil.rmtree(DATA_DIR)
     generate_dataset(DATA_DIR, "pickle")
     gc.collect()
-    lf.create_reference_table(FileSystem(
-        sorted(path.name for path in DATA_DIR.glob("*.pkl")), relative_to=DATA_DIR,
-    )).to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(
+        {"paths": sorted(path.name for path in DATA_DIR.glob("*.pkl"))}, relative_to=DATA_DIR.resolve(),
+    ).to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:

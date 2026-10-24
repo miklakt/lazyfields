@@ -65,6 +65,9 @@ and directories are skipped. Use `pattern="*.json"` to select JSON files, or
 `pattern="**/*.json"` to include nested folders. Construction does not read file
 contents.
 
+An unedited directory filesystem retains its glob in `to_spec()`, so rebuilding
+the specification discovers the currently matching files.
+
 ## Clone, mount, replace, unmount
 
 ```python
@@ -213,7 +216,8 @@ the current working directory when omitted. The base itself is not saved, and
 absolute paths in specifications are rejected. Sources outside the chosen base
 use `..`; preserve that relative layout when moving them, or choose a common base.
 Export performs no source reads, metadata inspection, or directory discovery.
-Restoring exact snapshots is likewise read-free. Restoring source overlays
+Restoring explicit file lists and exact child snapshots is likewise read-free.
+Patterns scan directories without reading file contents. Restoring source overlays
 discovers immediate child names in each edited source group; readers without
 metadata support may load file contents for this discovery. Array computations
 remain lazy.
@@ -223,7 +227,9 @@ affect one another. Call `to_spec()` again to capture later edits.
 Node types are inferred from fields and parent context:
 
 - `path` identifies a file, with optional `infile_path` and a named `reader`.
-- `paths` registers files at their physical relative paths.
+- `paths` registers relative filenames or glob patterns, such as `blocks/*.json`
+  or `**/*.json`. Patterns select supported files, skip directories and unsupported
+  formats, and combine matches in sorted order without duplicates.
   Parent groups and mount boundaries are reconstructed from the filenames.
 - `op` and ordered `sources` identify a computed dataset, with `axis` for
   `stack` or `concatenate`. Other supported operations are `collect`, `vstack`,
@@ -243,9 +249,22 @@ A namespace containing ordinary file registrations is compacted automatically:
 }
 ```
 
-This is a snapshot of the selected filenames, not a directory glob. Empty groups,
-aliases, custom reader bindings, and edits use the general hierarchical format
-so their meaning is retained.
+Literal filenames select a fixed set. To discover membership again on each
+reconstruction, use patterns, optionally mixed with literal filenames:
+
+```json
+{
+  "paths": ["blocks/*.json", "metadata/*.json", "partitions.json"]
+}
+```
+
+`{"paths": ["**/*.json"]}` includes JSON files at all depths, including the root.
+`{"paths": ["*/*.json"]}` selects exactly one directory level and excludes
+`partitions.json` at the root. Patterns with no matches produce an empty namespace.
+`from_directory()` retains its original pattern for an unmodified registration
+tree, including an empty one. Edits fall back to an explicit namespace or file
+list so reconstruction preserves those edits. Empty groups, aliases, and custom
+reader bindings likewise use the general hierarchical format when needed.
 
 For example, a file subtree alone needs only:
 
@@ -341,7 +360,8 @@ reference fields remain ordinary source values. Existing resolved references kee
 their selected filenames. Rebuild the view with the Python construction code to
 resolve new or changed references. Values in selected files remain live and lazy.
 An exact snapshot instead retains its discovered partition and field names.
-Directory discovery is likewise captured as the selected files, not as a glob.
+Directory patterns discover file membership again on reconstruction. Literal
+file lists continue to select only the explicitly named files.
 
 Custom readers need explicit names on both sides:
 

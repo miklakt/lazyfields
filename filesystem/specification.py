@@ -9,10 +9,11 @@ needed to distinguish a virtual group beneath a file-backed parent.
 """
 
 import os
+from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import SourceLocator, _FileSource
+from .filesystem import SourceLocator, _FileSource, _relative_file_path
 from .merge import _MergedDataset, collect, concatenate, hstack, stack, vstack
 from ..readers import Reader, _reader_match, require_reader
 
@@ -197,7 +198,14 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
 
     spec = visit(filesystem)
     paths = _registered_paths(spec)
-    return {"paths": paths} if paths is not None else spec
+    patterns = filesystem._path_patterns
+    if patterns is not None:
+        if spec == {"children": {}}:
+            paths = []
+        if paths is not None and tuple(paths) == patterns[1]:
+            return {"paths": list(patterns[0])}
+    # Literal glob characters in filenames must remain explicit file bindings.
+    return {"paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
 
 
 def from_spec(cls, spec, *, relative_to=None, readers=None):
@@ -246,7 +254,22 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                 paths = data.get("paths")
                 if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
                     raise TypeError("paths must be a list of relative filenames.")
-                entry = cls(paths, relative_to=base)
+                if any(map(has_magic, paths)):
+                    if not base.is_dir():
+                        raise NotADirectoryError(str(base))
+                    patterns = tuple(_relative_file_path(item).as_posix() for item in paths)
+                    matches = set()
+                    for pattern in patterns:
+                        if has_magic(pattern):
+                            matches.update(file.relative_to(base) for file in base.glob(pattern)
+                                           if file.is_file() and _reader_match(file)[0] is not None)
+                        else:
+                            matches.add(_relative_file_path(pattern))
+                    matches = sorted(matches)
+                    entry = cls(matches, relative_to=base)
+                    entry._path_patterns = (patterns, tuple(file.as_posix() for file in matches))
+                else:
+                    entry = cls(paths, relative_to=base)
             elif kind == "merge":
                 operation = data.get("op")
                 if not isinstance(operation, str) or operation not in _RULES:

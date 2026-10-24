@@ -37,12 +37,15 @@ def add_a_sum(row) -> None:
 
 pipe = [[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
 
-# Mount each selected file as a root group; its filesystem path identifies its row.
 filesystem = FileSystem(relative_to=data_dir)
 for path in sorted(data_dir.rglob("*")):
     if path.is_file():
         filesystem.mount(path.name, FileSystem.from_file(path).node())
-reference_df = lf.create_reference_table(filesystem, pipe=pipe)
+
+
+reference_df = lf.create_reference_table(
+    filesystem.to_spec(), relative_to=data_dir.resolve(), pipe=pipe,
+)
 
 
 # %%

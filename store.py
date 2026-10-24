@@ -1,9 +1,13 @@
-import ast, inspect, sys, textwrap
+import ast
+import inspect
+import sys
+import textwrap
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from dataclasses import dataclass
+from copy import deepcopy
 from datetime import datetime
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import pandas as pd
@@ -17,15 +21,6 @@ def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | Non
         return filesystem.read(f"{path}/{key}", selection)
     except (KeyError, TypeError, IndexError):
         return pd.NA
-
-
-@dataclass(frozen=True)
-class _StoreContext:
-    filesystem: FileSystem
-
-    def __deepcopy__(self, memo):
-        # pandas copies attrs for rows and selections; the backing tree stays shared.
-        return self
 
 
 class _InvalidKeyError(ValueError):
@@ -70,6 +65,7 @@ def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe
     if pipe:
         row = pd.Series({**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys}, dtype="object")
         row.attrs = {**attrs, "store_path": node.path}
+        row.__dict__["_store_filesystem"] = node._filesystem
         try:
             row = _apply_pipe(row, pipe)
         except Exception as exc:
@@ -85,36 +81,46 @@ def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe
 
 
 def create_reference_table(
-    filesystem: FileSystem,
+    filesystem_spec: Mapping,
     columns: list[str] | None = None,
     *,
+    relative_to: str | Path | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Index immediate root groups, retaining the filesystem for lazy reads."""
+    """Index root groups from a specification saved in the table's attributes."""
     return update_reference_table(
-        pd.DataFrame(), filesystem, columns, pipe=pipe,
+        pd.DataFrame(), filesystem_spec, columns, relative_to=relative_to, pipe=pipe,
         pipe_error_skip=pipe_error_skip, workers=workers,
     )
 
 
 def update_reference_table(
     reference_df: pd.DataFrame,
-    filesystem: FileSystem,
+    filesystem_spec: Mapping | None = None,
     columns: list[str] | None = None,
     *,
+    relative_to: str | Path | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Reindex current filesystem groups, retaining table attributes and methods."""
+    """Rebuild the saved specification and reindex, retaining table attributes."""
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
-    if not isinstance(filesystem, FileSystem):
-        raise TypeError("Pass a FileSystem whose immediate children are row groups.")
+    if filesystem_spec is None:
+        filesystem_spec = reference_df.attrs.get("filesystem_spec")
+    if not isinstance(filesystem_spec, Mapping):
+        raise TypeError("filesystem_spec must be a filesystem specification mapping.")
+    filesystem_spec = deepcopy(dict(filesystem_spec))
+    if relative_to is None:
+        relative_to = reference_df.attrs.get("filesystem_relative_to")
+    relative_to = str(relative_to) if relative_to is not None else None
+    filesystem = FileSystem.from_spec(filesystem_spec, relative_to=relative_to)
     paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
-    attrs = {**reference_df.attrs, "store_context": _StoreContext(filesystem)}
+    attrs = {**reference_df.attrs, "filesystem_spec": filesystem_spec,
+             "filesystem_relative_to": relative_to}
 
     def make_row(path):
         return _reference_row_from_node(filesystem.node(path), attrs=attrs, columns=columns,
@@ -125,6 +131,7 @@ def update_reference_table(
         rows = (executor.map if executor else map)(make_row, paths)
         df = pd.DataFrame(row for row in rows if row is not None)
     df.attrs = attrs
+    df.__dict__["_store_filesystem"] = filesystem
     return df
 
 
@@ -181,6 +188,7 @@ class StoreAccessor:
             values = []
             for _, row in self._obj.iterrows():
                 row.attrs = self._obj.attrs.copy()
+                row.__dict__["_store_filesystem"] = self.filesystem
                 row.store._methods = self._methods
                 row.store._compiled_methods = self._compiled_methods
                 values.append(method(row, *args, **kwargs))
@@ -193,11 +201,17 @@ class StoreAccessor:
 
     @property
     def filesystem(self) -> FileSystem:
-        """The backing filesystem shared by this table and its selections."""
-        try:
-            return self._obj.attrs["store_context"].filesystem
-        except KeyError:
-            raise RuntimeError("This table has no backing filesystem.") from None
+        """Reconstruct the saved specification once for this pandas object."""
+        cache = self._obj.__dict__
+        if "_store_filesystem" not in cache:
+            try:
+                spec = self._obj.attrs["filesystem_spec"]
+            except KeyError:
+                raise RuntimeError("This table has no filesystem specification.") from None
+            cache["_store_filesystem"] = FileSystem.from_spec(
+                spec, relative_to=self._obj.attrs.get("filesystem_relative_to"),
+            )
+        return cache["_store_filesystem"]
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)

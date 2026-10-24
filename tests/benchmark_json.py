@@ -14,7 +14,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR.parent.parent))
 
 import lazyfields as lf
-from lazyfields.filesystem import FileSystem
 from lazyfields.example.simple_filesystem.generate_dataset import generate_dataset
 
 MiB = 1024 * 1024
@@ -39,9 +38,9 @@ def prepare_data() -> None:
 
 
 def build_reference() -> pd.DataFrame:
-    table = lf.create_reference_table(FileSystem(
-        sorted(path.name for path in DATA_DIR.glob("*.json")), relative_to=DATA_DIR,
-    ))
+    table = lf.create_reference_table(
+        {"paths": sorted(path.name for path in DATA_DIR.glob("*.json"))}, relative_to=DATA_DIR.resolve(),
+    )
     table.to_pickle(REFERENCE_TABLE_PATH)
     return table
 
