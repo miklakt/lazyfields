@@ -4,10 +4,13 @@ import json
 import sys
 from pathlib import Path
 
+import pandas as pd
+
+import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.filesystem.explorer import explore
+from lazyfields.explorer import explore_table
 
 
 def compose(root: Path) -> FileSystem:
@@ -32,17 +35,31 @@ def compose(root: Path) -> FileSystem:
     return view
 
 
+def add_metadata(row) -> None:
+    # Index scalars from the resolved metadata file next to the partition's own scalars.
+    row["label"] = row.store["file_ref/label"]
+    row["weight"] = row.store["file_ref/weight"]
+
+
 def main() -> None:
     debug_readers()
     root = Path(__file__).resolve().parent / "data"
     spec_path = Path(__file__).with_suffix(".json")
+    reference_path = Path(__file__).with_suffix(".pkl")
+    rebuild = "--rebuild" in sys.argv
     # Reuse the saved specification; pass --rebuild to compose and save it again.
-    if spec_path.exists() and "--rebuild" not in sys.argv:
+    if spec_path.exists() and not rebuild:
         view = FileSystem.from_spec(json.loads(spec_path.read_text(encoding="utf-8")), relative_to=root)
     else:
         view = compose(root)
         spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
-    explore(view)
+    # One row per partition at the view root; arrays stay lazy behind each row.
+    if reference_path.exists() and not rebuild:
+        reference_df = pd.read_pickle(reference_path)
+    else:
+        reference_df = lf.create_reference_table(view.to_spec(), relative_to=root, pipe=[add_metadata])
+        reference_df.to_pickle(reference_path)
+    explore_table(reference_df)
 
 
 if __name__ == "__main__":

@@ -22,5 +22,5 @@ fuse = ["mfusepy>=3"]
 lazyfields-mount = "lazyfields.filesystem.os_mount:main"
 
 [tool.setuptools]
-packages = ["lazyfields", "lazyfields.filesystem", "lazyfields.readers"]
+packages = ["lazyfields", "lazyfields.explorer", "lazyfields.filesystem", "lazyfields.readers"]
 package-dir = {lazyfields = "."}

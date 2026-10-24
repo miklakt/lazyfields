@@ -6,12 +6,20 @@ from reprlib import repr as short_repr
 def explore(filesystem):
     """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
-    from tkinter import ttk
-    from tkinter.scrolledtext import ScrolledText
 
     window = tk.Tk()
     window.title("lazyfields")
-    panes = ttk.Panedwindow(window, orient="horizontal")
+    browser(window, filesystem)("/")
+    window.mainloop()
+
+
+def browser(master, filesystem):
+    """Pack tree and details panes into master; return a function that roots them at a group."""
+    import tkinter as tk
+    from tkinter import ttk
+    from tkinter.scrolledtext import ScrolledText
+
+    panes = ttk.Panedwindow(master, orient="horizontal")
     panes.pack(fill="both", expand=True)
     tree = ttk.Treeview(panes, show="tree")
     details = ttk.Treeview(panes, columns=("value",))
@@ -72,7 +80,7 @@ def explore(filesystem):
         return previews[path]
 
     def show_dataset(path, value):
-        popup = tk.Toplevel(window)
+        popup = tk.Toplevel(master)
         popup.title(path)
         text = ScrolledText(popup, width=100, height=30, wrap="word")
         text.pack(fill="both", expand=True)
@@ -108,11 +116,18 @@ def explore(filesystem):
             tree.focus(item)
             tree.see(item)
 
-    root = insert("", "/", "/")
-    tree.item(root, open=True)
-    tree.focus(root)
+    def set_root(path):
+        tree.delete(*tree.get_children())
+        details.delete(*details.get_children())
+        kinds.clear()
+        children.clear()
+        previews.clear()
+        root = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
+        tree.item(root, open=True)
+        tree.focus(root)
+        tree.selection_set(root)
+
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
     details.bind("<Double-1>", enter)
-    tree.selection_set(root)
-    window.mainloop()
+    return set_root

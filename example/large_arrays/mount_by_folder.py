@@ -6,7 +6,7 @@ from pathlib import Path
 
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
-from lazyfields.filesystem.explorer import explore
+from lazyfields.explorer import explore
 
 
 def main() -> None:
