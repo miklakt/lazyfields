@@ -1,13 +1,13 @@
 # lazyfields
 
-`lazyfields` is a lightweight pandas extension for indexing structured filesystem groups and loading their contents on demand.
+`lazyfields` is a lightweight pandas extension for indexing collections of structured data files and loading their contents on demand.
 
 It is meant for data that naturally lives as a set of files, such as results from a numerical simulation or other batch process.
 You can inspect and filter the results through a lightweight pandas DataFrame without loading everything into RAM at once.
 
-Each immediate group beneath the supplied filesystem root becomes one row.
+Each indexed file must contain one dictionary and becomes one row.
 Scalar values are copied into the DataFrame.
-Other values stay in the backing filesystem until requested through `row.store[...]` or `reference_df.store[...]`.
+Other values stay in the original file until requested through `row.store[...]` or `reference_df.store[...]`.
 
 > **Note:** Numbers, strings, booleans, dates, times, and `None` are scalar; lists, dictionaries, and arrays are not.
 
@@ -56,42 +56,20 @@ import lazyfields as lf
 reference_df = lf.create_reference_table("path_to_data")
 ```
 
-Passing a directory indexes every supported file directly inside it, one row per
-file. It is shorthand for the specification
-`{"paths": ["path_to_data/*"]}` with `subtree="path_to_data"`. Pass a
-specification instead to select files or compose a filesystem:
+`create_reference_table(...)` finds the supported files directly inside the folder and creates one table row per file.
+Paths are resolved against `relative_to`, or the current working directory when it is omitted.
+Pass an absolute base folder, such as the folder that holds the saved table, so the table keeps working when loaded from another working directory:
 
 ```python
-filesystem_spec = {"paths": ["path_to_data/*.h5"]}
-reference_df = lf.create_reference_table(filesystem_spec, subtree="path_to_data")
+from pathlib import Path
+
+base = Path(__file__).parent
+reference_df = lf.create_reference_table(base / "path_to_data", relative_to=base)
 ```
 
-Specification paths are relative to `relative_to`, or to the current working
-directory when it is omitted. The table saves `relative_to` as given; an absolute
-directory is saved relative to it, so saved tables contain no absolute paths.
-`subtree` names the group whose child groups become rows, the filesystem root by
-default. `file_path` holds each row's full path in the filesystem, such as
-`path_to_data/a.h5`.
-
-`create_reference_table(filesystem_spec)` reconstructs a filesystem and copies
-immediate scalar children of each group directly under `subtree` into one table
-row. Datasets and nested groups remain accessible through
-`.store[path, selection]`, relative to each row group. Non-group children of `subtree` are
-skipped. Pass a specification dictionary, such as one loaded with `json.load()`.
-For an imperatively composed filesystem, pass `filesystem.to_spec()` and its base
-directory as `relative_to`. Filesystem instances and callable constructors are
-not accepted.
-
-`reference_df.store.filesystem` exposes the backing filesystem. Mounted and merged
-groups work the same way as file roots. `update_reference_table(reference_df)`
-reconstructs the saved specification and reindexes its groups, retaining registered
-methods. Supply a new directory, specification, `relative_to`, or `subtree` to change the
-configuration; a new specification indexes the root unless `subtree` is given.
-There is no automatic change tracking. Glob patterns in `paths` discover current
-membership on reconstruction, so explicit updates include matching new files and
-exclude deleted matches. Literal filenames remain fixed bindings. Use
-`**/*.h5` to include nested directories.
-
+`update_reference_table(reference_df)` searches the folder again and rebuilds the table, keeping registered methods:
+new files are added and deleted files are removed.
+There is no automatic change tracking.
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
 
@@ -99,9 +77,9 @@ An archive must contain exactly one supported data file.
 
 The returned DataFrame contains copied values plus three columns:
 
-- `file_path` identifies the row group within the filesystem.
+- `file_path` identifies the original file, such as `path_to_data/a.h5`.
 - `non_scalar_keys` lists the names of lists, dictionaries, arrays, and other nested values kept in that file.
-- `creation_time` contains the latest physical source creation time, or `NaT` when unknown.
+- `creation_time` contains the file creation time.
 
 Use the stored in the indexed files data through `.store`:
 
@@ -215,41 +193,28 @@ A registered method is evaluated on demand for one row or for every row in a sel
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
-`DataFrame.attrs["filesystem_spec"]` holds a detached copy of the specification.
-`DataFrame.attrs["filesystem_relative_to"]` holds the supplied base directory as a
-string, or `None` to use the current working directory. A relative base remains
-relative to the working directory when the table is loaded.
-`DataFrame.attrs["filesystem_subtree"]` holds the indexed subtree, `""` for the root.
-
-The runtime filesystem is cached privately on each DataFrame or Series and is
-not persisted. After loading, the first `.store` data access reconstructs it from
-the saved attributes. Rows, filtered tables, and copies retain the specification
-and can reconstruct their own runtime filesystem. Source values stay live;
-the scalar columns in the saved reference table remain an index snapshot.
-Register custom suffix readers before accessing stored data, as in the CSV example.
+Save the reference table with pandas and load it later.
+Stored values are read from the original files again after loading;
+the copied scalar columns remain a snapshot from when the table was built.
+Register custom readers before accessing stored data, as in the CSV example.
 
 ```python
 import pandas as pd
 
-destination = "reference.pkl"
-reference_df = lf.create_reference_table(filesystem_spec, relative_to=directory)
-reference_df.to_pickle(destination)
-reference_df = pd.read_pickle(destination)
+reference_df = lf.create_reference_table(base / "path_to_data", relative_to=base)
+reference_df.to_pickle(base / "reference.pkl")
+reference_df = pd.read_pickle(base / "reference.pkl")
 ```
 
 Only load trusted pickle files because they can execute code.
 
-To move the source files, update the base and rebuild the index:
+To move the data, pass the new base folder and rebuild the index:
 
 ```python
-reference_df = lf.update_reference_table(reference_df, relative_to="new_data_location")
+reference_df = lf.update_reference_table(reference_df, relative_to="/new/base")
 ```
 
-Runtime namespace edits through `.store.filesystem` do not change the saved
-specification. To retain them, supply that filesystem's `to_spec()` result to
-`update_reference_table` with the corresponding base directory.
-
-Use `pipe=[...]` to process each row group as the reference table is built, compute additional values, and add them to the index.
+Use `pipe=[...]` to process each file as the reference table is built, compute additional values, and add them to the index.
 Callbacks receive ordinary pandas Series containing the indexed scalars and row
 metadata. Read or assign indexed and computed fields with `row["field"]`, and read
 source data through the existing accessor: `row.store["group/array", :10]`.
@@ -284,14 +249,14 @@ def add_a_sum(row):
 # Keep files whose first nested "a" value is greater than 2.0.
 # The nested list uses a temporary row, so only a_sum is added to the table.
 reference_df = lf.create_reference_table(
-    filesystem_spec, relative_to=directory,
+    "path_to_data",
     pipe=[[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum],
 )
 ```
 
 - A function modifies the Series in place and returns `None`, or returns a new Series or dictionary that replaces its indexed fields. Source access through `.store` is retained.
 - A filter returns `True` to continue or `False` to filter out the row.
-- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. Source access remains available through the saved specification.
+- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. Source access through `.store` remains available.
 
 ```text
 input_data -> function -> filter -> [function -> filter] -> function -> output_data -> reference table
@@ -312,3 +277,28 @@ from lazyfields.readers.npz import NUMPY_ARCHIVE
 register_reader(CSV_WITH_HEADER())  # Header metadata lines start with "#" by default.
 register_reader(NUMPY_ARCHIVE)
 ```
+
+## Filesystem specifications (experimental)
+
+For power users: instead of a folder, `create_reference_table` accepts a filesystem
+specification, a JSON-compatible dictionary describing which files to mount and how
+to compose them. This API is experimental and may change.
+
+```python
+reference_df = lf.create_reference_table(
+    {"paths": ["path_to_data/*.h5"]}, relative_to=base, subtree="path_to_data",
+)
+```
+
+- A folder argument is shorthand for `{"paths": ["path_to_data/*"]}` with `subtree="path_to_data"`.
+- `subtree` names the group whose child groups become rows; the default is the root.
+- Glob patterns are matched again on every update, so new and deleted files are picked up.
+  Literal filenames stay fixed.
+- `reference_df.store.filesystem` exposes the backing filesystem. Specifications from
+  `FileSystem.to_spec()` describe composed filesystems with mounted and merged groups.
+- The table stores the specification, base and subtree in `DataFrame.attrs`
+  (`filesystem_spec`, `filesystem_relative_to`, `filesystem_subtree`).
+
+`example/composed_filesystem/README.md` describes filesystems and the specification
+format. `example/large_arrays/README.md` shows how to browse a specification in the
+OS file manager with `lazyfields-mount`.

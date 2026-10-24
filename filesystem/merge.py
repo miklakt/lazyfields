@@ -74,8 +74,23 @@ class _MergedDataset:
         raise NotADirectoryError(path)
 
     def read(self, selection=None):
-        values = [source.read() for source in self.sources]
         operation, axis = self.rule.operation, self.rule.argument
+        key, at = (selection if isinstance(selection, tuple) else (selection,)), axis or 0
+        if (selection is not None and (operation == "collect" or operation == "stack" and at >= 0)
+                and len(key) > at and all(type(part) in (int, slice) for part in key[:at + 1])):
+            # The merge axis enumerates sources: read only the selected ones, each
+            # with the rest of the selection, so no other source is loaded.
+            pick, inner = key[at], key[:at] + key[at + 1:] or None
+            if type(pick) is int:
+                return self.sources[pick].read("", inner)
+            parts = [source.read("", inner) for source in self.sources[pick]]
+            if operation == "collect":
+                return parts
+            if parts:
+                import numpy as np
+                # Integer indices before the merge axis remove dimensions, shifting it left.
+                return np.stack(parts, axis=at - sum(type(part) is int for part in key[:at]))
+        values = [source.read() for source in self.sources]
         if operation == "collect":
             result = values
         else:
