@@ -8,7 +8,7 @@ roots, composed filesystems, and clones use the same implementation.
 The filesystem does not interpret strings as links. The example chooses
 which stored references to resolve and which nodes to replace.
 
-## Run the explorers
+## Run the examples
 
 With the checkout installed in the active Python environment and Tk available:
 
@@ -21,8 +21,9 @@ Each script saves its composition next to itself as a specification
 (`mount_all.json`, `resolve_and_merge.json`) and reuses it on later
 runs instead of composing again. Pass `--rebuild` to compose and save it anew.
 
-The first explorer shows the physical filesystem. The second clones it, then
-replaces the partition reference fields with the referenced files. Expand groups
+`mount_all.py` browses the physical filesystem. `resolve_and_merge.py` clones it,
+replaces the partition reference fields with the referenced files, and browses a
+reference table with one row per partition; selecting a row opens its group below. Expand groups
 on the left or double-click children on the right. Leaf values get short previews
 as they appear in the right pane; group contents wait until opened. Double-click
 a dataset in the right pane to open its formatted text popup. OS directories show `📁`, file roots `📄`, other groups `⊞`, datasets
@@ -155,7 +156,7 @@ view/
 ```
 
 The tree is abbreviated; mounted files retain all their fields. Raw references
-remain accessible through the unedited original filesystem and its explorer.
+remain accessible through the unedited original filesystem and its browser.
 
 ## Access and laziness
 

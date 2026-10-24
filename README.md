@@ -5,9 +5,11 @@
 It is meant for data that naturally lives as a set of files, such as results from a numerical simulation or other batch process.
 You can inspect and filter the results through a lightweight pandas DataFrame without loading everything into RAM at once.
 
-Each indexed file must contain one dictionary and becomes one row.
-Scalar values are copied into the DataFrame.
-Other values stay in the original file until requested through `row.store[...]` or `reference_df.store[...]`.
+By default, each file contains a dictionary of named fields and becomes one row in
+the DataFrame. Scalar fields become columns you can use to inspect and filter the
+data. Larger or nested values, such as arrays and dictionaries, stay in the source
+files and are loaded only when requested through the DataFrame's `.store` accessor,
+for example `reference_df.store["path/to/value"]`.
 
 > **Note:** Numbers, strings, booleans, dates, times, and `None` are scalar; lists, dictionaries, and arrays are not.
 
@@ -57,7 +59,8 @@ reference_df = lf.create_reference_table("path_to_data")
 ```
 
 `create_reference_table(...)` finds the supported files directly inside the folder and creates one table row per file.
-Paths are resolved against `relative_to`, or the current working directory when it is omitted.
+File paths in the reference table are stored relative to `relative_to`.
+If it is omitted, they are relative to the current working directory.
 Pass an absolute base folder, such as the folder that holds the saved table, so the table keeps working when loaded from another working directory:
 
 ```python
@@ -73,29 +76,51 @@ Other rows are kept without reading their files, so changes to the pipe or colum
 use `create_reference_table` to reindex everything.
 Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`, `.tbz2`, and `.txz`.
 An archive must contain exactly one supported data file.
+Support for other formats can be added by providing a custom reader.
 
 >  Extracted archive contents are reused from a temporary directory while the Python process is running.
 
-The returned DataFrame contains copied values plus four columns:
+### Indexing and data access
 
-- `lf_path` identifies the row in its filesystem, such as `path_to_data/a.h5`.
-- `lf_store_keys` lists the keys whose values stay in the file, such as lists, dictionaries, and arrays; read them with `.store[...]`.
-- `lf_mtime` contains the latest modification time of the row's files.
-- `lf_digest` fingerprints the row's file sizes, modification times, and structure; `update_reference_table` uses it to skip unchanged rows.
+Indexing builds a lightweight table describing your data: each row represents a
+record, and its scalar fields become columns. For example, a simulation's
+temperature, run number, and status can be used to find, filter, sort, or group
+runs with ordinary pandas operations, without loading their arrays or nested data.
+Pipes can extract or compute additional scalar columns, such as an array's mean.
+These columns form the reference table. Larger simulation results, such as particle
+trajectories over time or a velocity field on a spatial grid, stay in the source
+files until requested.
 
-Use the stored in the indexed files data through `.store`:
+The table also includes four metadata columns: `lf_path`, `lf_store_keys`,
+`lf_mtime`, and `lf_digest`, which identify source data and track changes.
 
-- `row.store["key"]` loads one value from one row.
-- `reference_df.store["key"]` loads that value for every row and returns a Series.
-  Missing values are returned as `pd.NA`; a `KeyError` is raised only when the key is absent from every row.
-- `row.store["group/subkey"]` loads a nested value.
-- `row.store["dataset", slice(...)]` loads only the requested part of an HDF5 array.
-- `row.store[:]` loads all data for one row.
+Use ordinary pandas column access, such as `reference_df["temperature"]`, to work
+with indexed fields. Use the additional `.store` accessor to load source data for
+the rows in your selection:
+
+```python
+selected = reference_df[reference_df["temperature"] > 300]
+trajectories = selected.store["trajectory"]  # Load the trajectory for each selected run.
+
+row = selected.iloc[0]
+trajectory = row.store["trajectory"]        # Load the trajectory for one run.
+```
+
+On a DataFrame, `.store["key"]` returns a Series with the same index, containing one
+value per row. Missing values are returned as `pd.NA`; a `KeyError` is raised only
+when the key is absent from every row. On a single row, it returns the value itself.
+The key is a path within each row's source group:
+
+- `row.store["group/subkey"]` follows a nested path to load one value.
+- `row.store["dataset", slice(...)]` selects the requested part of a stored value.
+- `row.store[:]` loads all source data for that row.
 
 Keys containing `/` are rejected when creating a reference table because `/` separates nested path segments.
 Indexed fields named like the four columns above are rejected as well.
 
 > An HDF5 slice is read directly, so the rest of the array is not loaded into memory.
+
+### Registered methods
 
 You can register methods for use on one row or a selection of rows.
 Each method receives a row as its first argument, like a pipe callback: a dict of the
@@ -202,26 +227,7 @@ A registered method is evaluated on demand for one row or for every row in a sel
 > It must be a named function defined in a Python file.
 > Put any imports it needs inside the function so it still works after loading.
 
-Save the reference table with pandas and load it later.
-Stored values are read from the original files again after loading;
-the copied scalar columns remain a snapshot from when the table was built.
-Register custom readers before accessing stored data, as in the CSV example.
-
-```python
-import pandas as pd
-
-reference_df = lf.create_reference_table(base / "path_to_data", relative_to=base)
-reference_df.to_pickle(base / "reference.pkl")
-reference_df = pd.read_pickle(base / "reference.pkl")
-```
-
-Only load trusted pickle files because they can execute code.
-
-To move the data, pass the new base folder and rebuild the index:
-
-```python
-reference_df = lf.update_reference_table(reference_df, relative_to="/new/base")
-```
+### Pipes and processing
 
 Use `pipe=[...]` to process each file as the reference table is built, compute additional values, and add them to the index.
 Callbacks receive a dict of the row's indexed scalars, backed by its group: any
@@ -274,6 +280,53 @@ input_data -> function -> filter -> [function -> filter] -> function -> output_d
 Applying the pipe only affect the reference table.
 The original indexed files remain unchanged, and `.store[...]` still reads their original data.
 
+### Saving and loading
+
+Save the reference table with pandas and load it later.
+Stored values are read from the original files again after loading;
+the copied scalar columns remain a snapshot from when the table was built.
+Register custom readers before accessing stored data, as in the CSV example.
+
+```python
+import pandas as pd
+
+reference_df = lf.create_reference_table(base / "path_to_data", relative_to=base)
+reference_df.to_pickle(base / "reference.pkl")
+reference_df = pd.read_pickle(base / "reference.pkl")
+```
+
+Only load trusted pickle files because they can execute code.
+
+To move the data, pass the new base folder and rebuild the index:
+
+```python
+reference_df = lf.update_reference_table(reference_df, relative_to="/new/base")
+```
+
+## Browsing the table
+
+Open a reference table in the graphical browser to inspect its indexed fields and
+explore the source data for a selected row:
+
+```python
+from lazyfields.browser import browse_table
+
+browse_table(reference_df)
+```
+
+You can also open a saved table from the command line:
+
+```bash
+lf-browse-table reference.pkl
+```
+
+Enter a pandas query such as `temperature > 300` in the filter box and press Enter,
+or click a column heading to sort. Selecting a row shows its source group below
+the table, where you can explore nested fields and inspect values. Right-click
+selected rows to run a registered method and view its result.
+
+The browser requires Tkinter.
+
 ## Extra readers
 
 Extra readers for formats such as CSV files with a metadata header containing key-value pairs and NumPy `.npz` archives are available but still in development, so their APIs may change. Register the readers you need before creating a reference table:
@@ -293,20 +346,22 @@ For power users: instead of a folder, `create_reference_table` accepts a filesys
 specification, a JSON-compatible dictionary describing which files to mount and how
 to compose them. This API is experimental and may change.
 
-```python
-reference_df = lf.create_reference_table(
-    {"paths": ["path_to_data/*.h5"]}, relative_to=base, subtree="path_to_data",
-)
-```
+The main requirement is that the filesystem root contains a reasonably homogeneous
+collection of groups: each group represents one logical file and becomes one row
+in the reference table. When `subtree` is set, this requirement applies to that
+group's children instead. Groups should describe comparable records with similar
+fields, though their contents need not be identical.
 
-- A folder argument is shorthand for `{"paths": ["path_to_data/*"]}` with `subtree="path_to_data"`.
-- `subtree` names the group whose child groups become rows; the default is the root.
-- Glob patterns are matched again on every update, so new and deleted files are picked up.
-  Literal filenames stay fixed.
-- `reference_df.store.filesystem` exposes the backing filesystem. Specifications from
-  `FileSystem.to_spec()` describe composed filesystems with mounted and merged groups.
-- The table stores the specification, base and subtree in `DataFrame.attrs`
-  (`filesystem_spec`, `filesystem_relative_to`, `filesystem_subtree`).
+Scalar leaves directly inside each group are used immediately as index columns.
+Pipes can extract or compute additional scalars from nested fields and larger
+values and add them to the reference table. Other data remains available on demand.
+
+A logical file need not correspond to one physical file. A group can represent a
+whole file, part of a file, or a combination of files. For example, a large file
+containing several runs can be split into one logical group per run. Conversely,
+separate files holding different aspects of the same run can be combined into one
+logical group. The filesystem specification defines this logical organization
+over the physical files.
 
 `example/composed_filesystem/README.md` describes filesystems and the specification
 format. `example/large_arrays/README.md` shows how to browse a specification in the

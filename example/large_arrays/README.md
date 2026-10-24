@@ -1,6 +1,6 @@
 # Large arrays
 
-With the checkout installed, NumPy and h5py available, and Tk for the explorer:
+With the checkout installed, NumPy and h5py available, and Tk for the browser:
 
 ```bash
 python3 example/large_arrays/generate_dataset.py
@@ -23,7 +23,7 @@ large_arrays/
 `mount_by_folder.py` mounts each file at exactly this relative path, so
 `h5/row_00.h5/array2d` accesses the first row's HDF5 matrix. `mount_flat.py`
 mounts only the HDF5 and pickle rows directly at the root, such as `row_00.h5`
-and `row_00.pkl`. The explorer is shared with the composed_filesystem example
+and `row_00.pkl`. Both open the filesystem browser shared with the composed_filesystem example
 through `lazyfields.browser`.
 
 The first run of each script saves its mount next to it (`mount_by_folder.json`,
