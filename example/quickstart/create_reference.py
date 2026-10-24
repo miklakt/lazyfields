@@ -15,7 +15,7 @@ if not data_dir.is_dir() or not any(path.is_file() for path in data_dir.rglob("*
 # %%
 def unnest_a_0(row) -> None:
     try:
-        row["a_0"] = row.store["some_nested_object_key/a", 0]
+        row["a_0"] = row["some_nested_object_key/a", 0]
     except (KeyError, IndexError, TypeError):
         row["a_0"] = 0
 
@@ -29,7 +29,7 @@ def keep_a_0_greater_than(value):
 
 def add_a_sum(row) -> None:
     try:
-        row["a_sum"] = sum(row.store["some_nested_object_key/a"])
+        row["a_sum"] = sum(row["some_nested_object_key/a"])
     except (KeyError, IndexError, TypeError):
         row["a_sum"] = 0
 

@@ -38,7 +38,7 @@ def compose(root: Path) -> FileSystem:
 def add_to_index(path):
     """Pipe step: copy a scalar buried at path into a column named after its last key."""
     def step(row) -> None:
-        row[path.rsplit("/", 1)[-1]] = row.store[path]
+        row[path.rsplit("/", 1)[-1]] = row[path]
     return step
 
 

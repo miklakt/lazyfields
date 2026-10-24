@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from .pipe import _apply_pipe
+from .pipe import _PipeRow, _apply_pipe
 from .filesystem import FileSystem, Node
 from .filesystem.filesystem import _normalize_path
 
@@ -23,10 +23,6 @@ def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | Non
         return filesystem.read(f"{path}/{key}", selection)
     except (KeyError, TypeError, IndexError):
         return pd.NA
-
-
-class _InvalidKeyError(ValueError):
-    pass
 
 
 def _validate_keys(value):
@@ -39,7 +35,7 @@ def _validate_keys(value):
         if isinstance(current, Mapping):
             for key, item in current.items():
                 if isinstance(key, str) and "/" in key:
-                    raise _InvalidKeyError(f"Key {key!r} contains '/', which is reserved for nested paths.")
+                    raise ValueError(f"Key {key!r} contains '/', which is reserved for nested paths.")
                 pending.append(item)
         else:
             pending.extend(current)
@@ -53,29 +49,23 @@ def _creation_time(node):
         return pd.NaT
 
 
-def _reference_row_from_node(node: Node, *, attrs, columns=None, pipe=None, pipe_error_skip=True):
-    scalars, non_scalar_keys = {}, []
+def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_skip=True):
     try:
-        for key, kind, value in node.items():
-            _validate_keys({key: value})
-            if kind == "scalar": scalars[key] = value
-            else: non_scalar_keys.append(key)
-    except _InvalidKeyError:
-        raise
+        items = list(node.items())
     except Exception as exc:
         print(f"Failed to load {node.path}: {exc}"); return None
+    _validate_keys({key: value for key, _, value in items})
+    scalars = {key: value for key, kind, value in items if kind == "scalar"}
+    non_scalar_keys = [key for key, kind, _ in items if kind != "scalar"]
     if pipe:
-        row = pd.Series({**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys}, dtype="object")
-        row.attrs = {**attrs, "store_path": node.path}
-        row.__dict__["_filesystem"] = node._filesystem
         try:
-            row = _apply_pipe(row, pipe)
+            row = _apply_pipe(_PipeRow(node, scalars), pipe)
         except Exception as exc:
             if not pipe_error_skip: raise
             print(f"Failed to apply pipe to {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return None
         if row is False: return None
-        _validate_keys(row.to_dict())
+        _validate_keys(row)
         scalars = {key: value for key, value in row.items() if pd.api.types.is_scalar(value)}
     if columns is not None: scalars = {key: value for key, value in scalars.items() if key in columns}
     return {**scalars, "file_path": node.path, "non_scalar_keys": non_scalar_keys,
@@ -145,7 +135,7 @@ def update_reference_table(
              "filesystem_relative_to": relative_to, "filesystem_subtree": subtree}
 
     def make_row(path):
-        return _reference_row_from_node(filesystem.node(path), attrs=attrs, columns=columns,
+        return _reference_row_from_node(filesystem.node(path), columns=columns,
                                         pipe=pipe, pipe_error_skip=pipe_error_skip)
 
     pool = ThreadPoolExecutor(max_workers=workers) if workers not in (None, 1) else nullcontext()

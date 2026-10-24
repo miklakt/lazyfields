@@ -215,21 +215,21 @@ reference_df = lf.update_reference_table(reference_df, relative_to="/new/base")
 ```
 
 Use `pipe=[...]` to process each file as the reference table is built, compute additional values, and add them to the index.
-Callbacks receive ordinary pandas Series containing the indexed scalars and row
-metadata. Read or assign indexed and computed fields with `row["field"]`, and read
-source data through the existing accessor: `row.store["group/array", :10]`.
-HDF5 selections read only the requested part of the dataset. Assigning a computed
-field changes the reference row; `.store[...]` continues to read source values.
+Callbacks receive a dict of the row's indexed scalars, backed by its group: any
+other field is read on demand, including nested paths and selections such as
+`row["group/array", :10]`. HDF5 selections read only the requested part of the
+dataset. Assigning a field changes the reference row and shadows a source field of
+the same name.
 Pipe errors skip the affected file by default and print a one-line error.
 Pass `pipe_error_skip=False` to `create_reference_table` or `update_reference_table`
 to raise the original exception instead.
 
 ```python
 def unnest_a_0(row):
-    # For example, row.store["some_nested_object_key"] may be {"a": [2.1, 2.2], "b": [2.3, 2.4]}.
+    # For example, row["some_nested_object_key"] may be {"a": [2.1, 2.2], "b": [2.3, 2.4]}.
     # Read the first value of the nested "a" array, or use 0 if it is missing.
     try:
-        row["a_0"] = row.store["some_nested_object_key/a", 0]
+        row["a_0"] = row["some_nested_object_key/a", 0]
     except (KeyError, IndexError, TypeError):
         row["a_0"] = 0
 
@@ -242,7 +242,7 @@ def keep_a_0_greater_than(value):
 def add_a_sum(row):
     # Add the sum of the nested "a" array to the reference table.
     try:
-        row["a_sum"] = sum(row.store["some_nested_object_key/a"])
+        row["a_sum"] = sum(row["some_nested_object_key/a"])
     except (KeyError, IndexError, TypeError):
         row["a_sum"] = 0
 
@@ -254,9 +254,9 @@ reference_df = lf.create_reference_table(
 )
 ```
 
-- A function modifies the Series in place and returns `None`, or returns a new Series or dictionary that replaces its indexed fields. Source access through `.store` is retained.
+- A function modifies the row in place and returns `None`, or returns a dictionary that replaces its fields. Source fields remain readable.
 - A filter returns `True` to continue or `False` to filter out the row.
-- A nested list runs functions followed by a filter on a copy of the Series values, so its changes do not appear in the output data. Source access through `.store` remains available.
+- A nested list runs functions followed by a filter on a copy of the row, so its changes do not appear in the output data.
 
 ```text
 input_data -> function -> filter -> [function -> filter] -> function -> output_data -> reference table

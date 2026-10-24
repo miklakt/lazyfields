@@ -4,29 +4,37 @@ from copy import deepcopy
 import pandas as pd
 
 
-def _carry_filesystem(source: pd.Series, target: pd.Series) -> pd.Series:
-    """Share the cached filesystem, which pandas does not propagate to new objects."""
-    if "_filesystem" in source.__dict__:
-        target.__dict__["_filesystem"] = source.__dict__["_filesystem"]
-    return target
+class _PipeRow(dict):
+    """Fields assigned so far, over lazy reads from the row's node."""
+
+    def __init__(self, node, fields=()):
+        super().__init__(fields)
+        self.node = node
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            name, selection = key[0], key[1] if len(key) == 2 else key[1:]
+            return self[name][selection] if name in self else self.node.node(name).read(selection)
+        return super().__getitem__(key) if key in self else self.node.node(key).read()
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (KeyError, IndexError, TypeError, NotADirectoryError):
+            return default
 
 
-def _apply_pipe(row: pd.Series, pipe: list, *, scoped: bool = False):
-    """Apply callbacks to ordinary pandas rows, isolating scoped row values."""
+def _apply_pipe(row: _PipeRow, pipe: list, *, scoped: bool = False):
+    """Apply callbacks to a row, isolating scoped row values."""
     last_was_filter = False
     for step in pipe:
-        result = (_apply_pipe(_carry_filesystem(row, row.map(deepcopy)), step, scoped=True)
+        result = (_apply_pipe(_PipeRow(row.node, deepcopy(dict(row))), step, scoped=True)
                   if isinstance(step, list) else step(row))
         if result is None: last_was_filter = False
-        elif isinstance(result, (Mapping, pd.Series)):
-            attrs = row.attrs
-            new_row = result if isinstance(result, pd.Series) else pd.Series(result, dtype="object")
-            row = _carry_filesystem(row, new_row)
-            row.attrs = attrs.copy()
-            last_was_filter = False
+        elif isinstance(result, Mapping): row, last_was_filter = _PipeRow(row.node, result), False
         elif pd.api.types.is_bool(result):
             if not result: return False
             last_was_filter = True
-        else: raise TypeError("Pipe callbacks must return a mapping, Series, bool, or None.")
+        else: raise TypeError("Pipe callbacks must return a mapping, bool, or None.")
     if scoped and not last_was_filter: raise TypeError("Scoped pipe blocks must end with a filter.")
     return True if scoped else row
