@@ -50,7 +50,11 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     ids = [f"c{i}" for i in range(len(columns))]
     table = ttk.Treeview(top, columns=ids, show="tree headings")
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
-    table.configure(yscrollcommand=scroll.set)
+    xscroll = ttk.Scrollbar(top, orient="horizontal", command=table.xview)
+    table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
+    for heading in ("#0", *ids):
+        table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
+    xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
