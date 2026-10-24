@@ -17,6 +17,7 @@ dependencies = ["pandas>=1.5"]
 hdf5 = ["h5py>=3"]
 json = ["orjson>=3"]
 fuse = ["mfusepy>=3"]
+plot = ["matplotlib>=3.6"]
 
 [project.scripts]
 lf-mount = "lazyfields.filesystem.os_mount:main"

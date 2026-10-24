@@ -3,10 +3,10 @@
 import argparse
 import json
 from pathlib import Path
-from pprint import pformat
 from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
+from .viewers import suitable_viewers
 
 def browse_filesystem(filesystem):
     """Preview visible leaves; discover group children only when visited."""
@@ -19,10 +19,12 @@ def browse_filesystem(filesystem):
 
 
 def panes(master, filesystem):
-    """Pack tree and details panes into master; return a function that roots them at a group."""
+    """Pack tree and details panes into master; return a function that roots them at a group.
+
+    Double-clicking a dataset opens its preferred viewer; right-clicking offers every suitable one.
+    """
     import tkinter as tk
     from tkinter import ttk
-    from tkinter.scrolledtext import ScrolledText
 
     panes = ttk.Panedwindow(master, orient="horizontal")
     panes.pack(fill="both", expand=True)
@@ -84,13 +86,10 @@ def panes(master, filesystem):
                 return f"Error: {exc}"
         return previews[path]
 
-    def show_dataset(path, value):
-        popup = tk.Toplevel(master)
-        popup.title(path)
-        text = ScrolledText(popup, width=100, height=30, wrap="word")
-        text.pack(fill="both", expand=True)
-        text.insert("1.0", pformat(value, width=100, sort_dicts=False))
-        text.configure(state="disabled")
+    def open_dataset(path, viewer, value):
+        window = tk.Toplevel(master)
+        window.title(path)
+        viewer(window, value)
 
     def show(event=None):
         item = tree.focus()
@@ -109,12 +108,15 @@ def panes(master, filesystem):
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=(str(exc),))
 
-    def enter(event):
+    def row(event):
         item = details.identify_row(event.y)
-        if item == "value":
-            item = tree.focus()
+        return tree.focus() if item == "value" else item
+
+    def enter(event):
+        item = row(event)
         if kinds.get(item) == "dataset":
-            show_dataset(item, filesystem.read(item))
+            value = filesystem.read(item)
+            open_dataset(item, suitable_viewers(value)[0][1], value)
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             tree.selection_set(item)
@@ -132,9 +134,22 @@ def panes(master, filesystem):
         tree.focus(root)
         tree.selection_set(root)
 
+    menu = tk.Menu(details, tearoff=False)
+
+    def open_with(event):
+        item = row(event)
+        if kinds.get(item) != "dataset":
+            return
+        value = filesystem.read(item)
+        menu.delete(0, "end")
+        for name, viewer in suitable_viewers(value):
+            menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_dataset(item, viewer, value))
+        menu.tk_popup(event.x_root, event.y_root)
+
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
     details.bind("<Double-1>", enter)
+    details.bind("<Button-3>", open_with)
     return set_root
 
 
