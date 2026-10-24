@@ -2,7 +2,6 @@
 from pathlib import Path
 
 import lazyfields as lf
-from lazyfields.filesystem import FileSystem
 
 
 # %%
@@ -37,15 +36,7 @@ def add_a_sum(row) -> None:
 
 pipe = [[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
 
-filesystem = FileSystem(relative_to=data_dir)
-for path in sorted(data_dir.rglob("*")):
-    if path.is_file():
-        filesystem.mount(path.name, FileSystem.from_file(path).node())
-
-
-reference_df = lf.create_reference_table(
-    filesystem.to_spec(), relative_to=data_dir.resolve(), pipe=pipe,
-)
+reference_df = lf.create_reference_table(data_dir, relative_to=root_dir, pipe=pipe)
 
 
 # %%

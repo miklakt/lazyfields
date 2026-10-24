@@ -16,6 +16,10 @@ dependencies = ["pandas>=1.5"]
 [project.optional-dependencies]
 hdf5 = ["h5py>=3"]
 json = ["orjson>=3"]
+fuse = ["mfusepy>=3"]
+
+[project.scripts]
+lazyfields-mount = "lazyfields.filesystem.os_mount:main"
 
 [tool.setuptools]
 packages = ["lazyfields", "lazyfields.filesystem", "lazyfields.readers"]
