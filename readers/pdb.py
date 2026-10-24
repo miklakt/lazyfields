@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ..readers import Reader
+from . import Reader
 
 
 # Zero-based slices for the fixed-width PDB ATOM and HETATM records.

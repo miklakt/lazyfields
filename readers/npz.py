@@ -3,7 +3,7 @@ from zipfile import ZipFile
 import numpy as np
 from numpy.lib import format as npy_format
 
-from ..readers import NodeInfo, Reader
+from . import NodeInfo, Reader
 
 
 def _npz_headers(path):

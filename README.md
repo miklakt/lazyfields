@@ -306,7 +306,8 @@ Extra readers for formats such as CSV files with a metadata header containing ke
 
 ```python
 from lazyfields import register_reader
-from lazyfields.extra_readers import CSV_WITH_HEADER, NUMPY_ARCHIVE
+from lazyfields.readers.csv import CSV_WITH_HEADER
+from lazyfields.readers.npz import NUMPY_ARCHIVE
 
 register_reader(CSV_WITH_HEADER())  # Header metadata lines start with "#" by default.
 register_reader(NUMPY_ARCHIVE)

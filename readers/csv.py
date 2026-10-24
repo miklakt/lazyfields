@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..readers import Reader, value_kind
+from . import Reader, value_kind
 
 
 def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows: int = 0, column_separator: str = ",", suffixes: tuple[str, ...] = (".csv",)) -> Reader:

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import lazyfields as lf
-from lazyfields.extra_readers import CSV_WITH_HEADER
+from lazyfields.readers.csv import CSV_WITH_HEADER
 
 
 root = Path(__file__).parent
