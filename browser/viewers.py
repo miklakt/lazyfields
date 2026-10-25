@@ -111,7 +111,7 @@ def _show_text(window, value):
     text.configure(state="disabled")
 
 
-def _plottable(value):
+def _plottable(value, ndims=(1, 2)):
     import numpy as np
 
     try:
@@ -121,7 +121,7 @@ def _plottable(value):
         array = np.squeeze(array)
     except Exception:
         return None
-    return array if array.dtype.kind in "biuf" and array.ndim in (1, 2) else None
+    return array if array.dtype.kind in "biuf" and array.ndim in ndims else None
 
 
 def embed_figure(window, figure):
@@ -147,6 +147,49 @@ def _show_plot(window, value):
     embed_figure(window, figure)
 
 
+def _show_slices(window, value):
+    """Heatmap of a 3D array's slice along a chosen axis, picked with a slider; colors fixed across slices."""
+    import tkinter as tk
+    from tkinter import ttk
+
+    import numpy as np
+    from matplotlib.figure import Figure
+
+    array = _plottable(value, (3,))
+    figure = Figure(layout="constrained")
+    axes = figure.add_subplot()
+    image = axes.imshow(array[0], origin="lower", aspect="auto", interpolation="nearest",
+                        vmin=array.min(), vmax=array.max())
+    figure.colorbar(image)
+    axis = tk.IntVar(value=0)
+
+    def show(*_):
+        index = round(scale.get())
+        image.set_data(np.take(array, index, axis.get()))
+        axes.set_title(f"axis {axis.get()}: {index} / {array.shape[axis.get()] - 1}")
+        figure.canvas.draw_idle()
+
+    def cut():
+        """Slice along the chosen axis from its first index, showing the whole slice."""
+        height, width = np.take(array, 0, axis.get()).shape
+        image.set_extent((-0.5, width - 0.5, -0.5, height - 0.5))
+        axes.set(xlim=(-0.5, width - 0.5), ylim=(-0.5, height - 0.5))
+        scale.configure(to=array.shape[axis.get()] - 1)
+        scale.set(0)
+        show()
+
+    bar = ttk.Frame(window)
+    ttk.Label(bar, text="Axis").pack(side="left")
+    for number, size in enumerate(array.shape):
+        ttk.Radiobutton(bar, text=f"{number} ({size})", value=number, variable=axis,
+                        command=cut).pack(side="left")
+    scale = ttk.Scale(bar, from_=0, to=len(array) - 1, command=show)
+    scale.pack(side="left", fill="x", expand=True, padx=(8, 0))
+    bar.pack(side="top", fill="x")
+    embed_figure(window, figure)
+    show()
+
+
 def _show_tree(window, value):
     """Browse a mapping, or a list of mappings, like a filesystem group."""
     from ..filesystem import FileSystem
@@ -159,4 +202,5 @@ def _show_tree(window, value):
 register_viewer("Text", lambda value: True, _show_text)
 if find_spec("matplotlib") is not None:
     register_viewer("Plot", lambda value: _plottable(value) is not None, _show_plot)
+    register_viewer("Slices", lambda value: _plottable(value, (3,)) is not None, _show_slices)
 register_viewer("Browser", lambda value: value_kind(value) == "group", _show_tree)
