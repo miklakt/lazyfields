@@ -10,7 +10,7 @@ from glob import has_magic
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import NodeInfo, NodeKind, Reader, _reader_match, require_reader
+from ..readers import NodeInfo, NodeKind, Reader, _reader_match, dataset_attrs, require_reader
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset
@@ -147,6 +147,10 @@ class Node:
     def kind(self) -> NodeKind:
         return self._entry._info(list_children=False).kind
 
+    @property
+    def attrs(self) -> dict[str, Any]:
+        return self._filesystem.attrs(self.path)
+
 
 class FileSystem:
     """Compose reader-backed trees through mounts and independent clones.
@@ -162,6 +166,7 @@ class FileSystem:
     _source: _FileSource | _MergedDataset | None = None
     _children: dict[str, FileSystem] | None = None
     _source_children: tuple[str, ...] | None = None
+    _attrs: Mapping[str, Any] = {}  # From the specification; replaced, never mutated.
     _path_patterns: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
     def __init__(
@@ -230,8 +235,8 @@ class FileSystem:
             raise NotADirectoryError(str(root))
         matches = sorted({
             match for path in paths
-            for match in ([file.relative_to(root) for file in root.glob(path)
-                           if file.is_file() and _reader_match(file)[0] is not None]
+            for match in ((file.relative_to(root) for file in root.glob(path)
+                           if file.is_file() and _reader_match(file)[0] is not None)
                           if has_magic(path) else [Path(path)])
         })
         result = cls(matches, relative_to=root)
@@ -326,10 +331,8 @@ class FileSystem:
 
     def _replace_child(self, name: str, entry: FileSystem) -> None:
         """Commit an existing child's replacement, appended as a fresh mount."""
-        children = self._children.copy()
-        del children[name]
-        children[name] = entry
-        self._children = children
+        del self._children[name]
+        self._children[name] = entry
 
     def mount(self, path: str | Path, source: Node) -> None:
         """Attach an independent subtree at a vacant path; create missing parents."""
@@ -371,6 +374,16 @@ class FileSystem:
         if self._children is not None:
             return NodeInfo("group", tuple(self._children) if list_children else ())
         return self._source.info(list_children=list_children)
+
+    def attrs(self, path: str | Path = "", *, defaults: bool = True) -> dict[str, Any]:
+        entry = self._lookup(path)
+        if not defaults or entry._children is not None or {"dtype", "shape"} <= entry._attrs.keys():
+            return dict(entry._attrs)
+        info = entry._source.info(list_children=False)
+        attrs = {**info.attrs, **entry._attrs}
+        if info.kind == "dataset" and not {"dtype", "shape"} <= attrs.keys():
+            attrs = {**dataset_attrs(entry._source.read()), **attrs}
+        return attrs
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
         info = self._lookup(path)._info()

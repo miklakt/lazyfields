@@ -15,7 +15,7 @@ def _npz_headers(path):
                 read_header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
                 shape, _, dtype = read_header(file)
             if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
-            yield member.filename[:-4], "scalar" if shape == () else "dataset"
+            yield member.filename[:-4], "scalar" if shape == () else "dataset", {"dtype": str(dtype), "shape": shape}
 
 
 def _npz_value(value):
@@ -39,16 +39,16 @@ def _npz_inspect(path, key=None):
         _npz_info(path, key)
         raise NotADirectoryError(key)
     with np.load(path, allow_pickle=False) as archive:
-        for key, kind in _npz_headers(path):
+        for key, kind, _ in _npz_headers(path):
             yield key, kind, _npz_value(archive[key]) if kind == "scalar" else None
 
 
 def _npz_info(path, key=None):
     if key is None:
-        return NodeInfo("group", tuple(name for name, _ in _npz_headers(path)))
-    for name, kind in _npz_headers(path):
+        return NodeInfo("group", tuple(name for name, _, _ in _npz_headers(path)))
+    for name, kind, attrs in _npz_headers(path):
         if name == key:
-            return NodeInfo(kind)
+            return NodeInfo(kind, attrs=attrs if kind == "dataset" else {})
     raise KeyError(key)
 
 

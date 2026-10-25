@@ -134,7 +134,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
             return [".", "..", *self.entries(path)]
 
         def open(self, path, flags):
-            _, kind, render = self.resolve(os_path := path)
+            _, kind, render = self.resolve(path)
             if kind == "group":
                 raise fuse.FuseOSError(errno.EISDIR)
             try:
@@ -143,7 +143,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
                 content = f"Error: {type(exc).__name__}: {exc}\n"
             handle = next(self.handles)
             self.contents[handle] = content.encode() if isinstance(content, str) else content
-            self.sizes[os_path] = len(self.contents[handle])
+            self.sizes[path] = len(self.contents[handle])
             return handle
 
         def read(self, path, size, offset, fh):

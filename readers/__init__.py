@@ -38,6 +38,26 @@ def value_kind(value: Any) -> NodeKind:
     return "dataset"
 
 
+def dataset_attrs(value: Any) -> dict[str, Any]:
+    """dtype and shape, inferring a common dtype for lists and object arrays.
+
+    Arrays with a concrete dtype only need metadata; ragged values remain object arrays.
+    """
+    import numpy as np
+
+    if not hasattr(value, "dtype") or not hasattr(value, "shape"):
+        try:
+            value = np.asarray(value)
+        except ValueError:
+            value = np.asarray(value, dtype=object)
+    if value.dtype == object:
+        try:
+            value = np.asarray(value.tolist())
+        except (TypeError, ValueError):
+            pass
+    return {"dtype": str(value.dtype), "shape": tuple(value.shape)}
+
+
 def _mapping_items(value):
     if value_kind(value) != "group": raise NotADirectoryError("items requires a group.")
     return ((name, value_kind(item), item) for name, item in _group_entries(value))
@@ -45,10 +65,12 @@ def _mapping_items(value):
 
 @dataclass(frozen=True)
 class NodeInfo:
-    """Node classification and immediate child names, without dataset values."""
+    """Node classification and immediate child names, without dataset values; dtype and shape of datasets
+    in attrs when known."""
 
     kind: NodeKind
     children: tuple[str, ...] = ()
+    attrs: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _h5():
@@ -110,6 +132,8 @@ def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
         for part in filter(None, (key or "").split("/")):
             node = node[part]
         kind = _hdf5_kind(node)
+        if kind == "dataset":
+            return NodeInfo(kind, attrs={"dtype": str(node.dtype), "shape": node.shape})
         return NodeInfo(kind, tuple(node.keys()) if kind == "group" else ())
 
 
@@ -172,6 +196,8 @@ class Reader:
                         break
         value = self.get(path, key)
         kind = value_kind(value)
+        if kind == "dataset":
+            return NodeInfo(kind, attrs=dataset_attrs(value))
         return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)) if kind == "group" else ())
 
     def items(self, path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:

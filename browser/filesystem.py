@@ -47,7 +47,7 @@ def panes(master, filesystem):
         node = filesystem.node(path)
         if kind is None:
             kind = node.kind
-        elif kind != "group" and (kind == "scalar" or value is not None):
+        elif kind == "scalar" or kind == "dataset" and value is not None:
             previews[path] = type_name(value), preview(value)
         kinds[path] = kind
         group = kind == "group"
@@ -115,7 +115,7 @@ def panes(master, filesystem):
     def enter(event):
         item = row(event)
         if kinds.get(item) == "dataset":
-            open_value(master, item, filesystem.read(item))
+            open_value(master, item, filesystem.read(item), attrs=filesystem.attrs(item, defaults=False))
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             tree.selection_set(item)
@@ -147,10 +147,10 @@ def panes(master, filesystem):
         details.selection_set(details.identify_row(event.y))
         menu.delete(0, "end")
         if kinds[item] == "dataset":
-            value = filesystem.read(item)
-            for name, viewer in suitable_viewers(value):
-                menu.add_command(label=f"Open with {name}",
-                                 command=lambda viewer=viewer: open_value(master, item, value, viewer))
+            attrs = filesystem.attrs(item)
+            for name, viewer in suitable_viewers("dataset", attrs):
+                menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_value(
+                    master, item, filesystem.read(item), viewer, attrs))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}", command=lambda: copy(item))
         menu.tk_popup(event.x_root, event.y_root)

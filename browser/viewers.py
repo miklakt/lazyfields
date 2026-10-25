@@ -4,27 +4,27 @@ from importlib.util import find_spec
 from pprint import pformat
 from reprlib import repr as short_repr
 
-from ..readers import Reader, value_kind
+from ..readers import Reader, dataset_attrs, value_kind
 
 _viewers = {}
 
 
 def register_viewer(name, accepts, show):
-    """Offer show(window, value) for values, such as datasets, where accepts(value) is true.
+    """Offer show(window, value) for values where accepts(kind, attrs) is true, without reading them.
 
-    window is a fresh Toplevel titled with what is shown. Registering a name again replaces it.
+    kind is group, dataset or scalar; attrs are a node's attributes, such as a dataset's dtype and shape.
+    window is a Frame inside a titled Toplevel. Re-registering a name replaces it at highest priority.
     """
     _viewers.pop(name, None)
     _viewers[name] = accepts, show
 
 
-def suitable_viewers(value):
-    """Names and show functions of viewers accepting value, most recently registered first."""
+def suitable_viewers(kind, attrs):
+    """Suitable (name, show) pairs, newest first; a failing acceptance predicate is skipped."""
     suitable = []
-    for name in reversed(_viewers):
-        accepts, show = _viewers[name]
+    for name, (accepts, show) in reversed(_viewers.items()):
         try:
-            if accepts(value):
+            if accepts(kind, attrs):
                 suitable.append((name, show))
         except Exception:
             pass
@@ -63,9 +63,11 @@ def type_name(value):
     return f"{type(value).__name__}{element} {'×'.join(map(str, lengths))}"
 
 
-def open_value(master, title, value, show=None):
+def open_value(master, title, value, show=None, attrs=None):
     """Show value in a new window with show, or with its preferred viewer; report a failing viewer.
 
+    attrs, such as a node's from the specification, go over the dtype and shape of value. Their viewer
+    attribute names the preferred viewer when suitable, else the most recently registered wins.
     A registered viewer other than Text gets a button above it that toggles between it and the value as
     text; both keep their state, such as a plot's zoom.
     """
@@ -74,8 +76,11 @@ def open_value(master, title, value, show=None):
 
     window = tk.Toplevel(master)
     window.title(title)
-    viewers = suitable_viewers(value)
-    show = show or viewers[0][1]
+    if show is None:
+        kind = value_kind(value)
+        attrs = {**(dataset_attrs(value) if kind == "dataset" else {}), **(attrs or {})}
+        viewers = suitable_viewers(kind, attrs)
+        show = dict(viewers).get(attrs.get("viewer"), viewers[0][1] if viewers else _show_text)
     view = ttk.Frame(window)
     try:
         show(view, value)
@@ -83,7 +88,7 @@ def open_value(master, title, value, show=None):
         window.destroy()
         messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=master)
         return
-    if show is not _show_text and any(viewer is show for _, viewer in viewers):  # Not an embedded figure.
+    if show is not _show_text and any(viewer is show for _, viewer in _viewers.values()):
         text = ttk.Frame(window)
 
         def toggle():
@@ -111,17 +116,21 @@ def _show_text(window, value):
     text.configure(state="disabled")
 
 
-def _plottable(value, ndims=(1, 2)):
+def _numeric(attrs, ndims):
+    """Whether attrs describe numbers with one of ndims dimensions longer than 1."""
     import numpy as np
 
-    try:
-        array = np.asarray(value)
-        if array.dtype.kind == "O":  # Such as a per-row Series of numbers; infer the actual dtype.
-            array = np.asarray(array.tolist())
-        array = np.squeeze(array)
-    except Exception:
-        return None
-    return array if array.dtype.kind in "biuf" and array.ndim in ndims else None
+    return (np.dtype(attrs["dtype"]).kind in "biuf" and all(attrs["shape"])
+            and sum(size != 1 for size in attrs["shape"]) in ndims)
+
+
+def _array(value):
+    import numpy as np
+
+    array = np.asarray(value)
+    if array.dtype.kind == "O":  # Such as a per-row Series of numbers; infer the actual dtype.
+        array = np.asarray(array.tolist())
+    return np.squeeze(array)
 
 
 def embed_figure(window, figure):
@@ -137,7 +146,7 @@ def _show_plot(window, value):
     """Line plot for 1D, heatmap with colorbar for 2D; (0, 0) is bottom left."""
     from matplotlib.figure import Figure
 
-    array = _plottable(value)
+    array = _array(value)
     figure = Figure(layout="constrained")
     axes = figure.add_subplot()
     if array.ndim == 1:
@@ -155,7 +164,7 @@ def _show_slices(window, value):
     import numpy as np
     from matplotlib.figure import Figure
 
-    array = _plottable(value, (3,))
+    array = _array(value)
     figure = Figure(layout="constrained")
     axes = figure.add_subplot()
     image = axes.imshow(array[0], origin="lower", aspect="auto", interpolation="nearest",
@@ -199,8 +208,8 @@ def _show_tree(window, value):
     panes(window, FileSystem.from_file("<value>", reader))("/")
 
 
-register_viewer("Text", lambda value: True, _show_text)
+register_viewer("Text", lambda kind, attrs: True, _show_text)
 if find_spec("matplotlib") is not None:
-    register_viewer("Plot", lambda value: _plottable(value) is not None, _show_plot)
-    register_viewer("Slices", lambda value: _plottable(value, (3,)) is not None, _show_slices)
-register_viewer("Browser", lambda value: value_kind(value) == "group", _show_tree)
+    register_viewer("Plot", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (1, 2)), _show_plot)
+    register_viewer("Slices", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (3,)), _show_slices)
+register_viewer("Browser", lambda kind, attrs: kind == "group", _show_tree)

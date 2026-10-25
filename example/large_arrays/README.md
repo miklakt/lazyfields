@@ -26,6 +26,10 @@ mounts only the HDF5 and pickle rows directly at the root, such as `row_00.h5`
 and `row_00.pkl`. Both open the filesystem browser shared with the composed_filesystem example
 through `lazyfields.browser`.
 
+`mount_with_volume_viewer.py` browses the same mount with a "Volume" viewer
+registered for 3D numeric arrays, such as `array3d`, rendering them in a
+separate PyVista window (`pip install pyvista`).
+
 The first run of each script saves its mount next to it (`mount_by_folder.json`,
 `mount_flat.json`) and later runs restore it from there; pass `--rebuild` to
 rediscover and save again.

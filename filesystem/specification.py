@@ -6,9 +6,11 @@ of an expanded group. Merge groups have already resolved prefix/prefer rules.
 Node types follow their fields and parent source; an explicit ``type`` is only
 needed to distinguish a virtual group beneath a file-backed parent.
 ``overrides`` and ``unmount`` instead inherit the source namespace on restoration.
+``attrs`` adds attributes to any node, over the dtype and shape datasets have by default.
 """
 
 import os
+from dataclasses import replace
 from glob import has_magic
 from pathlib import Path
 from typing import Mapping
@@ -19,7 +21,7 @@ from ..readers import Reader, _reader_match, require_reader
 
 
 _FLAGS = ("is_mount", "is_relocated", "is_merged")
-_COMMON = {"type", "namespace_path", *_FLAGS}
+_COMMON = {"type", "namespace_path", "attrs", *_FLAGS}
 _FIELDS = {
     "file": {"path", "infile_path", "reader", "children", "overrides", "unmount"},
     "files": {"paths"},
@@ -44,9 +46,7 @@ def _inherited_source(parent, name):
         return None
     source = parent._source
     infile = source.origin.infile_path
-    return _FileSource(source.reader, SourceLocator(
-        source.origin.file_path, f"{infile}/{name}" if infile else name,
-    ))
+    return replace(source, origin=replace(source.origin, infile_path=f"{infile}/{name}" if infile else name))
 
 
 def _same_source(source, inherited):
@@ -86,6 +86,9 @@ def _validate_node(data, parent):
     for flag in _FLAGS:
         if flag in data and type(data[flag]) is not bool:
             raise TypeError(f"{flag} must be a boolean.")
+    attrs = data.get("attrs", {})
+    if not isinstance(attrs, Mapping) or any(not isinstance(name, str) for name in attrs):
+        raise TypeError("attrs must map attribute names to values.")
     if "children" in data and ("overrides" in data or "unmount" in data):
         raise ValueError("Use either children or overrides/unmount at each node.")
     unmounted = data.get("unmount", [])
@@ -158,6 +161,8 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
             result = {"type": "group"} if _node_type({}, parent) == "file" else {}
         else:
             raise TypeError(f"Unsupported filesystem source: {type(source).__name__}")
+        if entry._attrs:
+            result["attrs"] = dict(entry._attrs)
 
         if namespace is None:
             namespace = (source.origin.file_path / (source.origin.infile_path or "")
@@ -269,6 +274,8 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                 entry = cls(relative_to=base)
 
             entry.relative_to = base
+            if "attrs" in data:
+                entry._attrs = dict(data["attrs"])
             if namespace is not None:
                 entry._namespace_path = namespace
             elif kind != "file":
