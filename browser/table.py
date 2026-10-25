@@ -68,7 +68,10 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
-    visible = set(ids)
+    visible, order, names = set(ids), list(ids), dict(zip(ids, columns))
+
+    def show_columns():
+        table.configure(displaycolumns=[key for key in order if key in visible])
 
     def choose_columns():
         dialog = tk.Toplevel(window)
@@ -81,7 +84,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         field.pack(fill="x", padx=6, pady=6)
         buttons = ttk.Frame(dialog)
         buttons.pack(side="bottom", fill="x", padx=6, pady=6)
-        choices = tk.Listbox(dialog, selectmode="multiple", exportselection=False)
+        choices = tk.Listbox(dialog, selectmode="multiple", exportselection=False, activestyle="dotbox")
         scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=choices.yview)
         choices.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
@@ -92,24 +95,38 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             if all_columns is not None:
                 visible.clear()
                 visible.update(ids if all_columns else ())
-            shown[:] = [(key, name) for key, name in zip(ids, columns)
-                        if search.get().casefold() in str(name).casefold()]
+            shown[:] = [key for key in order if search.get().casefold() in str(names[key]).casefold()]
             choices.delete(0, "end")
-            for position, (key, name) in enumerate(shown):
-                choices.insert("end", str(name))
+            for position, key in enumerate(shown):
+                choices.insert("end", str(names[key]))
                 if key in visible:
                     choices.selection_set(position)
-            table.configure(displaycolumns=[key for key in ids if key in visible])
+            show_columns()
 
         def apply_selection(event):
-            visible.difference_update(key for key, _ in shown)
-            visible.update(shown[position][0] for position in choices.curselection())
-            table.configure(displaycolumns=[key for key in ids if key in visible])
+            visible.difference_update(shown)
+            visible.update(shown[position] for position in choices.curselection())
+            show_columns()
+
+        def move(step):
+            """Move the focused column past its neighbour in the list, keeping its place in the order."""
+            position = choices.index("active")
+            if 0 <= position + step < len(shown):
+                key = shown[position]
+                order.remove(key)
+                order.insert(order.index(shown[position + step]) + (step > 0), key)
+                refresh()
+                choices.activate(position + step)
+                choices.see(position + step)
+            return "break"  # Not also the plain arrow's focus move.
 
         ttk.Button(buttons, text="Show all", command=lambda: refresh(True)).pack(side="left")
         ttk.Button(buttons, text="Hide all", command=lambda: refresh(False)).pack(side="left")
         ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
         choices.bind("<<ListboxSelect>>", apply_selection)
+        choices.bind("<Alt-Up>", lambda event: move(-1))
+        choices.bind("<Alt-Down>", lambda event: move(1))
+        field.bind("<Down>", lambda event: choices.focus_set())
         search.trace_add("write", lambda *_: refresh())
         dialog.bind("<Escape>", lambda event: dialog.destroy())
         dialog.grab_set()
