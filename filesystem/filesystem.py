@@ -10,7 +10,7 @@ from glob import has_magic
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import NodeInfo, NodeKind, Reader, _reader_match, dataset_attrs, require_reader
+from ..readers import NodeInfo, NodeKind, Reader, _reader_match, require_reader, value_info
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset
@@ -187,6 +187,11 @@ class Node:
         return self._entry.is_relocated
 
     @property
+    def is_directory(self) -> bool:
+        return (self.origin is None and self.kind == "group"
+                and (self._filesystem._namespace_path / self.path).is_dir())
+
+    @property
     def kind(self) -> NodeKind:
         return self._entry._backing.info(list_children=False).kind
 
@@ -264,6 +269,11 @@ class FileSystem:
             raise TypeError("reader must be a Reader instance.")
         path = Path(path).absolute()
         return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
+
+    @classmethod
+    def from_value(cls, value: Mapping | list) -> FileSystem:
+        """Root a filesystem at an in-memory group, such as a mapping of results, like a file's contents."""
+        return cls.from_file("<value>", Reader((), lambda _: value))
 
     @classmethod
     def from_directory(cls, path: str | Path, pattern: str = "*") -> FileSystem:
@@ -414,7 +424,7 @@ class FileSystem:
         info = entry._source.info(list_children=False)
         attrs = {**info.attrs, **entry._attrs}
         if info.kind == "dataset" and not {"dtype", "shape"} <= attrs.keys():
-            attrs = {**dataset_attrs(entry._source.read()), **attrs}
+            attrs = {**value_info(entry._source.read()).attrs, **attrs}
         return attrs
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:

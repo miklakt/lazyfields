@@ -9,12 +9,13 @@ needed to distinguish a virtual group beneath a file-backed parent.
 ``attrs`` adds attributes to any node, over the dtype and shape datasets have by default.
 """
 
+import json
 import os
 from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import SourceLocator, _FileSource, _is_name
+from .filesystem import FileSystem, SourceLocator, _FileSource, _is_name
 from .merge import _MergedDataset, collect, concatenate, hstack, stack, vstack
 from ..readers import Reader, _reader_match, require_reader
 
@@ -285,3 +286,20 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
             active.remove(id(data))
 
     return visit(spec)
+
+
+def add_spec_arguments(parser):
+    """Add a specification, as a JSON file or inline JSON, and --relative-to for its paths to parser."""
+    parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
+    parser.add_argument("--relative-to", type=Path,
+                        help="base directory of specification paths "
+                             "(default: the file's directory, or the working directory for inline JSON)")
+
+
+def filesystem_from_arguments(args):
+    """Restore the filesystem specified by arguments that add_spec_arguments parsed."""
+    if args.spec.lstrip().startswith("{"):
+        spec, base = json.loads(args.spec), Path.cwd()
+    else:
+        spec, base = json.loads(Path(args.spec).read_text(encoding="utf-8")), Path(args.spec).resolve().parent
+    return FileSystem.from_spec(spec, relative_to=args.relative_to or base)

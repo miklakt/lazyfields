@@ -3,7 +3,7 @@ from zipfile import ZipFile
 import numpy as np
 from numpy.lib import format as npy_format
 
-from . import NodeInfo, Reader
+from . import NodeInfo, Reader, _normalize
 
 
 def _npz_headers(path):
@@ -18,20 +18,16 @@ def _npz_headers(path):
             yield member.filename[:-4], "scalar" if shape == () else "dataset", {"dtype": str(dtype), "shape": shape}
 
 
-def _npz_value(value):
-    return value.item() if value.shape == () else value
-
-
 def _npz_load(path):
     with np.load(path, allow_pickle=False) as archive:
-        return {key: _npz_value(archive[key]) for key in archive.files}
+        return {key: _normalize(archive[key]) for key in archive.files}
 
 
 def _npz_read(path, key, selection=None):
     with np.load(path, allow_pickle=False) as archive:
         value = archive[key]
         if selection is not None: value = value[selection]
-        return _npz_value(value)
+        return _normalize(value)
 
 
 def _npz_inspect(path, key=None):
@@ -40,7 +36,7 @@ def _npz_inspect(path, key=None):
         raise NotADirectoryError(key)
     with np.load(path, allow_pickle=False) as archive:
         for key, kind, _ in _npz_headers(path):
-            yield key, kind, _npz_value(archive[key]) if kind == "scalar" else None
+            yield key, kind, _normalize(archive[key]) if kind == "scalar" else None
 
 
 def _npz_info(path, key=None):

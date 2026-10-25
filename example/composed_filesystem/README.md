@@ -347,14 +347,15 @@ group keep that group's position.
 Any node can carry `attrs`, such as `{"units": "nm", "viewer": "Slices"}`;
 `node.attrs` adds them over the `dtype` and `shape` that datasets have by
 default. HDF5 and NPZ give those from metadata; other readers load the dataset,
-unless `attrs` already give both. For a field inside a file, use an override:
+unless `attrs` already give both, and then also give its Python `type`, such as
+`matplotlib.figure.Figure`. For a field inside a file, use an override:
 
 ```json
 {"path": "row_00.h5", "overrides": {"array3d": {"attrs": {"units": "nm"}}}}
 ```
 
 Viewers in the browsers decide whether they fit from a node's kind and `attrs`;
-its `viewer` attribute names the one opened by default when it fits.
+its `viewer` attribute names the one opened by default, and listed first, when it fits.
 
 When first expanding a source group, the runtime retains its original child names
 as an immutable tuple. Export derives overrides and hidden names from that tuple

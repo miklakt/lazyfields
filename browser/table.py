@@ -8,9 +8,8 @@ from pathlib import Path
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
-from .filesystem import panes
+from .filesystem import one_line_repr, panes
 from .methods import ask_arguments, run_and_show
-from .viewers import preview
 
 
 def _cell(column, value):
@@ -18,7 +17,7 @@ def _cell(column, value):
         return "" if pd.isna(value) else pd.Timestamp(value).isoformat(sep=" ", timespec="seconds")
     if column == "lf_store_keys" and isinstance(value, (list, tuple)):
         return f"{len(value)} keys"
-    return preview(value, 80)
+    return one_line_repr(value, 80)
 
 
 def _sorted(df, column, ascending):
@@ -58,11 +57,12 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
     columns = [column for column in reference_df.columns if column != "lf_path"]
     ids = [f"c{i}" for i in range(len(columns))]
+    headings = [("#0", "lf_path"), *zip(ids, columns)]
     table = ttk.Treeview(top, columns=ids, show="tree headings")
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
     xscroll = ttk.Scrollbar(top, orient="horizontal", command=table.xview)
     table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
-    for heading in ("#0", *ids):
+    for heading, _ in headings:
         table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
     xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
@@ -169,7 +169,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     def sort_by(column):
         ascending = view["sort"] != (column, True)
         view["sort"] = (column, ascending)
-        for heading, name in (("#0", "lf_path"), *zip(ids, columns)):
+        for heading, name in headings:
             arrow = (" ▲" if ascending else " ▼") if name == column else ""
             table.heading(heading, text=name + arrow)
         render()
@@ -220,7 +220,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             menu.add_command(label="No registered methods", state="disabled")
         menu.tk_popup(event.x_root, event.y_root)
 
-    for heading, name in (("#0", "lf_path"), *zip(ids, columns)):
+    for heading, name in headings:
         table.heading(heading, text=name, command=lambda name=name: sort_by(name))
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)

@@ -1,11 +1,55 @@
 """Minimal read-only Tk filesystem browser with relocated mount markers."""
 
 import argparse
-import json
-from pathlib import Path
+from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
-from .viewers import open_value, preview, suitable_viewers, type_name
+from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
+from .viewers import open_value, register_viewer, suitable_viewers
+
+
+def one_line_repr(value, width=160):
+    """A shortened one-line repr; floats, NumPy ones too, show up to 8 significant digits, such as 1.2345678e-12."""
+    if getattr(value, "shape", None) == () and hasattr(value, "item"):  # A NumPy scalar or 0-D array.
+        value = value.item()
+    if isinstance(value, float):
+        return f"{value:.8g}"
+    return short_repr(value)[:width]
+
+
+def type_name(value):
+    """A dtype with any shape, such as float64 or float64 76×160; else the Python type, such as float.
+
+    Values from JSON are plain Python values, so they show Python types; nested lists show their first
+    elements' type and lengths like an array, such as list[float] 76×160.
+    """
+    dtype, shape = getattr(value, "dtype", None), getattr(value, "shape", None)
+    if dtype is not None:
+        return _array_name(dtype, shape)
+    if value is None:
+        return "None"
+    if not isinstance(value, (list, tuple)):
+        return type(value).__name__
+    lengths, item = [], value
+    while isinstance(item, (list, tuple)):
+        lengths.append(len(item))
+        if not item:
+            break
+        item = item[0]
+    element = "" if isinstance(item, (list, tuple)) else f"[{type_name(item)}]"
+    return f"{type(value).__name__}{element} {'×'.join(map(str, lengths))}"
+
+
+def _array_name(dtype, shape):
+    return f"{dtype} {'×'.join(map(str, shape))}" if shape else str(dtype)
+
+
+def _cells(value):
+    """Type and value columns of a row."""
+    return type_name(value), one_line_repr(value)
+
+
+_MARKERS = {"group": "⊞", "dataset": "▦", "scalar": "·", "relocated": "↪", "merged": "⋈"}
 
 
 def browse_filesystem(filesystem):
@@ -21,8 +65,9 @@ def browse_filesystem(filesystem):
 def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
-    Double-clicking a dataset opens its preferred viewer; right-clicking offers every suitable one and
-    copying any node's path. Muted attributes follow its children or value; right-click copies their value.
+    Double-clicking a dataset in either pane opens its preferred viewer; right-clicking offers every
+    suitable one and copying any node's path. Muted attributes follow its children or value; right-click
+    copies their value.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -38,7 +83,7 @@ def panes(master, filesystem):
     details.tag_configure("attribute", foreground="gray")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
-    ttk.Label(details, text="⊞ group   ▦ dataset   · scalar   ↪ relocated   ⋈ merged").place(
+    ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in _MARKERS.items())).place(
         relx=1, rely=1, anchor="se", x=-6, y=-3)
     kinds = {}
     children = {}
@@ -49,15 +94,15 @@ def panes(master, filesystem):
         if kind is None:
             kind = node.kind
         elif kind == "scalar" or kind == "dataset" and value is not None:
-            previews[path] = type_name(value), preview(value)
+            previews[path] = _cells(value)
         kinds[path] = kind
         group = kind == "group"
         origin = node.origin
-        os_directory = group and origin is None and (filesystem._namespace_path / path.lstrip("/")).is_dir()
-        marker = ("📄 " if origin is not None and origin.infile_path is None else "📁 " if os_directory
-                  else {"group": "⊞ ", "dataset": "▦ ", "scalar": "· "}[kind])
-        prefix = ("↪ " if node.is_relocated else "") + ("⋈ " if node.is_merged else "")
-        tree.insert(parent, "end", iid=path, text=prefix + marker + name)
+        marker = ("📄" if origin is not None and origin.infile_path is None else "📁" if node.is_directory
+                  else _MARKERS[kind])
+        prefix = "".join(f"{_MARKERS[name]} " for name, flag in (("relocated", node.is_relocated),
+                                                                 ("merged", node.is_merged)) if flag)
+        tree.insert(parent, "end", iid=path, text=f"{prefix}{marker} {name}")
         if group:
             tree.insert(path, "end")  # Children remain undiscovered until visited.
         else:
@@ -72,14 +117,17 @@ def panes(master, filesystem):
         return children[item]
 
     def columns(path):
+        """Type and value; a dataset listed without its value gets them from its attrs and leading corner."""
         if kinds[path] == "group":
             return "", ""
         if path not in previews:
             try:
-                value = filesystem.read(path)
+                attrs = filesystem.attrs(path)
+                corner = tuple(slice(0, 8) for _ in attrs["shape"]) or None
+                previews[path] = (_array_name(attrs["dtype"], attrs["shape"]),
+                                  one_line_repr(filesystem.read(path, corner)))
             except Exception as exc:
                 return "", f"Error: {exc}"
-            previews[path] = type_name(value), preview(value)
         return previews[path]
 
     def attributes(event=None):
@@ -94,7 +142,7 @@ def panes(master, filesystem):
         if attrs:
             details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
             for name, value in attrs.items():
-                details.insert("", "end", text=name, values=(type_name(value), preview(value)), tags=("attribute",))
+                details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
 
     def show(event=None):
         item = tree.focus()
@@ -109,15 +157,18 @@ def panes(master, filesystem):
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
 
+    def select(item):
+        tree.selection_set(item)
+        tree.focus(item)
+        tree.see(item)
+
     def enter(event):
-        item = details.identify_row(event.y)
+        item = event.widget.identify_row(event.y)
         if kinds.get(item) == "dataset":
             open_value(master, item, filesystem.read(item), attrs=filesystem.attrs(item, defaults=False))
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
-            tree.selection_set(item)
-            tree.focus(item)
-            tree.see(item)
+            select(item)
 
     def set_root(path):
         tree.delete(*tree.get_children())
@@ -126,8 +177,7 @@ def panes(master, filesystem):
             cache.clear()
         root = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
         tree.item(root, open=True)
-        tree.focus(root)
-        tree.selection_set(root)
+        select(root)
 
     menu = tk.Menu(details, tearoff=False)
 
@@ -144,10 +194,9 @@ def panes(master, filesystem):
         details.selection_set(selected)
         menu.delete(0, "end")
         if kinds.get(item) == "dataset":
-            attrs = filesystem.attrs(item)
-            for name, viewer in suitable_viewers("dataset", attrs):
+            for name, viewer in suitable_viewers("dataset", filesystem.attrs(item)):
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_value(
-                    master, item, filesystem.read(item), viewer, attrs))
+                    master, item, filesystem.read(item), viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or details.set(selected, "value")))
@@ -155,23 +204,23 @@ def panes(master, filesystem):
 
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
+    tree.bind("<Double-1>", enter)
     details.bind("<Double-1>", enter)
     details.bind("<<TreeviewSelect>>", attributes)
     details.bind("<Button-3>", open_menu)
     return set_root
 
 
+def _show_tree(window, value):
+    """Browse a mapping, or a list of mappings, like a filesystem group."""
+    panes(window, FileSystem.from_value(value))("/")
+
+
+register_viewer("Browser", lambda kind, attrs: kind == "group", _show_tree)
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="lf-browse-fs", description="Browse a filesystem specification read-only.")
-    parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
-    parser.add_argument("--relative-to", type=Path,
-                        help="base directory of specification paths "
-                             "(default: the file's directory, or the working directory for inline JSON)")
-    args = parser.parse_args(argv)
-
-    if args.spec.lstrip().startswith("{"):
-        spec, base = json.loads(args.spec), Path.cwd()
-    else:
-        spec, base = json.loads(Path(args.spec).read_text(encoding="utf-8")), Path(args.spec).resolve().parent
-    browse_filesystem(FileSystem.from_spec(spec, relative_to=args.relative_to or base))
+    add_spec_arguments(parser)
+    browse_filesystem(filesystem_from_arguments(parser.parse_args(argv)))

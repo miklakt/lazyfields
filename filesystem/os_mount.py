@@ -12,7 +12,6 @@ is a specification file or an inline JSON string.
 
 import argparse
 import errno
-import json
 import shutil
 import stat
 import subprocess
@@ -21,6 +20,7 @@ from itertools import count
 from pathlib import Path
 
 from .filesystem import FileSystem
+from .specification import add_spec_arguments, filesystem_from_arguments
 from ..readers import require_reader
 
 PREVIEW_ROWS = 5
@@ -164,18 +164,11 @@ def main(argv=None) -> None:
         prog="lf-mount",
         description="Mount a filesystem specification read-only in the OS. "
                     "The mount ends with the process: Ctrl+C, closing the terminal, or kill.")
-    parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
+    add_spec_arguments(parser)
     parser.add_argument("mountpoint", type=Path, help="empty directory to mount at; created if missing")
-    parser.add_argument("--relative-to", type=Path,
-                        help="base directory of specification paths "
-                             "(default: the file's directory, or the working directory for inline JSON)")
     args = parser.parse_args(argv)
 
-    if args.spec.lstrip().startswith("{"):
-        spec, base = json.loads(args.spec), Path.cwd()
-    else:
-        spec, base = json.loads(Path(args.spec).read_text(encoding="utf-8")), Path(args.spec).resolve().parent
-    filesystem = FileSystem.from_spec(spec, relative_to=args.relative_to or base)
+    filesystem = filesystem_from_arguments(args)
     try:
         args.mountpoint.stat()
     except FileNotFoundError:

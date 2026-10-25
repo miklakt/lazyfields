@@ -38,24 +38,42 @@ def value_kind(value: Any) -> NodeKind:
     return "dataset"
 
 
+def as_array(value: Any) -> Any:
+    """value as a NumPy array, inferring a common dtype for lists and object arrays; ragged values remain
+    object arrays."""
+    import numpy as np
+
+    try:
+        array = np.asarray(value)
+    except ValueError:
+        array = np.asarray(value, dtype=object)
+    if array.dtype == object:
+        try:
+            array = np.asarray(array.tolist())
+        except (TypeError, ValueError):
+            pass
+    return array
+
+
 def dataset_attrs(value: Any) -> dict[str, Any]:
     """dtype and shape, inferring a common dtype for lists and object arrays.
 
-    Arrays with a concrete dtype only need metadata; ragged values remain object arrays.
+    Arrays with a concrete dtype only need metadata.
     """
-    import numpy as np
-
-    if not hasattr(value, "dtype") or not hasattr(value, "shape"):
-        try:
-            value = np.asarray(value)
-        except ValueError:
-            value = np.asarray(value, dtype=object)
-    if value.dtype == object:
-        try:
-            value = np.asarray(value.tolist())
-        except (TypeError, ValueError):
-            pass
+    if not (hasattr(value, "dtype") and hasattr(value, "shape")) or value.dtype == object:
+        value = as_array(value)
     return {"dtype": str(value.dtype), "shape": tuple(value.shape)}
+
+
+def value_info(value: Any) -> "NodeInfo":
+    """Classify a loaded value; a dataset's attrs also give its type, such as matplotlib.figure.Figure."""
+    kind = value_kind(value)
+    if kind == "group":
+        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)))
+    if kind == "dataset":
+        return NodeInfo(kind, attrs={**dataset_attrs(value),
+                                     "type": f"{type(value).__module__}.{type(value).__qualname__}"})
+    return NodeInfo(kind)
 
 
 def _mapping_items(value):
@@ -66,7 +84,7 @@ def _mapping_items(value):
 @dataclass(frozen=True)
 class NodeInfo:
     """Node classification and immediate child names, without dataset values; dtype and shape of datasets
-    in attrs when known."""
+    in attrs when known, and their type when the reader had to load them."""
 
     kind: NodeKind
     children: tuple[str, ...] = ()
@@ -84,31 +102,35 @@ def _normalize(value: Any) -> Any:
     return value.item() if getattr(value, "shape", None) == () else value
 
 
-def _read(node: Any, h5py: Any) -> Any:
-    if isinstance(node, h5py.Dataset): return _normalize(node[()])
-    return {key: _read(node[key], h5py) for key in node.keys()}
+@contextmanager
+def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
+    """Open an HDF5 file at the node an infile path such as g/h names; the root without one."""
+    with _h5().File(path, "r") as file:
+        node = file
+        for part in filter(None, (key or "").split("/")):
+            node = node[part]
+        yield node
+
+
+def _read(node: Any) -> Any:
+    if isinstance(node, _h5().Dataset): return _normalize(node[()])
+    return {key: _read(node[key]) for key in node.keys()}
 
 
 def hdf5_load(path: str | Path) -> Mapping[str, Any]:
-    h5py = _h5()
-    with h5py.File(path, "r") as fh: return {key: _read(fh[key], h5py) for key in fh.keys()}
+    with _hdf5_node(path) as file: return _read(file)
 
 
 def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
-    h5py = _h5()
-    with h5py.File(path, "r") as fh:
-        node = fh
-        for part in key.split("/"):
-            if part:
-                node = node[part]
+    with _hdf5_node(path, key) as node:
         if selection is None:
-            return _read(node, h5py)
-        if isinstance(node, h5py.Dataset):
+            return _read(node)
+        if isinstance(node, _h5().Dataset):
             try:
                 return _normalize(node[selection])
             except (TypeError, ValueError):
                 pass
-        return _normalize(_read(node, h5py)[selection])
+        return _normalize(_read(node)[selection])
 
 
 def _hdf5_kind(node: Any) -> NodeKind:
@@ -116,21 +138,15 @@ def _hdf5_kind(node: Any) -> NodeKind:
 
 
 def hdf5_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
-    h5py = _h5()
-    with h5py.File(path, "r") as fh:
-        group = fh[key] if key else fh
-        if not isinstance(group, h5py.Group): raise NotADirectoryError(key)
+    with _hdf5_node(path, key) as group:
+        if not isinstance(group, _h5().Group): raise NotADirectoryError(key)
         for name, node in group.items():
             kind = _hdf5_kind(node)
             yield name, kind, _normalize(node[()]) if kind == "scalar" else None
 
 
 def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
-    h5py = _h5()
-    with h5py.File(path, "r") as file:
-        node = file
-        for part in filter(None, (key or "").split("/")):
-            node = node[part]
+    with _hdf5_node(path, key) as node:
         kind = _hdf5_kind(node)
         if kind == "dataset":
             return NodeInfo(kind, attrs={"dtype": str(node.dtype), "shape": node.shape})
@@ -155,6 +171,10 @@ def _path_get(value: Any, key: str) -> Any:
     return value
 
 
+def _check_infile_path(key: Any) -> None:
+    if key is not None and not isinstance(key, str): raise TypeError("infile_path must be a string or None.")
+
+
 @dataclass(frozen=True)
 class Reader:
     # File suffixes handled by this reader
@@ -170,8 +190,7 @@ class Reader:
 
     def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
         """Read a file or one field, forwarding selection to direct readers."""
-        if key is not None and not isinstance(key, str):
-            raise TypeError("infile_path must be a string or None.")
+        _check_infile_path(key)
         if selection is not None and key is None:
             raise ValueError("selection requires a single infile path.")
         if key is None: return self.load(path)
@@ -194,16 +213,11 @@ class Reader:
                     if name == key:
                         if kind != "group": return NodeInfo(kind)
                         break
-        value = self.get(path, key)
-        kind = value_kind(value)
-        if kind == "dataset":
-            return NodeInfo(kind, attrs=dataset_attrs(value))
-        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)) if kind == "group" else ())
+        return value_info(self.get(path, key))
 
     def items(self, path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
         """Inspect immediate group children as (name, kind, value)"""
-        if key is not None and not isinstance(key, str):
-            raise TypeError("infile_path must be a string or None.")
+        _check_infile_path(key)
         key = key.strip("/") or None if key else None
         if self.inspect is not None:
             yield from self.inspect(path, key)
