@@ -8,7 +8,6 @@ from inspect import Parameter
 
 import pandas as pd
 
-from ..readers import dataset_attrs
 from .viewers import embed_figure, open_value
 
 _POSITIONAL = (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
@@ -110,7 +109,8 @@ def ask_arguments(master, name, parameters, filled, submit):
 def run_and_show(master, title, call):
     """Call with pyplot drawing off-screen; show its result and each figure it returned or left open.
 
-    A result of None, or a Series of only None and figures, opens no window of its own.
+    A Series, one value per selected row, shows as a group of them named by row label. A result of
+    None, or a Series of only None and figures, opens no window of its own.
 
     Methods can use plain pyplot whatever the configured backend: plt.show() and fig.show() do nothing
     here, and the figures appear in browser windows instead.
@@ -136,13 +136,14 @@ def run_and_show(master, title, call):
                 plt.switch_backend(backend)
             except ImportError:  # A GUI backend other than Tk cannot load while the browser runs.
                 pass
-    values = list(result) if isinstance(result, pd.Series) else [result]  # A Series holds one per row.
+    if isinstance(result, pd.Series):  # One value per row; browse them by row label rather than stacked.
+        result = {str(label): value for label, value in result.items()}
+        values = list(result.values())
+    else:
+        values = [result]
     if all(value is None or _is_figure(value) for value in values):
         figures += [value for value in values if value is not None and value not in figures]
     else:
-        if isinstance(result, pd.Series) and dataset_attrs(result)["dtype"] == "object":
-            # The rows' values do not stack into one array, such as dicts; browse them by row label.
-            result = {str(label): value for label, value in result.items()}
         open_value(master, title, result)
     for figure in figures:
         open_value(master, title, figure, embed_figure)

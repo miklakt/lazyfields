@@ -128,7 +128,7 @@ def _array(value):
     import numpy as np
 
     array = np.asarray(value)
-    if array.dtype.kind == "O":  # Such as a per-row Series of numbers; infer the actual dtype.
+    if array.dtype.kind == "O":  # Such as an object array of numbers; infer the actual dtype.
         array = np.asarray(array.tolist())
     return np.squeeze(array)
 
