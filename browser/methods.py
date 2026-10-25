@@ -64,7 +64,7 @@ def call_arguments(parameters, texts):
 
 
 def ask_arguments(master, name, parameters, filled, submit):
-    """Show one box per parameter, prefilled with the last input or the default.
+    """Show one box per parameter, prefilled with the last input or the default; a checkbox for a bool default.
 
     Run calls submit(args, kwargs, text). Positional-only parameters are unlabelled since their names
     are not part of a call.
@@ -75,19 +75,25 @@ def ask_arguments(master, name, parameters, filled, submit):
     form = tk.Toplevel(master)
     form.title(name)
     form.transient(master)
-    entries = []
+    values, widgets = [], []
     for line, parameter in enumerate(parameters):
         if parameter.kind is not parameter.POSITIONAL_ONLY:
             prefix = {parameter.VAR_POSITIONAL: "*", parameter.VAR_KEYWORD: "**"}.get(parameter.kind, "")
             ttk.Label(form, text=prefix + parameter.name).grid(row=line, column=0, sticky="w", padx=4, pady=2)
-        entry = ttk.Entry(form, width=40)
-        entry.insert(0, filled.get(parameter.name, _default_text(parameter)))
-        entry.grid(row=line, column=1, sticky="ew", padx=4, pady=2)
-        entries.append(entry)
+        text = filled.get(parameter.name, _default_text(parameter))
+        if isinstance(parameter.default, bool):  # Reads True or False, like the literal typed in a box.
+            value = tk.StringVar(form, text)
+            widget = ttk.Checkbutton(form, variable=value, onvalue="True", offvalue="False")
+        else:
+            value = widget = ttk.Entry(form, width=40)
+            widget.insert(0, text)
+        widget.grid(row=line, column=1, sticky="ew", padx=4, pady=2)
+        values.append(value)
+        widgets.append(widget)
     form.columnconfigure(1, weight=1)
 
     def run(event=None):
-        texts = [entry.get().strip() for entry in entries]
+        texts = [value.get().strip() for value in values]
         filled.update(zip((parameter.name for parameter in parameters), texts))
         try:
             arguments = call_arguments(parameters, texts)
@@ -100,7 +106,7 @@ def ask_arguments(master, name, parameters, filled, submit):
     ttk.Button(form, text="Run", command=run).grid(row=len(parameters), column=1, sticky="e", padx=4, pady=4)
     form.bind("<Return>", run)
     form.bind("<Escape>", lambda event: form.destroy())
-    entries[0].focus_set()
+    widgets[0].focus_set()
 
 
 def run_and_show(master, title, call):
