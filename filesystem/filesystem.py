@@ -102,6 +102,38 @@ class _FileSource:
 
 
 @dataclass(frozen=True)
+class _ChildrenSource:
+    """An expanded or composed group, answering from its namespace children."""
+
+    children: dict[str, FileSystem]
+
+    def read(self, selection=None):
+        if selection is not None:
+            raise ValueError("selection requires a dataset path.")
+        return {name: child.read() for name, child in self.children.items()}
+
+    def info(self, *, list_children=True):
+        return NodeInfo("group", tuple(self.children) if list_children else ())
+
+    def items(self):
+        for name, child in self.children.items():
+            kind = child._backing.info(list_children=False).kind
+            yield name, kind, child.read() if kind == "scalar" else None
+
+    def locate(self, selection=None):
+        if selection is not None:
+            raise ValueError("selection requires a dataset path.")
+        return [locator for child in self.children.values() for locator in child.locate()]
+
+    def digest(self):
+        return _digest([(name, child.digest()) for name, child in self.children.items()])
+
+    def descendant(self, path):
+        name, _, rest = path.partition("/")
+        return self.children[name]._lookup(rest)
+
+
+@dataclass(frozen=True)
 class Node:
     """Lazy namespace handle; subsequent edits are visible through its path."""
 
@@ -124,8 +156,8 @@ class Node:
     def locate(self, selection: Any | None = None) -> list[SourceLocator]:
         return self._filesystem.locate(self.path, selection)
 
-    def stat(self) -> os.stat_result | None:
-        return self._filesystem.stat(self.path)
+    def files(self) -> set[Path]:
+        return {locator.file_path for locator in self.locate()}
 
     def digest(self) -> str:
         return self._filesystem.digest(self.path)
@@ -156,7 +188,7 @@ class Node:
 
     @property
     def kind(self) -> NodeKind:
-        return self._entry._info(list_children=False).kind
+        return self._entry._backing.info(list_children=False).kind
 
     @property
     def attrs(self) -> dict[str, Any]:
@@ -208,6 +240,11 @@ class FileSystem:
     @property
     def _origin(self) -> SourceLocator | None:
         return self._source.origin if self._source is not None else None
+
+    @property
+    def _backing(self) -> _FileSource | _MergedDataset | _ChildrenSource:
+        """Namespace children once expanded or composed, otherwise the lazy source."""
+        return self._source if self._children is None else _ChildrenSource(self._children)
 
     @classmethod
     def _from_source(cls, source: _FileSource | _MergedDataset) -> FileSystem:
@@ -280,13 +317,8 @@ class FileSystem:
 
     def _lookup(self, path: str | Path) -> FileSystem:
         """Find a namespace entry or bind its remaining path inside a lazy source."""
-        parts = tuple(filter(None, _normalize_path(path).split("/")))
-        entry = self
-        for index, name in enumerate(parts):
-            if entry._children is None:
-                return entry._source.descendant("/".join(parts[index:]))
-            entry = entry._children[name]
-        return entry
+        path = _normalize_path(path)
+        return self._backing.descendant(path) if path else self
 
     def _expand(self) -> dict[str, FileSystem]:
         """Discover child trees only when editing their parent."""
@@ -337,7 +369,6 @@ class FileSystem:
         destination = self._namespace_path / _normalize_path(path)
         entry.is_mount = True
         entry.is_relocated = entry._relocated(destination)
-        entry._namespace_path = destination
         return entry
 
     def _replace_child(self, name: str, entry: FileSystem) -> None:
@@ -374,17 +405,7 @@ class FileSystem:
         return Node(self, path)
 
     def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
-        entry = self._lookup(path)
-        if entry._children is None:
-            return entry._source.read(selection)
-        if selection is not None:
-            raise ValueError("selection requires a dataset path.")
-        return {name: child.read() for name, child in entry._children.items()}
-
-    def _info(self, *, list_children: bool = True) -> NodeInfo:
-        if self._children is not None:
-            return NodeInfo("group", tuple(self._children) if list_children else ())
-        return self._source.info(list_children=list_children)
+        return self._lookup(path)._backing.read(selection)
 
     def attrs(self, path: str | Path = "", *, defaults: bool = True) -> dict[str, Any]:
         entry = self._lookup(path)
@@ -397,35 +418,17 @@ class FileSystem:
         return attrs
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
-        info = self._lookup(path)._info()
+        info = self._lookup(path)._backing.info()
         if info.kind != "group":
             raise NotADirectoryError(str(path))
         return info.children
 
     def items(self, path: str | Path = "") -> Iterable[tuple[str, NodeKind, Any]]:
-        entry = self._lookup(path)
-        if entry._children is None:
-            yield from entry._source.items()
-        else:
-            for name, child in entry._children.items():
-                kind = child._info(list_children=False).kind
-                yield name, kind, child.read() if kind == "scalar" else None
+        return self._lookup(path)._backing.items()
 
     def locate(self, path: str | Path = "", selection: Any | None = None) -> list[SourceLocator]:
-        entry = self._lookup(path)
-        if entry._children is None:
-            return entry._source.locate(selection)
-        if selection is not None:
-            raise ValueError("selection requires a dataset path.")
-        return [locator for child in entry._children.values() for locator in child.locate()]
-
-    def stat(self, path: str | Path = "") -> os.stat_result | None:
-        origin = self._lookup(path)._origin
-        return origin.file_path.stat() if origin is not None else None
+        return self._lookup(path)._backing.locate(selection)
 
     def digest(self, path: str | Path = "") -> str:
         """Change digest from file stats and namespace structure, without source reads."""
-        entry = self._lookup(path)
-        if entry._children is None:
-            return entry._source.digest()
-        return _digest([(name, child.digest()) for name, child in entry._children.items()])
+        return self._lookup(path)._backing.digest()

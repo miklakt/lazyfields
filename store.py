@@ -45,9 +45,8 @@ def _validate_keys(value):
 
 def _modification_time(node):
     try:
-        paths = {source.file_path for source in node.locate()}
-        return datetime.fromtimestamp(max(path.stat().st_mtime for path in paths)) if paths else pd.NaT
-    except OSError:
+        return datetime.fromtimestamp(max(path.stat().st_mtime for path in node.files()))
+    except (OSError, ValueError):  # A missing file, or a node without files.
         return pd.NaT
 
 

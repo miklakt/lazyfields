@@ -47,7 +47,7 @@ def preview(filesystem: FileSystem, path: str, kind: str):
         node = filesystem.node(path)
         origin = node.origin
         if origin is None or require_reader(origin.file_path).read is None:
-            total = sum(file.stat().st_size for file in {locator.file_path for locator in node.locate()})
+            total = sum(file.stat().st_size for file in node.files())
             if total > PREVIEW_LOAD_LIMIT:
                 return f"{path}: preview skipped, it would load {total / 2**20:.0f} MiB\n"
         value = filesystem.read(path, slice(0, PREVIEW_ROWS))
@@ -116,11 +116,10 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
         def getattr(self, path, fh=None):
             size = self.sizes.get(path, 0)
             path, kind, _ = self.resolve(path)
-            try:
-                source = filesystem.stat(path)
-            except OSError:
-                source = None
-            mtime = source.st_mtime_ns if source is not None else self.mounted
+            try:  # The latest of its files; a node without files reports the mount time.
+                mtime = max(file.stat().st_mtime_ns for file in filesystem.node(path).files())
+            except (OSError, ValueError):
+                mtime = self.mounted
             group = kind == "group"
             # Direct I/O reads unopened files to their end despite the zero size.
             return {"st_mode": stat.S_IFDIR | 0o555 if group else stat.S_IFREG | 0o444,

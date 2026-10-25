@@ -260,12 +260,9 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
             entry.relative_to = base
             if "attrs" in data:
                 entry._attrs = dict(data["attrs"])
-            if namespace is not None:
-                entry._namespace_path = namespace
-            elif kind != "file":
-                entry._namespace_path = base
-            if "namespace_path" in data:
-                entry._namespace_path = path(data["namespace_path"])
+            if namespace is None:  # A root keeps its namespace path; children receive theirs while visiting.
+                namespace = entry._namespace_path = (path(data["namespace_path"]) if "namespace_path" in data
+                                                     else entry._namespace_path if kind == "file" else base)
             entry.is_merged = data.get("is_merged", entry.is_merged)
             entry.is_mount = data.get("is_mount", _default_mount(entry, parent, name))
             if "children" in data:
@@ -277,12 +274,12 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                 # Retain tombstones even if the current source lacks those names.
                 entry._source_children = tuple(dict.fromkeys((*entry._source_children, *unmounted)))
             for child_name, child in data.get("children", data.get("overrides", {})).items():
-                replacement = visit(child, entry, child_name, entry._namespace_path / child_name)
+                replacement = visit(child, entry, child_name, namespace / child_name)
                 if overlay and replacement.is_mount and child_name in entry._children:
                     entry._replace_child(child_name, replacement)
                 else:
                     entry._children[child_name] = replacement
-            entry.is_relocated = data.get("is_relocated", entry.is_mount and entry._relocated(entry._namespace_path))
+            entry.is_relocated = data.get("is_relocated", entry.is_mount and entry._relocated(namespace))
             return entry
         finally:
             active.remove(id(data))
