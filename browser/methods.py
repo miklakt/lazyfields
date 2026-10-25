@@ -1,14 +1,11 @@
 """Running registered methods from the table browser: a form for their arguments and showing results."""
 
 import ast
-import sys
-import warnings
-from importlib.util import find_spec
 from inspect import Parameter
 
 import pandas as pd
 
-from .viewers import embed_figure, open_value
+from .viewers import open_value
 
 _POSITIONAL = (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
 
@@ -107,48 +104,13 @@ def ask_arguments(master, name, parameters, filled, submit):
 
 
 def run_and_show(master, title, call):
-    """Call with pyplot drawing off-screen; show its result and each figure it returned or left open.
+    """Show a call's result with its preferred viewer; None opens no window.
 
-    A Series, one value per selected row, shows as a group of them named by row label. A result of
-    None, or a Series of only None and figures, opens no window of its own.
-
-    Methods can use plain pyplot whatever the configured backend: plt.show() and fig.show() do nothing
-    here, and the figures appear in browser windows instead.
+    A Series, one value per selected row, shows as a group of them named by row label.
     """
-    if find_spec("matplotlib") is None:
-        result, figures = call(), []
-    else:
-        import matplotlib
-        import matplotlib.pyplot as plt
-
-        backend = matplotlib.get_backend()
-        before = set(plt.get_fignums())
-        plt.switch_backend("agg")  # Always allowed, unlike a GUI backend other than the running Tk.
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", "FigureCanvasAgg is non-interactive")
-                result = call()
-        finally:
-            figures = [plt.figure(number) for number in plt.get_fignums() if number not in before]
-            for figure in figures:
-                plt.close(figure)
-            try:
-                plt.switch_backend(backend)
-            except ImportError:  # A GUI backend other than Tk cannot load while the browser runs.
-                pass
+    result = call()
     if isinstance(result, pd.Series):  # One value per row; browse them by row label rather than stacked.
-        result = {str(label): value for label, value in result.items()}
-        values = list(result.values())
-    else:
-        values = [result]
-    if all(value is None or _is_figure(value) for value in values):
-        figures += [value for value in values if value is not None and value not in figures]
-    else:
+        result = None if all(value is None for value in result) else {
+            str(label): value for label, value in result.items()}
+    if result is not None:
         open_value(master, title, result)
-    for figure in figures:
-        open_value(master, title, figure, embed_figure)
-
-
-def _is_figure(value):
-    figure = sys.modules.get("matplotlib.figure")  # A figure exists only once matplotlib is imported.
-    return figure is not None and isinstance(value, figure.Figure)
