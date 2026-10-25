@@ -8,6 +8,7 @@ from inspect import Parameter
 
 import pandas as pd
 
+from ..readers import dataset_attrs
 from .viewers import embed_figure, open_value
 
 _POSITIONAL = (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
@@ -139,6 +140,9 @@ def run_and_show(master, title, call):
     if all(value is None or _is_figure(value) for value in values):
         figures += [value for value in values if value is not None and value not in figures]
     else:
+        if isinstance(result, pd.Series) and dataset_attrs(result)["dtype"] == "object":
+            # The rows' values do not stack into one array, such as dicts; browse them by row label.
+            result = {str(label): value for label, value in result.items()}
         open_value(master, title, result)
     for figure in figures:
         open_value(master, title, figure, embed_figure)
