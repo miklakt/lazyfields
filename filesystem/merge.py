@@ -4,12 +4,11 @@ Array rules materialize their inputs before applying the logical selection.
 Their locators conservatively report complete inputs, in source order.
 """
 
-import hashlib
 from dataclasses import dataclass
 from operator import index
 from typing import Mapping
 
-from .filesystem import FileSystem, Node, _normalize_path
+from .filesystem import FileSystem, Node, _digest, _is_name
 from ..readers import NodeInfo
 
 __all__ = ["merge", "collect", "prefer", "prefix", "stack", "concatenate", "vstack", "hstack"]
@@ -100,8 +99,7 @@ class _MergedDataset:
         return result if selection is None else result[selection]
 
     def digest(self):
-        state = (self.rule, [source.digest() for source in self.sources])
-        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
+        return _digest((self.rule, [source.digest() for source in self.sources]))
 
     def locate(self, selection=None):
         # Selection addresses the assembled value, never each input independently.
@@ -119,13 +117,13 @@ def merge(sources: Mapping[str, Node], *, rules: Mapping[str, _Rule]) -> FileSys
     if not isinstance(sources, Mapping) or not sources:
         raise ValueError("sources must be a nonempty mapping of names to nodes.")
     for name, node in sources.items():
-        if not isinstance(name, str) or not name or "/" in name or name in (".", ".."):
+        if not _is_name(name):
             raise ValueError("Source names must be nonempty path segments.")
         if not isinstance(node, Node):
             raise TypeError("Merge sources must be Node handles.")
     rules = dict(rules)
     for key, rule in rules.items():
-        if not isinstance(key, str) or not key or _normalize_path(key) != key or "/" in key:
+        if not _is_name(key):
             raise ValueError("Rule keys must be top-level field names.")
         if not isinstance(rule, _Rule):
             raise TypeError("Rules must be created with the merge rule helpers.")

@@ -10,12 +10,11 @@ needed to distinguish a virtual group beneath a file-backed parent.
 """
 
 import os
-from dataclasses import replace
 from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import SourceLocator, _FileSource
+from .filesystem import SourceLocator, _FileSource, _is_name
 from .merge import _MergedDataset, collect, concatenate, hstack, stack, vstack
 from ..readers import Reader, _reader_match, require_reader
 
@@ -44,9 +43,7 @@ def _inherited_source(parent, name):
     """The natural file binding of a child; no metadata discovery is needed."""
     if parent is None or not isinstance(parent._source, _FileSource):
         return None
-    source = parent._source
-    infile = source.origin.infile_path
-    return replace(source, origin=replace(source.origin, infile_path=f"{infile}/{name}" if infile else name))
+    return parent._source.descendant(name)._source
 
 
 def _same_source(source, inherited):
@@ -101,7 +98,7 @@ def _validate_node(data, parent):
         if key != "unmount" and not isinstance(names, Mapping):
             raise TypeError(f"{key} must map child names to specifications.")
         for name in names:
-            if not isinstance(name, str) or not name or "/" in name or name in (".", ".."):
+            if not _is_name(name):
                 raise ValueError(f"Invalid child name: {name!r}")
     if len(set(unmounted)) != len(unmounted):
         raise ValueError("unmount must contain distinct child names.")
@@ -150,13 +147,9 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
                 elif _reader_match(origin.file_path)[0] is not source.reader:
                     raise ValueError(f"Supply a reader name for {origin.file_path!s} in readers.")
         elif isinstance(source, _MergedDataset):
-            rule = source.rule
-            result = {
-                "op": rule.operation,
-                "sources": [visit(child) for child in source.sources],
-            }
-            if rule.operation in ("stack", "concatenate") and rule.argument != 0:
-                result["axis"] = rule.argument
+            result = {"op": source.rule.operation, "sources": [visit(child) for child in source.sources]}
+            if source.rule.argument:  # A stack or concatenate axis other than 0.
+                result["axis"] = source.rule.argument
         elif source is None:
             result = {"type": "group"} if _node_type({}, parent) == "file" else {}
         else:
@@ -165,8 +158,7 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
             result["attrs"] = dict(entry._attrs)
 
         if namespace is None:
-            namespace = (source.origin.file_path / (source.origin.infile_path or "")
-                         if isinstance(source, _FileSource) else entry.relative_to)
+            namespace = source.origin.position if isinstance(source, _FileSource) else entry.relative_to
             if entry._namespace_path != namespace:
                 namespace = entry._namespace_path
                 result["namespace_path"] = path(namespace)
@@ -254,19 +246,11 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
                     raise TypeError("paths must be a list of relative filenames.")
                 entry = cls._from_paths(base, paths)
             elif kind == "merge":
-                operation = data.get("op")
+                operation, sources = data.get("op"), data.get("sources")
                 if not isinstance(operation, str) or operation not in _RULES:
                     raise ValueError(f"Unknown dataset merge operation: {operation!r}")
-                if operation in ("stack", "concatenate"):
-                    axis = data.get("axis", 0)
-                    if type(axis) is not int:
-                        raise TypeError("axis must be an integer.")
-                    rule = _RULES[operation](axis=axis)
-                else:
-                    if "axis" in data:
-                        raise ValueError(f"{operation} does not accept axis.")
-                    rule = _RULES[operation]()
-                sources = data.get("sources")
+                # Only stack and concatenate accept an axis; the other rules reject it as an argument.
+                rule = _RULES[operation](**{"axis": data["axis"]} if "axis" in data else {})
                 if not isinstance(sources, list) or not sources:
                     raise ValueError("Merge sources must be a nonempty list.")
                 entry = cls._from_source(_MergedDataset(tuple(visit(item) for item in sources), rule))

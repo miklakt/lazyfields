@@ -27,6 +27,14 @@ def _normalize_path(path: str | Path) -> str:
     return "/".join(parts)
 
 
+def _is_name(name: Any) -> bool:
+    return isinstance(name, str) and name not in ("", ".", "..") and "/" not in name
+
+
+def _digest(state: Any) -> str:
+    return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
+
+
 def _relative_file_path(path: str | Path) -> Path:
     """Normalize a registered filename while keeping it below the source root."""
     if not isinstance(path, (str, Path)):
@@ -46,6 +54,10 @@ class SourceLocator:
     file_path: Path
     infile_path: str | None = None
     selection: Any | None = None
+
+    @property
+    def position(self) -> Path:
+        return self.file_path / (self.infile_path or "")
 
 
 @dataclass(frozen=True)
@@ -81,8 +93,7 @@ class _FileSource:
             signature = (stat.st_size, stat.st_mtime_ns)
         except FileNotFoundError:
             signature = None
-        state = (str(self.origin.file_path), self.origin.infile_path, signature)
-        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
+        return _digest((str(self.origin.file_path), self.origin.infile_path, signature))
 
     def descendant(self, path):
         parent = self.origin.infile_path
@@ -206,7 +217,7 @@ class FileSystem:
         result.relative_to = origin.file_path.parent if origin else Path.cwd()
         result._source = source
         result.is_merged = source.is_merged
-        result._namespace_path = origin.file_path / (origin.infile_path or "") if origin else result.relative_to
+        result._namespace_path = origin.position if origin else result.relative_to
         return result
 
     @classmethod
@@ -314,7 +325,7 @@ class FileSystem:
     def _relocated(self, destination: Path) -> bool:
         """Compare source positions without reading or discovering children."""
         if self._origin is not None:
-            return destination != self._origin.file_path / (self._origin.infile_path or "")
+            return destination != self._origin.position
         return self.is_merged or any(
             child._relocated(destination / name) for name, child in self._children.items())
 
@@ -417,5 +428,4 @@ class FileSystem:
         entry = self._lookup(path)
         if entry._children is None:
             return entry._source.digest()
-        state = [(name, child.digest()) for name, child in entry._children.items()]
-        return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
+        return _digest([(name, child.digest()) for name, child in entry._children.items()])
