@@ -22,7 +22,7 @@ def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
     Double-clicking a dataset opens its preferred viewer; right-clicking offers every suitable one and
-    copying any node's path.
+    copying any node's path. Muted attributes follow its children or value; right-click copies their value.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -35,6 +35,7 @@ def panes(master, filesystem):
     details.heading("type", text="Type")
     details.heading("value", text="Value")
     details.column("type", width=110, stretch=False)
+    details.tag_configure("attribute", foreground="gray")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
     ttk.Label(details, text="⊞ group   ▦ dataset   · scalar   ↪ relocated   ⋈ merged").place(
@@ -52,16 +53,9 @@ def panes(master, filesystem):
         kinds[path] = kind
         group = kind == "group"
         origin = node.origin
-        file_root = origin is not None and origin.infile_path is None
-        os_directory = group and origin is None and (
-            filesystem._namespace_path / path.lstrip("/")
-        ).is_dir()
-        if file_root:
-            marker = "📄 "
-        elif os_directory:
-            marker = "📁 "
-        else:
-            marker = {"group": "⊞ ", "dataset": "▦ ", "scalar": "· "}[kind]
+        os_directory = group and origin is None and (filesystem._namespace_path / path.lstrip("/")).is_dir()
+        marker = ("📄 " if origin is not None and origin.infile_path is None else "📁 " if os_directory
+                  else {"group": "⊞ ", "dataset": "▦ ", "scalar": "· "}[kind])
         prefix = ("↪ " if node.is_relocated else "") + ("⋈ " if node.is_merged else "")
         tree.insert(parent, "end", iid=path, text=prefix + marker + name)
         if group:
@@ -73,14 +67,11 @@ def panes(master, filesystem):
     def populate(item):
         if item not in children:
             tree.delete(*tree.get_children(item))
-            children[item] = tuple(
-                insert(item, f"{item.rstrip('/')}/{name}", name, kind, value)
-                for name, kind, value in filesystem.items(item)
-            )
+            children[item] = tuple(insert(item, f"{item.rstrip('/')}/{name}", name, kind, value)
+                                   for name, kind, value in filesystem.items(item))
         return children[item]
 
     def columns(path):
-        """Type and value columns of a details row."""
         if kinds[path] == "group":
             return "", ""
         if path not in previews:
@@ -91,6 +82,20 @@ def panes(master, filesystem):
             previews[path] = type_name(value), preview(value)
         return previews[path]
 
+    def attributes(event=None):
+        item = details.focus() if event else tree.focus()
+        if item not in kinds:
+            return
+        details.delete(*(row for row in details.get_children() if "attribute" in details.item(row, "tags")))
+        try:
+            attrs = filesystem.attrs(item)
+        except Exception as exc:
+            attrs = {"Error": str(exc)}
+        if attrs:
+            details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
+            for name, value in attrs.items():
+                details.insert("", "end", text=name, values=(type_name(value), preview(value)), tags=("attribute",))
+
     def show(event=None):
         item = tree.focus()
         if not item:
@@ -98,22 +103,14 @@ def panes(master, filesystem):
         details.delete(*details.get_children())
         try:
             entries = populate(item)
-            if entries is None:
-                details.insert("", "end", iid="value", text=tree.item(item, "text"),
-                               values=columns(item))
-            else:
-                for child in entries:
-                    details.insert("", "end", iid=child, text=tree.item(child, "text"),
-                                   values=columns(child))
+            for child in (item,) if entries is None else entries:
+                details.insert("", "end", iid=child, text=tree.item(child, "text"), values=columns(child))
+            attributes()
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
 
-    def row(event):
-        item = details.identify_row(event.y)
-        return tree.focus() if item == "value" else item
-
     def enter(event):
-        item = row(event)
+        item = details.identify_row(event.y)
         if kinds.get(item) == "dataset":
             open_value(master, item, filesystem.read(item), attrs=filesystem.attrs(item, defaults=False))
         elif item and tree.exists(item):
@@ -125,9 +122,8 @@ def panes(master, filesystem):
     def set_root(path):
         tree.delete(*tree.get_children())
         details.delete(*details.get_children())
-        kinds.clear()
-        children.clear()
-        previews.clear()
+        for cache in (kinds, children, previews):
+            cache.clear()
         root = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
         tree.item(root, open=True)
         tree.focus(root)
@@ -141,23 +137,26 @@ def panes(master, filesystem):
 
     def open_menu(event):
         """Every suitable viewer for a dataset, and copying any node's path in the filesystem."""
-        item = row(event)
-        if item not in kinds:
+        selected = details.identify_row(event.y)
+        item = selected if selected in kinds else ""
+        if not selected or "separator" in details.item(selected, "tags"):
             return
-        details.selection_set(details.identify_row(event.y))
+        details.selection_set(selected)
         menu.delete(0, "end")
-        if kinds[item] == "dataset":
+        if kinds.get(item) == "dataset":
             attrs = filesystem.attrs(item)
             for name, viewer in suitable_viewers("dataset", attrs):
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_value(
                     master, item, filesystem.read(item), viewer, attrs))
             menu.add_separator()
-        menu.add_command(label=f"Copy path  {item}", command=lambda: copy(item))
+        menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
+                         command=lambda: copy(item or details.set(selected, "value")))
         menu.tk_popup(event.x_root, event.y_root)
 
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
     details.bind("<Double-1>", enter)
+    details.bind("<<TreeviewSelect>>", attributes)
     details.bind("<Button-3>", open_menu)
     return set_root
 
