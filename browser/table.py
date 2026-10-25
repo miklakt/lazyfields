@@ -14,6 +14,8 @@ from .viewers import preview
 
 
 def _cell(column, value):
+    if column == "lf_mtime":
+        return "" if pd.isna(value) else pd.Timestamp(value).isoformat(sep=" ", timespec="seconds")
     if column == "lf_store_keys" and isinstance(value, (list, tuple)):
         return f"{len(value)} keys"
     return preview(value, 80)
