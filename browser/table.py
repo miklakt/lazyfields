@@ -66,6 +66,58 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
+    visible = set(ids)
+
+    def choose_columns():
+        dialog = tk.Toplevel(window)
+        dialog.title("Columns")
+        dialog.transient(window)
+        dialog.geometry("340x420")
+        search = tk.StringVar()
+        ttk.Label(dialog, text="Search columns").pack(anchor="w", padx=6)
+        field = ttk.Entry(dialog, textvariable=search)
+        field.pack(fill="x", padx=6, pady=6)
+        buttons = ttk.Frame(dialog)
+        buttons.pack(side="bottom", fill="x", padx=6, pady=6)
+        choices = tk.Listbox(dialog, selectmode="multiple", exportselection=False)
+        scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=choices.yview)
+        choices.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        choices.pack(fill="both", expand=True)
+        shown = []
+
+        def refresh(all_columns=None):
+            if all_columns is not None:
+                visible.clear()
+                visible.update(ids if all_columns else ())
+            shown[:] = [(key, name) for key, name in zip(ids, columns)
+                        if search.get().casefold() in str(name).casefold()]
+            choices.delete(0, "end")
+            for position, (key, name) in enumerate(shown):
+                choices.insert("end", str(name))
+                if key in visible:
+                    choices.selection_set(position)
+            table.configure(displaycolumns=[key for key in ids if key in visible])
+
+        def apply_selection(event):
+            visible.difference_update(key for key, _ in shown)
+            visible.update(shown[position][0] for position in choices.curselection())
+            table.configure(displaycolumns=[key for key in ids if key in visible])
+
+        ttk.Button(buttons, text="Show all", command=lambda: refresh(True)).pack(side="left")
+        ttk.Button(buttons, text="Hide all", command=lambda: refresh(False)).pack(side="left")
+        ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
+        choices.bind("<<ListboxSelect>>", apply_selection)
+        search.trace_add("write", lambda *_: refresh())
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+        dialog.grab_set()
+        refresh()
+        field.focus_set()
+
+    menubar = tk.Menu(window, tearoff=False)
+    menubar.add_command(label="Columns", command=choose_columns)
+    window.configure(menu=menubar)
+
     bottom = ttk.Frame(split)
     filesystem = reference_df.store.filesystem
     set_root = panes(bottom, filesystem)
