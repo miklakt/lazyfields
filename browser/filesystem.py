@@ -78,12 +78,13 @@ def browse_filesystem(filesystem):
     window.mainloop()
 
 
-def panes(master, filesystem):
+def panes(master, filesystem, *, navigation_widgets=()):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
     Double-clicking a dataset or scalar in either pane opens its preferred viewer, and a group goes into it;
     right-clicking any node offers every suitable one, its value read whole, and copying its path. The muted
     attributes of the node chosen in the tree follow its children or value; right-click copies their value.
+    Backspace selects the parent; navigation_widgets share the shortcut.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -170,6 +171,18 @@ def panes(master, filesystem):
         tree.selection_set(item)
         tree.focus(item)
         tree.see(item)
+        show()
+
+    def go_up(event=None):
+        item = tree.focus()
+        if item and item != "/":
+            parent = item.rstrip("/").rsplit("/", 1)[0] or "/"
+            if not tree.exists(parent):
+                set_root(parent)
+            else:
+                tree.item(parent, open=True)
+                select(parent)
+        return "break"
 
     def open_node(path, view=None):
         open_value(master, path, filesystem.read(path), view, filesystem.attrs(path, defaults=False))
@@ -219,6 +232,8 @@ def panes(master, filesystem):
     tree.bind("<Double-1>", enter)
     details.bind("<Double-1>", enter)
     details.bind("<Button-3>", open_menu)
+    for widget in (tree, details, *navigation_widgets):
+        widget.bind("<BackSpace>", go_up)
     return set_root
 
 

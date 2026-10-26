@@ -140,7 +140,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
     bottom = ttk.Frame(split)
     filesystem = reference_df.store.filesystem
-    set_root = panes(bottom, filesystem)
+    set_root = panes(bottom, filesystem, navigation_widgets=(table,))
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
