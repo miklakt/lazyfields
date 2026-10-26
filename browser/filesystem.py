@@ -1,6 +1,7 @@
 """Minimal read-only Tk filesystem browser with relocated mount markers."""
 
 import argparse
+from datetime import datetime
 from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
@@ -49,6 +50,20 @@ def _cells(value):
     return type_name(value), one_line_repr(value)
 
 
+def _file_value(path):
+    """A file's size and modification time, such as 75.26 MB, 2026-10-26 11:52:13."""
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        return f"Error: {exc}"
+    size = stat.st_size
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            break
+        size /= 1024
+    return f"{size:.4g} {unit}, {datetime.fromtimestamp(stat.st_mtime).isoformat(sep=' ', timespec='seconds')}"
+
+
 _MARKERS = {"group": "⊞", "dataset": "▦", "scalar": "·", "relocated": "↪", "merged": "⋈"}
 
 
@@ -93,9 +108,11 @@ def panes(master, filesystem):
         elif kind == "scalar" or kind == "dataset" and value is not None:
             previews[path] = _cells(value)
         kinds[path] = kind
-        origin = node.origin
-        marker = ("📄" if origin is not None and origin.infile_path is None else "📁" if node.is_directory
-                  else _MARKERS[kind])
+        origin, marker = node.origin, _MARKERS[kind]
+        if origin is not None and origin.infile_path is None:
+            marker, previews[path] = "📄", ("file", _file_value(origin.file_path))
+        elif node.is_directory:
+            marker, previews[path] = "📁", ("directory", f"{len(node.listdir())} entries")
         prefix = "".join(f"{_MARKERS[name]} " for name, flag in (("relocated", node.is_relocated),
                                                                  ("merged", node.is_merged)) if flag)
         tree.insert(parent, "end", iid=path, text=f"{prefix}{marker} {name}")
@@ -115,7 +132,7 @@ def panes(master, filesystem):
     def columns(path):
         """Type and value; a dataset listed without its value gets them from its attrs and leading corner."""
         if kinds[path] == "group":
-            return "", ""
+            return previews.get(path, ("", ""))
         if path not in previews:
             try:
                 attrs = filesystem.attrs(path)
