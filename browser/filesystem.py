@@ -64,6 +64,29 @@ def _file_value(path):
 _MARKERS = {"group": "⊞", "dataset": "▦", "scalar": "·", "relocated": "↪", "merged": "⋈"}
 
 
+def bind_context_menu(widget, callback):
+    """Open a row's context menu with right-click, Ctrl+Enter, Shift+F10, or Menu."""
+    def mouse_menu(event):
+        item = widget.identify_row(event.y)
+        if item:
+            widget.focus_set()
+            widget.focus(item)
+            callback(widget, item, event.x_root, event.y_root)
+        return "break"
+
+    def keyboard_menu(event):
+        item = widget.focus()
+        widget.see(item)
+        if item and (bounds := widget.bbox(item)):
+            x, y, width, height = bounds
+            callback(widget, item, widget.winfo_rootx() + x + min(width, 20), widget.winfo_rooty() + y + height)
+        return "break"
+
+    widget.bind("<Button-3>", mouse_menu)
+    for shortcut in ("<Control-Return>", "<Shift-F10>", "<Menu>"):
+        widget.bind(shortcut, keyboard_menu)
+
+
 def browse_filesystem(filesystem):
     """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
@@ -79,9 +102,16 @@ def panes(master, filesystem, *, navigation_widgets=()):
 
     Double-click opens a node; right-click offers viewers and copying.
     Backspace selects the parent. navigation_widgets share that shortcut.
+    Tab cycles through navigation_widgets, tree, and details.
     """
     import tkinter as tk
     from tkinter import ttk
+
+    style = ttk.Style(master)
+    for option, colour in (("background", "#c8c8c8"), ("foreground", "black")):  # Selection of an unfocused view.
+        inherited = [entry for entry in style.map("Treeview", query_opt=option)
+                     if entry[:2] != ("!disabled", "!selected")]
+        style.map("Treeview", **{option: [("selected", "!focus", colour), *inherited]})
 
     panes = ttk.Panedwindow(master, orient="horizontal")
     panes.pack(fill="both", expand=True)
@@ -178,6 +208,19 @@ def panes(master, filesystem, *, navigation_widgets=()):
                 select(parent)
         return "break"
 
+    focus_order = (*navigation_widgets, tree, details)
+
+    def cycle_focus(event):
+        position = focus_order.index(event.widget)
+        following = (focus_order[(position + offset) % len(focus_order)] for offset in range(1, len(focus_order) + 1))
+        target = next((view for view in following if view.get_children()), event.widget)  # Empty views take no focus.
+        target.focus_set()
+        if not target.selection() and target.get_children():  # Else nothing shows where focus went.
+            row = target.focus() or target.get_children()[0]
+            target.focus(row)
+            target.selection_set(row)
+        return "break"
+
     def open_node(path, view=None):
         open_value(master, path, filesystem.read(path), view, filesystem.attrs(path, defaults=False))
 
@@ -204,13 +247,12 @@ def panes(master, filesystem, *, navigation_widgets=()):
         details.clipboard_clear()
         details.clipboard_append(path)
 
-    def open_menu(event):
+    def open_menu(widget, selected, x, y):
         """Offer viewers and copying for the selected row."""
-        selected = details.identify_row(event.y)
         item = selected if selected in kinds else ""
-        if not selected or "separator" in details.item(selected, "tags"):
+        if (widget is tree and not item) or "separator" in widget.item(selected, "tags"):
             return
-        details.selection_set(selected)
+        widget.selection_set(selected)
         menu.delete(0, "end")
         if item:
             names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
@@ -218,16 +260,18 @@ def panes(master, filesystem, *, navigation_widgets=()):
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
-                         command=lambda: copy(item or details.set(selected, "value")))
-        menu.tk_popup(event.x_root, event.y_root)
+                         command=lambda: copy(item or widget.set(selected, "value")))
+        menu.tk_popup(x, y)
 
     tree.bind("<<TreeviewOpen>>", show)
     tree.bind("<<TreeviewSelect>>", show)
     tree.bind("<Double-1>", enter)
     details.bind("<Double-1>", enter)
-    details.bind("<Button-3>", open_menu)
-    for widget in (tree, details, *navigation_widgets):
+    for widget in (tree, details):
+        bind_context_menu(widget, open_menu)
+    for widget in focus_order:
         widget.bind("<BackSpace>", go_up)
+        widget.bind("<Tab>", cycle_focus)
     return set_root
 
 

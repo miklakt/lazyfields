@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
-from .filesystem import one_line_repr, panes
+from .filesystem import bind_context_menu, one_line_repr, panes
 from .methods import ask_arguments, run_and_show
 
 
@@ -206,10 +206,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         else:
             call([], {}, "")
 
-    def open_menu(event):
-        item = table.identify_row(event.y)
-        if not item:
-            return
+    def open_menu(widget, item, x, y):
         if item not in table.selection():
             table.focus(item)
             table.selection_set(item)
@@ -219,11 +216,11 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             menu.add_command(label=f"Run {name}", command=lambda name=name: run(name))
         if not names:
             menu.add_command(label="No registered methods", state="disabled")
-        menu.tk_popup(event.x_root, event.y_root)
+        menu.tk_popup(x, y)
 
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
-    table.bind("<Button-3>", open_menu)
+    bind_context_menu(table, open_menu)
     render()
     entry.focus_set()
     window.mainloop()
