@@ -419,10 +419,13 @@ class FileSystem:
 
     def attrs(self, path: str | Path = "", *, defaults: bool = True) -> dict[str, Any]:
         entry = self._lookup(path)
-        if not defaults or entry._children is not None or {"dtype", "shape"} <= entry._attrs.keys():
-            return dict(entry._attrs)
+        attrs, origin = dict(entry._attrs), entry._origin
+        if origin is not None and origin.infile_path is None:  # A file: its reader's attrs, without reads.
+            attrs = {**entry._source.reader.attrs, **attrs}
+        if not defaults or entry._children is not None or {"dtype", "shape"} <= attrs.keys():
+            return attrs
         info = entry._source.info(list_children=False)
-        attrs = {**info.attrs, **entry._attrs}
+        attrs = {**info.attrs, **attrs}
         if info.kind == "dataset" and not {"dtype", "shape"} <= attrs.keys():
             attrs = {**value_info(entry._source.read()).attrs, **attrs}
         return attrs

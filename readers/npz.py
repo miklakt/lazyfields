@@ -48,4 +48,5 @@ def _npz_info(path, key=None):
     raise KeyError(key)
 
 
-NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect, inspect_node=_npz_info)
+NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect, inspect_node=_npz_info,
+                       attrs={"file_format": "npz"})

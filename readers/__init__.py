@@ -187,6 +187,8 @@ class Reader:
     inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
     # Optional metadata-only classification/listing at any infile path.
     inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
+    # Attributes of each file it reads, known without reading it, such as {"file_format": "pdb"}.
+    attrs: Mapping[str, Any] = field(default_factory=dict, kw_only=True, compare=False)
 
     def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
         """Read a file or one field, forwarding selection to direct readers."""
@@ -252,7 +254,7 @@ class DebugReader(Reader):
             return call
 
         super().__init__(
-            suffixes=reader.suffixes,
+            suffixes=reader.suffixes, attrs=reader.attrs,
             **{name: logged(name, getattr(reader, name))
                for name in ("load", "read", "inspect", "inspect_node")},
         )
@@ -376,8 +378,8 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
 
 
 for _reader in (
-    Reader((".pkl", ".pickle"), pickle_load),
-    Reader((".json",), json_load),
-    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info),
+    Reader((".pkl", ".pickle"), pickle_load, attrs={"file_format": "pickle"}),
+    Reader((".json",), json_load, attrs={"file_format": "json"}),
+    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, attrs={"file_format": "hdf5"}),
     Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, inspect_node=archive_info)
     ): register_reader(_reader)

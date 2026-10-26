@@ -37,4 +37,4 @@ def CSV_WITH_HEADER(comment: str = "#", key_value_separator: str = ":", skiprows
         columns = pd.read_csv(path, comment=comment, skiprows=skiprows, sep=column_separator, nrows=0).columns
         yield from ((key, "dataset", None) for key in columns)
 
-    return Reader(suffixes, load, read, inspect)
+    return Reader(suffixes, load, read, inspect, attrs={"file_format": "csv"})
