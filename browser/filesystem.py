@@ -7,7 +7,7 @@ from reprlib import repr as short_repr
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
 from ..readers import NodeInfo
-from .viewers import _tk, open_value, register_viewer, suitable_viewers
+from .viewers import open_value, register_viewer, suitable_viewers
 
 
 def one_line_repr(value, width=160):
@@ -222,12 +222,12 @@ def panes(master, filesystem):
     return set_root
 
 
-def _show_tree(window, value):
-    """Browse a mapping, or a list of mappings, like a filesystem group."""
-    panes(window, FileSystem.from_value(value))("/")
+def _browse(value, attrs):
+    """Browse a mapping, or a list of mappings, like a filesystem group with attrs at its root."""
+    return lambda window: panes(window, FileSystem.from_value(value, attrs))("/")
 
 
-register_viewer("Browser", lambda node: node.kind == "group", _tk(_show_tree))
+register_viewer("Browser", lambda node: node.kind == "group", _browse)
 
 
 def main(argv=None) -> None:

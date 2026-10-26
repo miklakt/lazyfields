@@ -9,7 +9,7 @@ from operator import index
 from typing import Mapping
 
 from .filesystem import FileSystem, Node, _digest, _is_name
-from ..readers import NodeInfo
+from ..readers import NodeInfo, value_info
 
 __all__ = ["merge", "collect", "prefer", "prefix", "stack", "concatenate", "vstack", "hstack"]
 
@@ -59,6 +59,7 @@ def hstack():
 class _MergedDataset:
     origin = None
     is_merged = True
+    attrs = {}
 
     sources: tuple[FileSystem, ...]
     rule: _Rule
@@ -89,14 +90,27 @@ class _MergedDataset:
                 import numpy as np
                 # Integer indices before the merge axis remove dimensions, shifting it left.
                 return np.stack(parts, axis=at - sum(type(part) is int for part in key[:at]))
-        values = [source.read() for source in self.sources]
-        if operation == "collect":
-            result = values
-        else:
-            import numpy as np
-            function = getattr(np, operation)
-            result = function(values, axis=axis) if axis is not None else function(values)
+        result = self._combine([source.read() for source in self.sources])
         return result if selection is None else result[selection]
+
+    def _combine(self, values):
+        """The rule applied to its inputs' values: their list to collect, else NumPy's operation of its name."""
+        operation, axis = self.rule.operation, self.rule.argument
+        if operation == "collect":
+            return values
+        import numpy as np
+        function = getattr(np, operation)
+        return function(values, axis=axis) if axis is not None else function(values)
+
+    def defaults(self):
+        """The dtype, shape and type the rule gives, from the inputs' metadata rather than their values."""
+        if self.rule.operation == "collect":  # Scalars, cheap to read.
+            return value_info(self.read()).attrs
+        import numpy as np
+        inputs = [source.attrs() for source in self.sources]
+        stand_ins = [np.empty(each["shape"], dtype="V0") for each in inputs]  # Their shapes, without data.
+        return {"dtype": str(np.result_type(*(each["dtype"] for each in inputs))),
+                "shape": self._combine(stand_ins).shape, "type": "numpy.ndarray"}
 
     def digest(self):
         return _digest((self.rule, [source.digest() for source in self.sources]))

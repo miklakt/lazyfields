@@ -72,6 +72,15 @@ class _FileSource:
     def read(self, selection=None):
         return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
 
+    @property
+    def attrs(self):
+        """A file's attributes from its reader, known without reads; none for what is inside it."""
+        return self.reader.attrs if self.origin.infile_path is None else {}
+
+    def defaults(self):
+        """dtype, shape and type of the loaded value, for readers without metadata."""
+        return value_info(self.read()).attrs
+
     def info(self, *, list_children=True):
         if self.origin.infile_path is None and not list_children:
             return NodeInfo("group")
@@ -271,9 +280,12 @@ class FileSystem:
         return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
 
     @classmethod
-    def from_value(cls, value: Mapping | list) -> FileSystem:
-        """Root a filesystem at an in-memory group, such as a mapping of results, like a file's contents."""
-        return cls.from_file("<value>", Reader((), lambda _: value))
+    def from_value(cls, value: Mapping | list, attrs: Mapping[str, Any] | None = None) -> FileSystem:
+        """Root a filesystem at an in-memory group, such as a mapping of results, like a file's contents.
+
+        attrs, if given, are its root's, as a reader's are each file's.
+        """
+        return cls.from_file("<value>", Reader((), lambda _: value, attrs=attrs or {}))
 
     @classmethod
     def from_directory(cls, path: str | Path, pattern: str = "*") -> FileSystem:
@@ -419,15 +431,13 @@ class FileSystem:
 
     def attrs(self, path: str | Path = "", *, defaults: bool = True) -> dict[str, Any]:
         entry = self._lookup(path)
-        attrs, origin = dict(entry._attrs), entry._origin
-        if origin is not None and origin.infile_path is None:  # A file: its reader's attrs, without reads.
-            attrs = {**entry._source.reader.attrs, **attrs}
+        attrs = {**(entry._source.attrs if entry._source is not None else {}), **entry._attrs}
         if not defaults or entry._children is not None or {"dtype", "shape"} <= attrs.keys():
             return attrs
         info = entry._source.info(list_children=False)
         attrs = {**info.attrs, **attrs}
         if info.kind == "dataset" and not {"dtype", "shape"} <= attrs.keys():
-            attrs = {**value_info(entry._source.read()).attrs, **attrs}
+            attrs = {**entry._source.defaults(), **attrs}
         return attrs
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
