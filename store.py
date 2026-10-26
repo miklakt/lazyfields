@@ -1,6 +1,5 @@
 import ast
 import inspect
-import os
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +14,6 @@ import pandas as pd
 
 from .pipe import _NodeRow, _apply_pipe
 from .filesystem import FileSystem, Node
-from .filesystem.filesystem import _normalize_path
 
 # Columns added to every row; indexed fields cannot use these names.
 _RESERVED = ("lf_path", "lf_store_keys", "lf_mtime", "lf_digest")
@@ -75,28 +73,18 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
             "lf_mtime": _modification_time(node), "lf_digest": node.digest()}
 
 
-def _directory_source(directory: str | Path, relative_to: str | None) -> tuple[dict, str]:
-    """Specify a directory's immediate supported files and the subtree that holds them."""
-    directory = Path(directory)
-    if directory.is_absolute():
-        directory = Path(os.path.relpath(directory, Path(relative_to or ".").resolve()))
-    subtree = _normalize_path(directory)
-    return {"paths": [f"{subtree}/*" if subtree else "*"]}, subtree
-
-
 def create_reference_table(
     source: str | Path | Mapping,
     columns: list[str] | None = None,
     *,
     relative_to: str | Path | None = None,
-    subtree: str | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Index the groups under subtree of a directory's files or of a filesystem specification."""
+    """Index the groups at the root of a directory or filesystem specification."""
     return update_reference_table(
-        pd.DataFrame(), source, columns, relative_to=relative_to, subtree=subtree, pipe=pipe,
+        pd.DataFrame(), source, columns, relative_to=relative_to, pipe=pipe,
         pipe_error_skip=pipe_error_skip, workers=workers,
     )
 
@@ -107,37 +95,35 @@ def update_reference_table(
     columns: list[str] | None = None,
     *,
     relative_to: str | Path | None = None,
-    subtree: str | None = None,
     pipe: list[Any] | None = None,
     pipe_error_skip: bool = True,
     workers: int | None = None,
 ) -> pd.DataFrame:
-    """Rebuild the saved specification, or a new directory or specification, and reindex.
-
-    Rows are the groups directly under subtree, the filesystem root by default; a
-    directory source indexes its own subtree. Rows with an unchanged digest are kept
-    as they are; only new or changed rows are read.
-    """
+    """Refresh the index, reusing rows whose sources are unchanged."""
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
-    if relative_to is None:
+    if source is None:
+        source = reference_df.attrs["filesystem_spec"]
+        if relative_to is None:
+            relative_to = reference_df.attrs["filesystem_relative_to"]
+    elif isinstance(source, (str, Path)):
+        if relative_to is not None:
+            raise ValueError("relative_to is only supported for filesystem specifications; "
+                             "a directory source defines its own root.")
+        relative_to = str(Path(source).resolve())
+        source = {"paths": ["*"]}
+    elif relative_to is None:
         relative_to = reference_df.attrs.get("filesystem_relative_to")
     relative_to = str(relative_to) if relative_to is not None else None
-    if isinstance(source, (str, Path)):
-        source, subtree = _directory_source(source, relative_to)
-    elif subtree is None:
-        subtree = reference_df.attrs.get("filesystem_subtree", "") if source is None else ""
-    subtree = _normalize_path(subtree)
-    filesystem_spec = reference_df.attrs.get("filesystem_spec") if source is None else source
-    if not isinstance(filesystem_spec, Mapping):
+    if not isinstance(source, Mapping):
         raise TypeError("source must be a directory or a filesystem specification mapping.")
-    filesystem_spec = deepcopy(dict(filesystem_spec))
+    filesystem_spec = deepcopy(dict(source))
     filesystem = FileSystem.from_spec(filesystem_spec, relative_to=relative_to)
-    paths = sorted(f"{subtree}/{name}" if subtree else name
-                   for name, kind, _ in filesystem.items(subtree) if kind == "group")
-    old_rows = {row["lf_path"]: row for row in reference_df.to_dict("records")} if "lf_digest" in reference_df else {}
+    relative_to = str(filesystem.relative_to)
+    paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
+    old_rows = {row["lf_path"]: row for row in reference_df.to_dict("records")}
     attrs = {**reference_df.attrs, "filesystem_spec": filesystem_spec,
-             "filesystem_relative_to": relative_to, "filesystem_subtree": subtree}
+             "filesystem_relative_to": relative_to}
 
     def make_row(path):
         # The digest covers the row's file stats and namespace, so equal digests need no read.
@@ -234,7 +220,7 @@ class StoreAccessor:
             except KeyError:
                 raise RuntimeError("This table has no filesystem specification.") from None
             cache["_filesystem"] = FileSystem.from_spec(
-                spec, relative_to=self._obj.attrs.get("filesystem_relative_to"),
+                spec, relative_to=self._obj.attrs["filesystem_relative_to"],
             )
         return cache["_filesystem"]
 

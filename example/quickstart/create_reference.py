@@ -36,7 +36,7 @@ def add_a_sum(row) -> None:
 
 pipe = [[unnest_a_0, keep_a_0_greater_than(2.0)], add_a_sum]
 
-reference_df = lf.create_reference_table(data_dir, relative_to=root_dir, pipe=pipe)
+reference_df = lf.create_reference_table(data_dir, pipe=pipe)
 
 
 # %%

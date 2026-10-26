@@ -38,7 +38,7 @@ def prepare_data() -> None:
 
 
 def build_reference() -> pd.DataFrame:
-    table = lf.create_reference_table(DATA_DIR, relative_to=ROOT_DIR)
+    table = lf.create_reference_table(DATA_DIR)
     table.to_pickle(REFERENCE_TABLE_PATH)
     return table
 

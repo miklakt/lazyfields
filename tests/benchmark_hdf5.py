@@ -38,7 +38,7 @@ def prepare_data() -> None:
         shutil.rmtree(DATA_DIR)
     generate_dataset(DATA_DIR, "h5")
     gc.collect()
-    lf.create_reference_table(DATA_DIR, relative_to=ROOT_DIR).to_pickle(REFERENCE_TABLE_PATH)
+    lf.create_reference_table(DATA_DIR).to_pickle(REFERENCE_TABLE_PATH)
 
 
 def measure_case(case_name: str, expected_bytes: int, loader) -> dict[str, object]:
