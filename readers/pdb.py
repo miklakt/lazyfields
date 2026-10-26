@@ -34,19 +34,33 @@ def _pdb_value(line, column):
     return convert(value) if value else None
 
 
+def _pdb_bonds(path):
+    """The CONECT records' bonds as rows of two atom serials, each bond once with the lower serial first."""
+    import numpy as np
+
+    bonds = set()
+    with Path(path).open() as file:
+        for line in file:
+            if line.startswith("CONECT"):
+                atom, *bonded = (int(line[i:i + 5]) for i in range(6, 31, 5) if line[i:i + 5].strip())
+                bonds.update((min(atom, other), max(atom, other)) for other in bonded)
+    return np.array(sorted(bonds), dtype=int).reshape(-1, 2)
+
+
 def _pdb_load(path):
     columns = {key: [] for key in _PDB_COLUMNS}
     with Path(path).open() as file:
         for line in file:
             if line[:6].strip() in {"ATOM", "HETATM"}:
                 for key, column in _PDB_COLUMNS.items(): columns[key].append(_pdb_value(line, column))
-    return {**_pdb_metadata(path), **columns}
+    return {**_pdb_metadata(path), **columns, "bonds": _pdb_bonds(path)}
 
 
 def _pdb_read(path, key, selection=None):
     if key in _PDB_COLUMNS:
         with Path(path).open() as file:
             value = [_pdb_value(line, _PDB_COLUMNS[key]) for line in file if line[:6].strip() in {"ATOM", "HETATM"}]
+    elif key == "bonds": value = _pdb_bonds(path)
     else: value = _pdb_metadata(path)[key]
     return value if selection is None else value[selection]
 
@@ -57,7 +71,7 @@ def _pdb_inspect(path, key=None):
             raise KeyError(key)
         raise NotADirectoryError(key)
     yield from ((key, "scalar", value) for key, value in _pdb_metadata(path).items())
-    yield from ((key, "dataset", None) for key in _PDB_COLUMNS)
+    yield from ((key, "dataset", None) for key in (*_PDB_COLUMNS, "bonds"))
 
 
 PROTEIN_DATA_BANK = Reader((".pdb", ".ent"), _pdb_load, _pdb_read, _pdb_inspect, attrs={"file_format": "pdb"})

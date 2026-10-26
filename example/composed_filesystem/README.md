@@ -184,6 +184,14 @@ structure and NPZ can list arrays from their headers without reading dataset val
 Expanded groups keep their logical child
 names until explicitly edited; there is no automatic rediscovery or refresh.
 
+A merged node's attributes follow its rule, without guessing. A node taken whole from one
+source, by preference, by prefix, or as the only occurrence of its key, keeps that node's
+attributes. A computed dataset has only the `dtype`, `shape`, and `type` its operation
+gives, worked out from the inputs' metadata without reading their values: whether an
+input's attribute, such as a length, holds for the result, sums, or no longer applies
+depends on its meaning. The merged group itself has none. A specification's `attrs` can
+add any of them.
+
 `read(path, selection=None)` materializes the current logical subtree. Edited
 groups traverse their recorded children, so whole-group reads agree with individual
 paths and unmounted nodes stay absent. Numeric values keep their reader's native
@@ -348,14 +356,17 @@ Any node can carry `attrs`, such as `{"units": "nm", "viewer": "Slices"}`;
 `node.attrs` adds them over the `dtype` and `shape` that datasets have by
 default. HDF5 and NPZ give those from metadata; other readers load the dataset,
 unless `attrs` already give both, and then also give its Python `type`, such as
-`matplotlib.figure.Figure`. For a field inside a file, use an override:
+`matplotlib.figure.Figure`. A file also has the attributes its reader gives every
+file, such as `{"file_format": "pdb"}`, known without reading it. For a field
+inside a file, use an override:
 
 ```json
 {"path": "row_00.h5", "overrides": {"array3d": {"attrs": {"units": "nm"}}}}
 ```
 
-Viewers in the browsers decide whether they fit from a node's kind and `attrs`;
-its `viewer` attribute names the one opened by default, and listed first, when it fits.
+Viewers in the browsers decide whether they fit from a node's kind, `attrs`, and
+children's names; its `viewer` attribute names the one opened by default, and
+listed first, when it fits.
 
 When first expanding a source group, the runtime retains its original child names
 as an immutable tuple. Export derives overrides and hidden names from that tuple
