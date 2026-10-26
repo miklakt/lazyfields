@@ -48,18 +48,14 @@ def fetch(url, sha256, path, label):
 
 
 def load_head_ct():
-    """Return the original (76, 507, 512) int32 CT, without resampling.
-
-    This reads the fixed, checksum-pinned NRRD sample (gzip, little-endian int32),
-    rather than requiring a medical-image reader.
-    """
+    """Load the head CT sample as a (76, 507, 512) int32 array."""
     data = fetch(CT_URL, CT_SHA256, CT_CACHE_PATH, "3D Slicer head CT (about 16 MB)")
     _, payload = data.split(b"\n\n", 1)
     return np.frombuffer(gzip.decompress(payload), dtype="<i4").reshape(CT_SHAPE)
 
 
 def load_rgb_image():
-    """Load scikit-image's coffee sample as (3, 400, 600) uint8, without resizing."""
+    """Load scikit-image's coffee sample as a (3, 400, 600) uint8 array."""
     from PIL import Image
 
     data = fetch(IMAGE_URL, IMAGE_SHA256, IMAGE_CACHE_PATH, "coffee RGB image (about 470 KB)")

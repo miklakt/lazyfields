@@ -1,13 +1,4 @@
-"""Data-only filesystem snapshots and source overlays, without edit history.
-
-All physical paths are relative to one external base directory. An absent
-``children`` field delegates to a source; a present mapping is the exact namespace
-of an expanded group. Merge groups have already resolved prefix/prefer rules.
-Node types follow their fields and parent source; an explicit ``type`` is only
-needed to distinguish a virtual group beneath a file-backed parent.
-``overrides`` and ``unmount`` instead inherit the source namespace on restoration.
-``attrs`` adds attributes to any node, over the dtype and shape datasets have by default.
-"""
+"""Export and restore filesystem specifications with paths relative to a shared base."""
 
 import json
 import os

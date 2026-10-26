@@ -68,7 +68,7 @@ def generate_dataset(directory, file_format, *, overwrite=True):
                         fh.create_dataset(key, data=value)
         elif file_format == "pickle":
             with path.open("wb") as fh:
-                pickle.dump(row, fh, protocol=4)
+                pickle.dump(row, fh, protocol=pickle.HIGHEST_PROTOCOL)
         else:
             temp_path = path.with_suffix(".json.tmp")
             with temp_path.open("w") as fh:

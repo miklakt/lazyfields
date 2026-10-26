@@ -235,8 +235,7 @@ def main(argv=None) -> None:
     parser.add_argument("table", type=Path, help="reference table pickle")
     parser.add_argument("--max-rows", type=int, default=5000, help="rows to show at once (default: 5000)")
     args = parser.parse_args(argv)
-    # Stored methods import modules by name, typically ones beside the table or in the working directory;
-    # a console script would otherwise only search its own bin directory.
+    # Resolve modules used by saved store methods.
     for directory in (str(args.table.resolve().parent), str(Path.cwd())):
         if directory not in sys.path:
             sys.path.insert(0, directory)

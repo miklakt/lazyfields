@@ -111,7 +111,7 @@ def run_and_show(master, title, call):
     A Series, one value per selected row, shows as a group of them named by row label.
     """
     result = call()
-    if isinstance(result, pd.Series):  # One value per row; browse them by row label rather than stacked.
+    if isinstance(result, pd.Series):
         result = None if all(value is None for value in result) else {
             str(label): value for label, value in result.items()}
     if result is not None:

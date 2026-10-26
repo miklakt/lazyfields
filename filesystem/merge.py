@@ -94,7 +94,7 @@ class _MergedDataset:
         return result if selection is None else result[selection]
 
     def _combine(self, values):
-        """The rule applied to its inputs' values: their list to collect, else NumPy's operation of its name."""
+        """Combine source values according to the merge rule."""
         operation, axis = self.rule.operation, self.rule.argument
         if operation == "collect":
             return values
@@ -103,7 +103,7 @@ class _MergedDataset:
         return function(values, axis=axis) if axis is not None else function(values)
 
     def defaults(self):
-        """The dtype, shape and type the rule gives, from the inputs' metadata rather than their values."""
+        """Infer merged dataset attributes from source metadata."""
         if self.rule.operation == "collect":  # Scalars, cheap to read.
             return value_info(self.read()).attrs
         import numpy as np

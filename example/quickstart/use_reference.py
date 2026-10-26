@@ -35,7 +35,7 @@ show(reference_df.store["some_1darray_key"])
 # Load the nested data stored for the first row.
 show(reference_df.iloc[0].store["some_nested_object_key"])
 # %%
-# Load only the first part of an array instead of reading the whole array into memory.
+# Read a slice of the array.
 show(reference_df.iloc[1].store["some_1darray_key", 0:1])
 # %%
 # Load all the data referenced by the last row.

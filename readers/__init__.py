@@ -39,8 +39,7 @@ def value_kind(value: Any) -> NodeKind:
 
 
 def as_array(value: Any) -> Any:
-    """value as a NumPy array, inferring a common dtype for lists and object arrays; ragged values remain
-    object arrays."""
+    """Convert a value to a NumPy array, inferring a common dtype where possible."""
     import numpy as np
 
     try:
@@ -56,17 +55,14 @@ def as_array(value: Any) -> Any:
 
 
 def dataset_attrs(value: Any) -> dict[str, Any]:
-    """dtype and shape, inferring a common dtype for lists and object arrays.
-
-    Arrays with a concrete dtype only need metadata.
-    """
+    """Return a dataset's dtype and shape."""
     if not (hasattr(value, "dtype") and hasattr(value, "shape")) or value.dtype == object:
         value = as_array(value)
     return {"dtype": str(value.dtype), "shape": tuple(value.shape)}
 
 
 def value_info(value: Any) -> "NodeInfo":
-    """Classify a loaded value; a dataset's attrs also give its type, such as matplotlib.figure.Figure."""
+    """Classify a value and describe its children or dataset attributes."""
     kind = value_kind(value)
     if kind == "group":
         return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)))
@@ -83,8 +79,7 @@ def _mapping_items(value):
 
 @dataclass(frozen=True)
 class NodeInfo:
-    """Node classification and immediate child names, without dataset values; dtype and shape of datasets
-    in attrs when known, and their type when the reader had to load them."""
+    """Node kind, child names, and available dataset metadata."""
 
     kind: NodeKind
     children: tuple[str, ...] = ()
@@ -104,7 +99,7 @@ def _normalize(value: Any) -> Any:
 
 @contextmanager
 def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
-    """Open an HDF5 file at the node an infile path such as g/h names; the root without one."""
+    """Open an HDF5 file and yield the selected node."""
     with _h5().File(path, "r") as file:
         node = file
         for part in filter(None, (key or "").split("/")):

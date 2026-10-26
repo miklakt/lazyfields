@@ -62,7 +62,7 @@ class SourceLocator:
 
 @dataclass(frozen=True)
 class _FileSource:
-    """Physical source adapter; selections pass directly to the reader."""
+    """A reader bound to a physical source."""
 
     is_merged = False
 
@@ -74,7 +74,7 @@ class _FileSource:
 
     @property
     def attrs(self):
-        """A file's attributes from its reader, known without reads; none for what is inside it."""
+        """Reader attributes for the file root."""
         return self.reader.attrs if self.origin.infile_path is None else {}
 
     def defaults(self):
@@ -96,7 +96,6 @@ class _FileSource:
         return [replace(self.origin, selection=selection)]
 
     def digest(self):
-        # Every node inside a file changes with the file; a deleted file has no stat.
         try:
             stat = self.origin.file_path.stat()
             signature = (stat.st_size, stat.st_mtime_ns)
@@ -210,11 +209,9 @@ class Node:
 
 
 class FileSystem:
-    """Compose reader-backed trees through mounts and independent clones.
+    """Compose lazy data trees through mounts and independent clones.
 
-    Namespace edits never write source files. Registration, handles, clones and
-    locator translation perform no reads. Editing a source group discovers its
-    children through Reader metadata or fallback reads; values are not cached.
+    Namespace edits leave source files unchanged.
     """
 
     is_merged = False
@@ -318,12 +315,11 @@ class FileSystem:
         self, *, relative_to: str | Path | None = None,
         readers: Mapping[str, Reader] | None = None,
     ) -> dict:
-        """Return a data-only snapshot of current composition, without source reads.
+        """Export the composition as a data-only specification.
 
         Paths are relative to relative_to, defaulting to this filesystem's base.
         Custom readers require names in readers; supply the same names when
-        restoring the specification. Source groups with retained discovery use
-        overrides/unmount; other groups retain exact children.
+        restoring the specification.
         """
         from .specification import to_spec
         return to_spec(self, relative_to=relative_to, readers=readers)
@@ -333,7 +329,7 @@ class FileSystem:
         cls, spec: Mapping, *, relative_to: str | Path | None = None,
         readers: Mapping[str, Reader] | None = None,
     ) -> FileSystem:
-        """Restore relative to relative_to or cwd; overlays discover source children."""
+        """Restore a specification with source paths relative to relative_to or cwd."""
         from .specification import from_spec
         return from_spec(cls, spec, relative_to=relative_to, readers=readers)
 
@@ -407,11 +403,7 @@ class FileSystem:
         parent._children[name] = entry
 
     def replace(self, path: str | Path, source: Node) -> None:
-        """Atomically replace an existing subtree with an independent mounted copy.
-
-        Preparation failures retain the old attachment. Like unmount then mount,
-        replacement moves the child to the end of its parent's listing.
-        """
+        """Atomically replace a subtree, appending the new mount to its parent's listing."""
         entry = self._attachment(path, source)
         parent, name = self._parent(path)
         parent._replace_child(name, entry)

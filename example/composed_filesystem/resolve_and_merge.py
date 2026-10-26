@@ -17,7 +17,7 @@ def compose(root: Path) -> FileSystem:
     source = Path("partitions.json")
     fs = FileSystem(source, relative_to=root)
     view = fs.clone(f"{source}/partitions")
-    # Explicit discovery: read the stored references once, then bind lazy targets.
+    # Resolve stored references to source nodes.
     for name, partition in fs.read(f"{source}/partitions").items():
         target = FileSystem.from_file(root / source.parent / partition["file_ref"])
         view.replace(f"{name}/file_ref", target.node())
@@ -48,13 +48,11 @@ def main() -> None:
     spec_path = Path(__file__).with_suffix(".json")
     reference_path = Path(__file__).with_suffix(".pkl")
     rebuild = "--rebuild" in sys.argv
-    # Reuse the saved specification; pass --rebuild to compose and save it again.
     if spec_path.exists() and not rebuild:
         view = FileSystem.from_spec(json.loads(spec_path.read_text(encoding="utf-8")), relative_to=root)
     else:
         view = compose(root)
         spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
-    # One row per partition at the view root; arrays stay lazy behind each row.
     if reference_path.exists() and not rebuild:
         reference_df = pd.read_pickle(reference_path)
     else:

@@ -126,7 +126,6 @@ def update_reference_table(
              "filesystem_relative_to": relative_to}
 
     def make_row(path):
-        # The digest covers the row's file stats and namespace, so equal digests need no read.
         node = filesystem.node(path)
         if path in old_rows and old_rows[path]["lf_digest"] == node.digest():
             return old_rows[path]
@@ -194,7 +193,6 @@ class StoreAccessor:
         @wraps(method)
         def call(*args: Any, **kwargs: Any) -> Any:
             def apply(row: pd.Series) -> Any:
-                # Like a pipe row: present columns over lazy reads from the row's group.
                 fields = {key: value for key, value in row.items()
                           if not (pd.api.types.is_scalar(value) and pd.isna(value))}
                 node = self.filesystem.node(row["lf_path"])
@@ -212,7 +210,7 @@ class StoreAccessor:
 
     @property
     def filesystem(self) -> FileSystem:
-        """Reconstruct the saved specification once for this pandas object."""
+        """The table's filesystem, restored from its saved specification."""
         cache = self._obj.__dict__
         if "_filesystem" not in cache:
             try:

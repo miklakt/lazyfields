@@ -1,4 +1,4 @@
-"""Minimal read-only Tk filesystem browser with relocated mount markers."""
+"""Read-only Tk filesystem browser."""
 
 import argparse
 from datetime import datetime
@@ -11,7 +11,7 @@ from .viewers import open_value, register_viewer, suitable_viewers
 
 
 def one_line_repr(value, width=160):
-    """A shortened one-line repr; floats, NumPy ones too, show up to 8 significant digits, such as 1.2345678e-12."""
+    """A shortened one-line repr with up to eight significant digits for floats."""
     if getattr(value, "shape", None) == () and hasattr(value, "item"):  # A NumPy scalar or 0-D array.
         value = value.item()
     if isinstance(value, float):
@@ -20,11 +20,7 @@ def one_line_repr(value, width=160):
 
 
 def type_name(value):
-    """A dtype with any shape, such as float64 or float64 76×160; else the Python type, such as float.
-
-    Values from JSON are plain Python values, so they show Python types; nested lists show their first
-    elements' type and lengths like an array, such as list[float] 76×160.
-    """
+    """A type label with array or nested-list dimensions."""
     dtype, shape = getattr(value, "dtype", None), getattr(value, "shape", None)
     if dtype is not None:
         return _array_name(dtype, shape)
@@ -52,7 +48,7 @@ def _cells(value):
 
 
 def _file_value(path):
-    """A file's size and modification time, such as 75.26 MB, 2026-10-26 11:52:13."""
+    """Format a file's size and modification time."""
     try:
         stat = path.stat()
     except OSError as exc:
@@ -79,12 +75,10 @@ def browse_filesystem(filesystem):
 
 
 def panes(master, filesystem, *, navigation_widgets=()):
-    """Pack tree and details panes into master; return a function that roots them at a group.
+    """Pack tree and details panes; return a function that selects their root.
 
-    Double-clicking a dataset or scalar in either pane opens its preferred viewer, and a group goes into it;
-    right-clicking any node offers every suitable one, its value read whole, and copying its path. The muted
-    attributes of the node chosen in the tree follow its children or value; right-click copies their value.
-    Backspace selects the parent; navigation_widgets share the shortcut.
+    Double-click opens a node; right-click offers viewers and copying.
+    Backspace selects the parent. navigation_widgets share that shortcut.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -133,7 +127,7 @@ def panes(master, filesystem, *, navigation_widgets=()):
         return children[item]
 
     def columns(path):
-        """Type and value; a dataset listed without its value gets them from its attrs and leading corner."""
+        """Type and value preview for a node."""
         preview = 8  # Entries read per axis: more than the value's shortened text shows.
         if kinds[path] == "group":
             return previews.get(path, ("", ""))
@@ -211,7 +205,7 @@ def panes(master, filesystem, *, navigation_widgets=()):
         details.clipboard_append(path)
 
     def open_menu(event):
-        """Every suitable viewer for a node, and copying its path in the filesystem."""
+        """Offer viewers and copying for the selected row."""
         selected = details.identify_row(event.y)
         item = selected if selected in kinds else ""
         if not selected or "separator" in details.item(selected, "tags"):
@@ -238,7 +232,7 @@ def panes(master, filesystem, *, navigation_widgets=()):
 
 
 def _browse(value, attrs):
-    """Browse a mapping, or a list of mappings, like a filesystem group with attrs at its root."""
+    """Browse an in-memory group with root attributes."""
     return lambda window: panes(window, FileSystem.from_value(value, attrs))("/")
 
 

@@ -72,8 +72,7 @@ def show_molecule(value, attrs):
     colours, covalent, van_der_waals = zip(*(elements.get((element or "").upper(), ("pink", 0.76, 1.70))
                                              for element in value["element"]))
     covalent, blocks = np.array(covalent), []
-    # Atoms closer than their covalent radii and 0.4 Å together are bonded, as most molecular viewers infer;
-    # distances are taken a block of rows at a time, rather than all at once.
+    # Infer bonds within the summed covalent radii plus 0.4 Å, processing distances in blocks.
     for start in range(0, len(xyz), 512):
         rows = np.arange(start, min(start + 512, len(xyz)))
         squared = (xyz[rows] ** 2).sum(1)[:, None] + (xyz ** 2).sum(1) - 2 * xyz[rows] @ xyz.T

@@ -93,7 +93,7 @@ def write_h5_node(group, key, value):
 for idx, row_data in enumerate(sample_rows, start=1):
     if idx % 3 == 1:
         with open(data_dir / f"result_{idx:03d}.pkl", "wb") as fh:
-            pickle.dump(row_data, fh, protocol=4)
+            pickle.dump(row_data, fh, protocol=pickle.HIGHEST_PROTOCOL)
     elif idx % 3 == 2:
         with h5py.File(data_dir / f"result_{idx:03d}.h5", "w") as fh:
             for key, value in row_data.items():

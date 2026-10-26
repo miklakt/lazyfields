@@ -152,9 +152,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
             self.contents.pop(fh, None)
             return 0
 
-    # Read-only: let the kernel cache lookups. Attributes stay uncached so that a
-    # stat after open reports the rendered size. libfuse unmounts on SIGINT,
-    # SIGTERM and SIGHUP; a killed process leaves a dead mount that main() releases.
+    # Keep attributes uncached so stat reflects the size after rendering.
     fuse.FUSE(Operations(), str(mountpoint), foreground=foreground, nothreads=True,
               ro=True, direct_io=True, attr_timeout=0, entry_timeout=60, negative_timeout=60)
 

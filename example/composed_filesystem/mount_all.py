@@ -13,7 +13,6 @@ def main() -> None:
     debug_readers()
     root = Path(__file__).resolve().parent / "data"
     spec_path = Path(__file__).with_suffix(".json")
-    # Reuse the saved specification; pass --rebuild to compose and save it again.
     if spec_path.exists() and "--rebuild" not in sys.argv:
         fs = FileSystem.from_spec(json.loads(spec_path.read_text(encoding="utf-8")), relative_to=root)
     else:

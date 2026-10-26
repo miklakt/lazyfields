@@ -13,7 +13,6 @@ class _NodeRow(dict):
         self.node, self._methods = node, methods
 
     def __getattr__(self, name):
-        # Registered store methods, applied to this row.
         methods = self.__dict__.get("_methods")
         try:
             if methods is None: raise KeyError(name)

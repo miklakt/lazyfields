@@ -1,4 +1,4 @@
-"""Viewers shared by all browsers; each decides from a node's kind, attrs and children whether it can show it."""
+"""Viewer registration, selection, and display."""
 
 from dataclasses import replace
 from importlib.util import find_spec
@@ -10,13 +10,10 @@ _viewers = {}
 
 
 def register_viewer(name, accepts, view):
-    """Offer view(value, attrs) for nodes where accepts(node) is true, decided without reading them.
+    """Register view(value, attrs) for nodes accepted by accepts(node).
 
-    node.kind is group, dataset or scalar; node.attrs are its attributes, such as units from the
-    specification, over what is known of it: a file's file_format, a dataset's dtype and shape, and once
-    loaded its type, such as matplotlib.figure.Figure; node.children are its immediate children's names.
-    view shows value itself and returns None, as after a PyVista plotter's show(), or returns a matplotlib
-    Figure, or a function filling a Tk frame, for the browser's window.
+    accepts receives a NodeInfo. view returns a matplotlib Figure, a function
+    filling a Tk frame, or None when it opens its own window.
     Re-registering a name replaces it at highest priority.
     """
     _viewers.pop(name, None)
@@ -24,10 +21,7 @@ def register_viewer(name, accepts, view):
 
 
 def suitable_viewers(node):
-    """Suitable (name, view) pairs: the one named by the node's viewer attribute first, then the latest registered.
-
-    A failing acceptance predicate is skipped; Text accepts anything, so there is always one.
-    """
+    """Return accepted viewers, preferred first, then newest registered."""
     suitable = []
     for name, (accepts, view) in reversed(_viewers.items()):
         try:
@@ -39,12 +33,7 @@ def suitable_viewers(node):
 
 
 def open_value(master, title, value, view=None, attrs=None):
-    """Show value with view, by default its preferred viewer, in a new window; report a failing viewer.
-
-    attrs, such as a node's own from the specification, go over what value_info tells of value. A viewer
-    other than Text gets a button above it that toggles between it and the value as text; both keep their
-    state, such as a plot's zoom.
-    """
+    """Show a value using the chosen or preferred viewer, with a text toggle."""
     import tkinter as tk
     from tkinter import messagebox, ttk
 
@@ -74,7 +63,7 @@ def open_value(master, title, value, view=None, attrs=None):
             if not text.winfo_children():
                 _show_text(text, value)
             current, other = (frame, text) if frame.winfo_manager() else (text, frame)
-            window.geometry(window.geometry())  # Keep the window's size rather than fit the other view.
+            window.geometry(window.geometry())  # Preserve the window size while switching views.
             current.pack_forget()
             other.pack(fill="both", expand=True)
             button.configure(text="Viewer" if other is text else "Text")
