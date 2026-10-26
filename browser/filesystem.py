@@ -5,7 +5,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from .viewers import open_value, register_viewer, suitable_viewers
+from .viewers import _tk, open_value, register_viewer, suitable_viewers
 
 
 def one_line_repr(value, width=160):
@@ -65,9 +65,9 @@ def browse_filesystem(filesystem):
 def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
-    Double-clicking a dataset in either pane opens its preferred viewer; right-clicking offers every
-    suitable one and copying any node's path. Muted attributes follow its children or value; right-click
-    copies their value.
+    Double-clicking a dataset in either pane opens its preferred viewer; right-clicking any node offers
+    every suitable one, its value read whole, and copying its path. Muted attributes follow its children
+    or value; right-click copies their value.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -76,18 +76,15 @@ def panes(master, filesystem):
     panes.pack(fill="both", expand=True)
     tree = ttk.Treeview(panes, show="tree")
     details = ttk.Treeview(panes, columns=("type", "value"), displaycolumns=("value", "type"))
-    details.heading("#0", text="Node")
-    details.heading("type", text="Type")
-    details.heading("value", text="Value")
+    for column, text in (("#0", "Node"), ("type", "Type"), ("value", "Value")):
+        details.heading(column, text=text)
     details.column("type", width=110, stretch=False)
     details.tag_configure("attribute", foreground="gray")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
     ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in _MARKERS.items())).place(
         relx=1, rely=1, anchor="se", x=-6, y=-3)
-    kinds = {}
-    children = {}
-    previews = {}
+    kinds, children, previews = {}, {}, {}
 
     def insert(parent, path, name, kind=None, value=None):
         node = filesystem.node(path)
@@ -96,14 +93,13 @@ def panes(master, filesystem):
         elif kind == "scalar" or kind == "dataset" and value is not None:
             previews[path] = _cells(value)
         kinds[path] = kind
-        group = kind == "group"
         origin = node.origin
         marker = ("📄" if origin is not None and origin.infile_path is None else "📁" if node.is_directory
                   else _MARKERS[kind])
         prefix = "".join(f"{_MARKERS[name]} " for name, flag in (("relocated", node.is_relocated),
                                                                  ("merged", node.is_merged)) if flag)
         tree.insert(parent, "end", iid=path, text=f"{prefix}{marker} {name}")
-        if group:
+        if kind == "group":
             tree.insert(path, "end")  # Children remain undiscovered until visited.
         else:
             children[path] = None
@@ -162,10 +158,13 @@ def panes(master, filesystem):
         tree.focus(item)
         tree.see(item)
 
+    def open_node(path, view=None):
+        open_value(master, path, filesystem.read(path), view, filesystem.attrs(path, defaults=False))
+
     def enter(event):
         item = event.widget.identify_row(event.y)
         if kinds.get(item) == "dataset":
-            open_value(master, item, filesystem.read(item), attrs=filesystem.attrs(item, defaults=False))
+            open_node(item)
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             select(item)
@@ -186,17 +185,17 @@ def panes(master, filesystem):
         details.clipboard_append(path)
 
     def open_menu(event):
-        """Every suitable viewer for a dataset, and copying any node's path in the filesystem."""
+        """Every suitable viewer for a node, and copying its path in the filesystem."""
         selected = details.identify_row(event.y)
         item = selected if selected in kinds else ""
         if not selected or "separator" in details.item(selected, "tags"):
             return
+        details.focus(selected)  # Its attributes follow the focus.
         details.selection_set(selected)
         menu.delete(0, "end")
-        if kinds.get(item) == "dataset":
-            for name, viewer in suitable_viewers("dataset", filesystem.attrs(item)):
-                menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_value(
-                    master, item, filesystem.read(item), viewer))
+        if item:
+            for name, viewer in suitable_viewers(kinds[item], filesystem.attrs(item)):
+                menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or details.set(selected, "value")))
@@ -216,7 +215,7 @@ def _show_tree(window, value):
     panes(window, FileSystem.from_value(value))("/")
 
 
-register_viewer("Browser", lambda kind, attrs: kind == "group", _show_tree)
+register_viewer("Browser", lambda kind, attrs: kind == "group", _tk(_show_tree))
 
 
 def main(argv=None) -> None:

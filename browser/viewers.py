@@ -8,35 +8,36 @@ from ..readers import as_array, value_info
 _viewers = {}
 
 
-def register_viewer(name, accepts, show):
-    """Offer show(window, value) for values where accepts(kind, attrs) is true, without reading them.
+def register_viewer(name, accepts, view):
+    """Offer view(value, attrs) for values where accepts(kind, attrs) is true, decided without reading them.
 
     kind is group, dataset or scalar. attrs are a node's attributes, such as units from the specification,
     over what is known of it: a dataset's dtype and shape, and once loaded its type, such as
-    matplotlib.figure.Figure. window is a Frame inside a titled Toplevel. Re-registering a name replaces it
-    at highest priority.
+    matplotlib.figure.Figure. view shows value itself and returns None, as after a PyVista plotter's show(),
+    or returns a matplotlib Figure, or a function filling a Tk frame, for the browser's window.
+    Re-registering a name replaces it at highest priority.
     """
     _viewers.pop(name, None)
-    _viewers[name] = accepts, show
+    _viewers[name] = accepts, view
 
 
 def suitable_viewers(kind, attrs):
-    """Suitable (name, show) pairs: the one named by attrs' viewer first, then the most recently registered.
+    """Suitable (name, view) pairs: the one named by attrs' viewer first, then the most recently registered.
 
     A failing acceptance predicate is skipped; Text accepts anything, so there is always one.
     """
     suitable = []
-    for name, (accepts, show) in reversed(_viewers.items()):
+    for name, (accepts, view) in reversed(_viewers.items()):
         try:
             if accepts(kind, attrs):
-                suitable.append((name, show))
+                suitable.append((name, view))
         except Exception:
             pass
     return sorted(suitable, key=lambda viewer: viewer[0] != attrs.get("viewer"))
 
 
-def open_value(master, title, value, show=None, attrs=None):
-    """Show value in a new window with show, by default its preferred viewer; report a failing viewer.
+def open_value(master, title, value, view=None, attrs=None):
+    """Show value with view, by default its preferred viewer, in a new window; report a failing viewer.
 
     attrs, such as a node's own from the specification, go over what value_info tells of value. A viewer
     other than Text gets a button above it that toggles between it and the value as text; both keep their
@@ -45,25 +46,32 @@ def open_value(master, title, value, show=None, attrs=None):
     import tkinter as tk
     from tkinter import messagebox, ttk
 
-    if show is None:
-        info = value_info(value)
-        show = suitable_viewers(info.kind, {**info.attrs, **(attrs or {})})[0][1]
+    info = value_info(value)
+    attrs = {**info.attrs, **(attrs or {})}
+    view = view or suitable_viewers(info.kind, attrs)[0][1]
     window = tk.Toplevel(master)
     window.title(title)
-    view = ttk.Frame(window)
+    frame = ttk.Frame(window)
     try:
-        show(view, value)
+        shown = view(value, attrs)
+        if type(shown).__module__ == "matplotlib.figure":
+            _embed_figure(frame, shown)
+        elif shown is not None:
+            shown(frame)
     except Exception as exc:
         window.destroy()
         messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=master)
         return
-    if show is not _show_text:
+    if shown is None:  # Shown in a window of its own.
+        window.destroy()
+        return
+    if view is not _TEXT:
         text = ttk.Frame(window)
 
         def toggle():
             if not text.winfo_children():
                 _show_text(text, value)
-            current, other = (view, text) if view.winfo_manager() else (text, view)
+            current, other = (frame, text) if frame.winfo_manager() else (text, frame)
             window.geometry(window.geometry())  # Keep the window's size rather than fit the other view.
             current.pack_forget()
             other.pack(fill="both", expand=True)
@@ -73,10 +81,15 @@ def open_value(master, title, value, show=None, attrs=None):
         button = ttk.Button(bar, text="Text", width=7, command=toggle)
         button.pack(side="right")
         bar.pack(side="top", fill="x")
-    view.pack(fill="both", expand=True)
+    frame.pack(fill="both", expand=True)
 
 
-def embed_figure(window, figure):
+def _tk(fill):
+    """A viewer filling the browser's window with Tk widgets through fill(frame, value)."""
+    return lambda value, attrs: lambda frame: fill(frame, value)
+
+
+def _embed_figure(window, figure):
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
     canvas = FigureCanvasTkAgg(figure, master=window)
@@ -116,14 +129,14 @@ def _heatmap(axes, array, **kwargs):
     return axes.imshow(array, origin="lower", aspect="auto", interpolation="nearest", **kwargs)
 
 
-def _show_plot(window, value):
+def _plot(value, attrs):
     """Line plot for 1D, heatmap with colorbar for 2D."""
     array, figure, axes = _array_figure(value)
     if array.ndim == 1:
         axes.plot(array)
     else:
         figure.colorbar(_heatmap(axes, array))
-    embed_figure(window, figure)
+    return figure
 
 
 def _show_slices(window, value):
@@ -161,12 +174,13 @@ def _show_slices(window, value):
     scale = ttk.Scale(bar, from_=0, to=len(array) - 1, command=show)
     scale.pack(side="left", fill="x", expand=True, padx=(8, 0))
     bar.pack(side="top", fill="x")
-    embed_figure(window, figure)
+    _embed_figure(window, figure)
     show()
 
 
-register_viewer("Text", lambda kind, attrs: True, _show_text)
+_TEXT = _tk(_show_text)
+register_viewer("Text", lambda kind, attrs: True, _TEXT)
 if find_spec("matplotlib") is not None:
-    register_viewer("Plot", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (1, 2)), _show_plot)
-    register_viewer("Slices", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (3,)), _show_slices)
-    register_viewer("Figure", lambda kind, attrs: attrs.get("type") == "matplotlib.figure.Figure", embed_figure)
+    register_viewer("Plot", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (1, 2)), _plot)
+    register_viewer("Slices", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (3,)), _tk(_show_slices))
+    register_viewer("Figure", lambda kind, attrs: attrs.get("type") == "matplotlib.figure.Figure", _tk(_embed_figure))

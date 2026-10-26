@@ -23,10 +23,8 @@ def _call(text):
 
 def _literal(parameter, text):
     try:
-        if parameter.kind is parameter.VAR_POSITIONAL:
-            return _call(text)[0]
-        if parameter.kind is parameter.VAR_KEYWORD:
-            return _call(text)[1]
+        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+            return _call(text)[parameter.kind is parameter.VAR_KEYWORD]
         return ast.literal_eval(text)
     except (SyntaxError, ValueError):
         raise ValueError(f"{parameter.name} = {text} is not a literal; are quotes missing?") from None
@@ -75,21 +73,20 @@ def ask_arguments(master, name, parameters, filled, submit):
     form = tk.Toplevel(master)
     form.title(name)
     form.transient(master)
-    values, widgets = [], []
+    values = []
     for line, parameter in enumerate(parameters):
         if parameter.kind is not parameter.POSITIONAL_ONLY:
             prefix = {parameter.VAR_POSITIONAL: "*", parameter.VAR_KEYWORD: "**"}.get(parameter.kind, "")
             ttk.Label(form, text=prefix + parameter.name).grid(row=line, column=0, sticky="w", padx=4, pady=2)
-        text = filled.get(parameter.name, _default_text(parameter))
+        value = tk.StringVar(form, filled.get(parameter.name, _default_text(parameter)))
         if isinstance(parameter.default, bool):  # Reads True or False, like the literal typed in a box.
-            value = tk.StringVar(form, text)
             widget = ttk.Checkbutton(form, variable=value, onvalue="True", offvalue="False")
         else:
-            value = widget = ttk.Entry(form, width=40)
-            widget.insert(0, text)
+            widget = ttk.Entry(form, width=40, textvariable=value)
         widget.grid(row=line, column=1, sticky="ew", padx=4, pady=2)
+        if not values:
+            widget.focus_set()
         values.append(value)
-        widgets.append(widget)
     form.columnconfigure(1, weight=1)
 
     def run(event=None):
@@ -106,7 +103,6 @@ def ask_arguments(master, name, parameters, filled, submit):
     ttk.Button(form, text="Run", command=run).grid(row=len(parameters), column=1, sticky="e", padx=4, pady=4)
     form.bind("<Return>", run)
     form.bind("<Escape>", lambda event: form.destroy())
-    widgets[0].focus_set()
 
 
 def run_and_show(master, title, call):

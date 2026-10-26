@@ -62,8 +62,9 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
     xscroll = ttk.Scrollbar(top, orient="horizontal", command=table.xview)
     table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
-    for heading, _ in headings:
+    for heading, name in headings:
         table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
+        table.heading(heading, text=name, command=lambda name=name: sort_by(name))
     xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
@@ -220,8 +221,6 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             menu.add_command(label="No registered methods", state="disabled")
         menu.tk_popup(event.x_root, event.y_root)
 
-    for heading, name in headings:
-        table.heading(heading, text=name, command=lambda name=name: sort_by(name))
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
     table.bind("<Button-3>", open_menu)
