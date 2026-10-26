@@ -66,8 +66,8 @@ def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
     Double-clicking a dataset in either pane opens its preferred viewer; right-clicking any node offers
-    every suitable one, its value read whole, and copying its path. Muted attributes follow its children
-    or value; right-click copies their value.
+    every suitable one, its value read whole, and copying its path. The muted attributes of the node chosen
+    in the tree follow its children or value; right-click copies their value.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -126,20 +126,6 @@ def panes(master, filesystem):
                 return "", f"Error: {exc}"
         return previews[path]
 
-    def attributes(event=None):
-        item = details.focus() if event else tree.focus()
-        if item not in kinds:
-            return
-        details.delete(*(row for row in details.get_children() if "attribute" in details.item(row, "tags")))
-        try:
-            attrs = filesystem.attrs(item)
-        except Exception as exc:
-            attrs = {"Error": str(exc)}
-        if attrs:
-            details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
-            for name, value in attrs.items():
-                details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
-
     def show(event=None):
         item = tree.focus()
         if not item:
@@ -149,9 +135,14 @@ def panes(master, filesystem):
             entries = populate(item)
             for child in (item,) if entries is None else entries:
                 details.insert("", "end", iid=child, text=tree.item(child, "text"), values=columns(child))
-            attributes()
+            attrs = filesystem.attrs(item)
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
+            return
+        if attrs:
+            details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
+            for name, value in attrs.items():
+                details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
 
     def select(item):
         tree.selection_set(item)
@@ -190,7 +181,6 @@ def panes(master, filesystem):
         item = selected if selected in kinds else ""
         if not selected or "separator" in details.item(selected, "tags"):
             return
-        details.focus(selected)  # Its attributes follow the focus.
         details.selection_set(selected)
         menu.delete(0, "end")
         if item:
@@ -205,7 +195,6 @@ def panes(master, filesystem):
     tree.bind("<<TreeviewSelect>>", show)
     tree.bind("<Double-1>", enter)
     details.bind("<Double-1>", enter)
-    details.bind("<<TreeviewSelect>>", attributes)
     details.bind("<Button-3>", open_menu)
     return set_root
 
