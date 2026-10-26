@@ -1,5 +1,6 @@
-"""Viewers shared by all browsers; each decides from a node's kind and attrs whether it can show it."""
+"""Viewers shared by all browsers; each decides from a node's kind, attrs and children whether it can show it."""
 
+from dataclasses import replace
 from importlib.util import find_spec
 from pprint import pformat
 
@@ -9,31 +10,32 @@ _viewers = {}
 
 
 def register_viewer(name, accepts, view):
-    """Offer view(value, attrs) for values where accepts(kind, attrs) is true, decided without reading them.
+    """Offer view(value, attrs) for nodes where accepts(node) is true, decided without reading them.
 
-    kind is group, dataset or scalar. attrs are a node's attributes, such as units from the specification,
-    over what is known of it: a dataset's dtype and shape, and once loaded its type, such as
-    matplotlib.figure.Figure. view shows value itself and returns None, as after a PyVista plotter's show(),
-    or returns a matplotlib Figure, or a function filling a Tk frame, for the browser's window.
+    node.kind is group, dataset or scalar; node.attrs are its attributes, such as units from the
+    specification, over what is known of it: a file's file_format, a dataset's dtype and shape, and once
+    loaded its type, such as matplotlib.figure.Figure; node.children are its immediate children's names.
+    view shows value itself and returns None, as after a PyVista plotter's show(), or returns a matplotlib
+    Figure, or a function filling a Tk frame, for the browser's window.
     Re-registering a name replaces it at highest priority.
     """
     _viewers.pop(name, None)
     _viewers[name] = accepts, view
 
 
-def suitable_viewers(kind, attrs):
-    """Suitable (name, view) pairs: the one named by attrs' viewer first, then the most recently registered.
+def suitable_viewers(node):
+    """Suitable (name, view) pairs: the one named by the node's viewer attribute first, then the latest registered.
 
     A failing acceptance predicate is skipped; Text accepts anything, so there is always one.
     """
     suitable = []
     for name, (accepts, view) in reversed(_viewers.items()):
         try:
-            if accepts(kind, attrs):
+            if accepts(node):
                 suitable.append((name, view))
         except Exception:
             pass
-    return sorted(suitable, key=lambda viewer: viewer[0] != attrs.get("viewer"))
+    return sorted(suitable, key=lambda viewer: viewer[0] != node.attrs.get("viewer"))
 
 
 def open_value(master, title, value, view=None, attrs=None):
@@ -47,13 +49,13 @@ def open_value(master, title, value, view=None, attrs=None):
     from tkinter import messagebox, ttk
 
     info = value_info(value)
-    attrs = {**info.attrs, **(attrs or {})}
-    view = view or suitable_viewers(info.kind, attrs)[0][1]
+    node = replace(info, attrs={**info.attrs, **(attrs or {})})
+    view = view or suitable_viewers(node)[0][1]
     window = tk.Toplevel(master)
     window.title(title)
     frame = ttk.Frame(window)
     try:
-        shown = view(value, attrs)
+        shown = view(value, node.attrs)
         if type(shown).__module__ == "matplotlib.figure":
             _embed_figure(frame, shown)
         elif shown is not None:
@@ -103,16 +105,17 @@ def _show_text(window, value):
 
     text = ScrolledText(window, width=100, height=30, wrap="word")
     text.pack(fill="both", expand=True)
-    text.insert("1.0", pformat(value, width=100, sort_dicts=False))
+    text.insert("1.0", value if isinstance(value, str) else pformat(value, width=100, sort_dicts=False))
     text.configure(state="disabled")
 
 
-def _numeric(attrs, ndims):
-    """Whether attrs describe numbers with one of ndims dimensions longer than 1."""
+def _numeric(node, ndims):
+    """Whether node is a dataset of numbers with one of ndims dimensions longer than 1."""
     import numpy as np
 
-    return (np.dtype(attrs["dtype"]).kind in "biuf" and all(attrs["shape"])
-            and sum(size != 1 for size in attrs["shape"]) in ndims)
+    shape = node.attrs.get("shape")
+    return (node.kind == "dataset" and np.dtype(node.attrs["dtype"]).kind in "biuf" and all(shape)
+            and sum(size != 1 for size in shape) in ndims)
 
 
 def _array_figure(value):
@@ -179,8 +182,8 @@ def _show_slices(window, value):
 
 
 _TEXT = _tk(_show_text)
-register_viewer("Text", lambda kind, attrs: True, _TEXT)
+register_viewer("Text", lambda node: True, _TEXT)
 if find_spec("matplotlib") is not None:
-    register_viewer("Plot", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (1, 2)), _plot)
-    register_viewer("Slices", lambda kind, attrs: kind == "dataset" and _numeric(attrs, (3,)), _tk(_show_slices))
-    register_viewer("Figure", lambda kind, attrs: attrs.get("type") == "matplotlib.figure.Figure", _tk(_embed_figure))
+    register_viewer("Plot", lambda node: _numeric(node, (1, 2)), _plot)
+    register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
+    register_viewer("Figure", lambda node: node.attrs.get("type") == "matplotlib.figure.Figure", _tk(_embed_figure))

@@ -6,6 +6,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
+from ..readers import NodeInfo
 from .viewers import _tk, open_value, register_viewer, suitable_viewers
 
 
@@ -80,9 +81,9 @@ def browse_filesystem(filesystem):
 def panes(master, filesystem):
     """Pack tree and details panes into master; return a function that roots them at a group.
 
-    Double-clicking a dataset in either pane opens its preferred viewer; right-clicking any node offers
-    every suitable one, its value read whole, and copying its path. The muted attributes of the node chosen
-    in the tree follow its children or value; right-click copies their value.
+    Double-clicking a dataset or scalar in either pane opens its preferred viewer, and a group goes into it;
+    right-clicking any node offers every suitable one, its value read whole, and copying its path. The muted
+    attributes of the node chosen in the tree follow its children or value; right-click copies their value.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -110,7 +111,8 @@ def panes(master, filesystem):
         kinds[path] = kind
         origin, marker = node.origin, _MARKERS[kind]
         if origin is not None and origin.infile_path is None:
-            marker, previews[path] = "📄", ("file", _file_value(origin.file_path))
+            file_format = filesystem.attrs(path, defaults=False).get("file_format", "file")
+            marker, previews[path] = "📄", (file_format, _file_value(origin.file_path))
         elif node.is_directory:
             marker, previews[path] = "📁", ("directory", f"{len(node.listdir())} entries")
         prefix = "".join(f"{_MARKERS[name]} " for name, flag in (("relocated", node.is_relocated),
@@ -131,14 +133,17 @@ def panes(master, filesystem):
 
     def columns(path):
         """Type and value; a dataset listed without its value gets them from its attrs and leading corner."""
+        preview = 8  # Entries read per axis: more than the value's shortened text shows.
         if kinds[path] == "group":
             return previews.get(path, ("", ""))
         if path not in previews:
             try:
                 attrs = filesystem.attrs(path)
-                corner = tuple(slice(0, 8) for _ in attrs["shape"]) or None
+                corner = tuple(slice(0, preview) for _ in attrs["shape"])
+                if len(corner) == 1:
+                    corner = corner[0]
                 previews[path] = (_array_name(attrs["dtype"], attrs["shape"]),
-                                  one_line_repr(filesystem.read(path, corner)))
+                                  one_line_repr(filesystem.read(path, corner or None)))
             except Exception as exc:
                 return "", f"Error: {exc}"
         return previews[path]
@@ -171,7 +176,7 @@ def panes(master, filesystem):
 
     def enter(event):
         item = event.widget.identify_row(event.y)
-        if kinds.get(item) == "dataset":
+        if kinds.get(item) in ("dataset", "scalar"):
             open_node(item)
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
@@ -201,7 +206,8 @@ def panes(master, filesystem):
         details.selection_set(selected)
         menu.delete(0, "end")
         if item:
-            for name, viewer in suitable_viewers(kinds[item], filesystem.attrs(item)):
+            names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
+            for name, viewer in suitable_viewers(NodeInfo(kinds[item], names, filesystem.attrs(item))):
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
@@ -221,7 +227,7 @@ def _show_tree(window, value):
     panes(window, FileSystem.from_value(value))("/")
 
 
-register_viewer("Browser", lambda kind, attrs: kind == "group", _tk(_show_tree))
+register_viewer("Browser", lambda node: node.kind == "group", _tk(_show_tree))
 
 
 def main(argv=None) -> None:
