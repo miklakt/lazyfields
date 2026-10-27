@@ -97,6 +97,19 @@ def _normalize(value: Any) -> Any:
     return value.item() if getattr(value, "shape", None) == () else value
 
 
+def _dataset_value(node: Any, selection: Any = ()) -> Any:
+    """Read a dataset selection; strings of any HDF5 string type come back as str."""
+    # An empty dataspace holds no strings; h5py's asstr() cannot read it.
+    if node.shape is not None and _h5().check_string_dtype(node.dtype) is not None:
+        try:
+            # ASCII is a subset of UTF-8, so this also reads UTF-8 written with an ASCII label.
+            value = node.asstr("utf-8")[selection]
+            return value.astype(str) if getattr(value, "dtype", None) == object else value
+        except UnicodeDecodeError:
+            pass  # Not UTF-8: fall back to the stored bytes.
+    return _normalize(node[selection])
+
+
 @contextmanager
 def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
     """Open an HDF5 file and yield the selected node."""
@@ -108,7 +121,7 @@ def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
 
 
 def _read(node: Any) -> Any:
-    if isinstance(node, _h5().Dataset): return _normalize(node[()])
+    if isinstance(node, _h5().Dataset): return _dataset_value(node)
     return {key: _read(node[key]) for key in node.keys()}
 
 
@@ -122,7 +135,7 @@ def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
             return _read(node)
         if isinstance(node, _h5().Dataset):
             try:
-                return _normalize(node[selection])
+                return _dataset_value(node, selection)
             except (TypeError, ValueError):
                 pass
         return _normalize(_read(node)[selection])
@@ -137,7 +150,7 @@ def hdf5_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str
         if not isinstance(group, _h5().Group): raise NotADirectoryError(key)
         for name, node in group.items():
             kind = _hdf5_kind(node)
-            yield name, kind, _normalize(node[()]) if kind == "scalar" else None
+            yield name, kind, _dataset_value(node) if kind == "scalar" else None
 
 
 def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
