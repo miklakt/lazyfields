@@ -299,6 +299,24 @@ def register_reader(reader: Reader) -> Reader:
     return reader
 
 
+_VIEWS: dict[str, View] = {}
+
+
+def register_view(name: str, view: View) -> View:
+    """Name a view; a node whose "view" attribute names it is browsed as the object view interprets."""
+    if not isinstance(name, str) or not name or not isinstance(view, View):
+        raise TypeError("register_view needs a nonempty name and a View.")
+    _VIEWS[name] = view
+    return view
+
+
+def registered_view(name: str) -> View:
+    try:
+        return _VIEWS[name]
+    except KeyError:
+        raise KeyError(f"No view is registered as {name!r}.") from None
+
+
 def debug_readers() -> None:
     """Enable debug logging for registered readers; call before creating filesystems."""
     for reader in _READERS.values():

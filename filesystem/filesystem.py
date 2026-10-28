@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import MAPPING, NodeInfo, NodeKind, View, _reader_match, require_reader, value_info
+from ..readers import MAPPING, NodeInfo, NodeKind, View, _reader_match, registered_view, require_reader, value_info
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset, _MergedGroup
@@ -24,6 +24,11 @@ def _normalize_path(path: str | Path) -> str:
     if ".." in parts:
         raise ValueError("Filesystem paths cannot contain '..'.")
     return "/".join(parts)
+
+
+def _join(*keys: str | None) -> str | None:
+    """Keys joined by "/", skipping empty ones; None when all are."""
+    return "/".join(filter(None, keys)) or None
 
 
 def _is_name(name: Any) -> bool:
@@ -61,7 +66,7 @@ class SourceLocator:
 
 @dataclass(frozen=True, eq=False)
 class _Source:
-    """An object interpreted by a view at a key; a file when the object is its path."""
+    """An object interpreted by a view at a key: a file's path, an in-memory value, or a node to interpret."""
 
     merged = None
 
@@ -71,24 +76,32 @@ class _Source:
 
     @property
     def origin(self) -> SourceLocator | None:
+        if isinstance(self.obj, FileSystem):  # Positions continue below the interpreted node.
+            outer = self.obj._origin
+            return outer and replace(outer, infile_path=_join(outer.infile_path, self.key))
         return SourceLocator(self.obj, self.key) if isinstance(self.obj, Path) else None
 
+    @property
+    def _object(self):
+        """What the view interprets; an interpreted node's value is read for each request."""
+        return self.obj.read() if isinstance(self.obj, FileSystem) else self.obj
+
     def read(self, selection=None):
-        return self.view.get(self.obj, self.key, selection)
+        return self.view.get(self._object, self.key, selection)
 
     @property
     def format(self):
         return self.view.format if self.key is None else None
 
     def info(self, *, full=True):
-        if self.key is None and not full and isinstance(self.obj, Path):
-            return NodeInfo("group")  # A file's root is a group; saying so opens nothing.
-        info = self.view.info(self.obj, self.key)
+        if self.key is None and not full and isinstance(self.obj, (Path, FileSystem)):
+            return NodeInfo("group")  # A file's root, or an interpreted node, is a group; saying so reads nothing.
+        info = self.view.info(self._object, self.key)
         # Views without metadata describe a dataset only by loading it.
         return value_info(self.read()) if full and info.kind == "dataset" and info.dtype is None else info
 
     def items(self):
-        return ((str(name), kind, value) for name, kind, value in self.view.items(self.obj, self.key))
+        return ((str(name), kind, value) for name, kind, value in self.view.items(self._object, self.key))
 
     def locate(self, selection=None):
         if selection is not None and self.key is None:
@@ -97,17 +110,18 @@ class _Source:
         return [replace(origin, selection=selection)] if origin is not None else []
 
     def digest(self):
-        if self.origin is None:  # An in-memory object changes without a trace; only its identity counts.
+        origin = self.origin
+        if origin is None:  # An in-memory object changes without a trace; only its identity counts.
             return _digest((id(self.obj), self.key))
         try:
-            stat = self.obj.stat()
+            stat = origin.file_path.stat()
             signature = (stat.st_size, stat.st_mtime_ns)
         except FileNotFoundError:
             signature = None
-        return _digest((str(self.obj), self.key, signature))
+        return _digest((str(origin.file_path), origin.infile_path, signature))
 
     def descendant(self, path):
-        return FileSystem._from_source(replace(self, key=f"{self.key}/{path}" if self.key else path))
+        return FileSystem._from_source(replace(self, key=_join(self.key, path)))
 
 
 @dataclass(frozen=True)
@@ -146,6 +160,8 @@ class _ChildrenSource:
 class _Composed(_ChildrenSource):
     """Children resolved once, when built; editing works on copies, keeping these for export."""
 
+    origin = format = merged = None
+
     def descendant(self, path):
         name, _, rest = path.partition("/")
         return self.children[name].clone(rest)
@@ -155,7 +171,6 @@ class _Composed(_ChildrenSource):
 class _Directory(_Composed):
     """A directory with the supported files its glob patterns matched."""
 
-    merged = None
     format = "directory"
 
     origin: SourceLocator
@@ -242,16 +257,23 @@ class FileSystem:
 
     @property
     def _origin(self) -> SourceLocator | None:
-        return self._source.origin if self._source is not None else None
+        return getattr(self._source, "origin", None)
 
     @property
     def _merged(self) -> str | None:
-        return self._source.merged if self._source is not None else None
+        return getattr(self._source, "merged", None)
+
+    def _pristine(self) -> FileSystem | None:
+        """This entry's source alone, without namespace edits or attributes."""
+        return FileSystem._from_source(self._source) if self._source is not None else None
 
     @property
     def _backing(self) -> _Source | _MergedDataset | _ChildrenSource:
-        """Namespace children once expanded or composed, otherwise the lazy source."""
-        return self._source if self._children is None else _ChildrenSource(self._children)
+        """Namespace children once expanded, else the source, as the view its "view" attribute names interprets it."""
+        if self._children is not None:
+            return _ChildrenSource(self._children)
+        name = self._attrs.get("view")
+        return self._source if name is None else _Source(registered_view(name), self._pristine())
 
     @classmethod
     def _from_source(cls, source: _Source | _Directory | _MergedDataset | _MergedGroup) -> FileSystem:
@@ -323,6 +345,9 @@ class FileSystem:
         path = _normalize_path(path)
         return self._backing.descendant(path) if path else self
 
+    def _backing_at(self, path: str | Path):
+        return self._lookup(path)._backing
+
     def _expand(self) -> dict[str, FileSystem]:
         """Discover child trees only when editing their parent."""
         if self._children is None:
@@ -359,7 +384,8 @@ class FileSystem:
 
     def _moved(self, position: Path) -> bool:
         """Whether this entry's source position differs from its namespace position."""
-        return self._origin is not None and self._origin.position != position
+        origin = self._origin
+        return origin is not None and origin.position != position
 
     @staticmethod
     def _snapshot(source: Node) -> FileSystem:
@@ -394,7 +420,7 @@ class FileSystem:
         return Node(self, path)
 
     def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
-        return self._lookup(path)._backing.read(selection)
+        return self._backing_at(path).read(selection)
 
     def attrs(self, path: str | Path = "") -> dict[str, Any]:
         """Metadata given to a node; facts derived from its source are in info()."""
@@ -413,17 +439,17 @@ class FileSystem:
                        merged=entry._merged, attrs=dict(entry._attrs))
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
-        info = self._lookup(path)._backing.info()
+        info = self._backing_at(path).info()
         if info.kind != "group":
             raise NotADirectoryError(str(path))
         return info.children
 
     def items(self, path: str | Path = "") -> Iterable[tuple[str, NodeKind, Any]]:
-        return self._lookup(path)._backing.items()
+        return self._backing_at(path).items()
 
     def locate(self, path: str | Path = "", selection: Any | None = None) -> list[SourceLocator]:
-        return self._lookup(path)._backing.locate(selection)
+        return self._backing_at(path).locate(selection)
 
     def digest(self, path: str | Path = "") -> str:
         """Change digest from file stats and namespace structure, without source reads."""
-        return self._lookup(path)._backing.digest()
+        return self._backing_at(path).digest()

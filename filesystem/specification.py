@@ -39,11 +39,6 @@ def _default_reader(file, parent):
     return _reader_match(file)[0]
 
 
-def _pristine(entry):
-    """entry's binding alone, without namespace edits."""
-    return FileSystem._from_source(entry._source) if entry._source is not None else None
-
-
 def _rule_spec(rule):
     return {"merge": rule.operation, "axis": rule.axis} if rule.axis else rule.operation
 
@@ -104,14 +99,8 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
         return {**fields, "sources": {"children": inputs}}, position
 
     def describe(entry, position, parent):
-        """The full description of entry below parent, at position."""
-        fields, inner = binding(entry, position, parent)
-        if entry._attrs:
-            fields["attrs"] = dict(entry._attrs)
-        children = changes(entry, _pristine(entry), inner)
-        if children:
-            fields["children"] = children
-        return fields
+        """The full description of entry below parent, at position: its patch from an empty group."""
+        return patch(entry, FileSystem(), position, parent)
 
     def patch(entry, given, position, parent):
         """The patch turning given, a child of parent's binding, into entry."""
@@ -120,7 +109,7 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
         if fields == given_fields:
             fields, baseline = {}, given
         else:  # Rebinding: fields the new binding lacks are cleared.
-            fields, baseline = {**dict.fromkeys(given_fields), **fields}, _pristine(entry)
+            fields, baseline = {**dict.fromkeys(given_fields), **fields}, entry._pristine()
         attrs = {name: entry._attrs.get(name) for name in {**given._attrs, **entry._attrs}
                  if entry._attrs.get(name) != given._attrs.get(name)}
         if attrs:

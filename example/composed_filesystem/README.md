@@ -15,6 +15,7 @@ With the checkout installed in the active Python environment and Tk available:
 ```bash
 python3 example/composed_filesystem/mount_all.py
 python3 example/composed_filesystem/resolve_and_merge.py
+python3 example/composed_filesystem/interpret_payloads.py
 ```
 
 Each script saves its composition next to itself as a specification
@@ -36,6 +37,7 @@ All paths are relative to `example/composed_filesystem/data/`:
 
 ```text
 partitions.json
+payloads.json
 metadata/{alpha,beta,gamma}.json
 blocks/{alpha,beta,gamma}_{first,second}.json
 ```
@@ -44,7 +46,9 @@ blocks/{alpha,beta,gamma}_{first,second}.json
 `scalar_b`, a length-3 `vector`, a `(2, 3)` `matrix`, a `file_ref` string, and an
 ordered `file_refs` list. Metadata files contain `description`, `label`, `weight`,
 and `coefficients`. Block files contain `description`, `block_index`, `coordinates`,
-and `values`. The distinct fixture values help verify source order and selection.
+and `values`. `payloads.json` holds a `description` and `frames`, a base64-encoded
+NPZ archive with `positions` `(3, 4, 2)` and `box` `(3,)`. The distinct fixture
+values help verify source order and selection.
 
 ## Files as filesystem roots
 
@@ -72,6 +76,29 @@ default with `MAPPING`, which treats mappings and lists of mappings as groups.
 Pass `view=` to interpret other objects; give it `inspect_node` to decide which
 nodes are groups. In-memory sources have no files to locate and cannot be
 exported with `to_spec()`.
+
+## Interpreting stored values
+
+A value inside a file can hold structure of its own, such as an archive encoded
+in a JSON string. Register a view under a name, and set a node's `"view"`
+attribute to that name: the node becomes a group whose children are what the
+view finds in its value, and traversal, reads and selections continue inside it.
+`interpret_payloads.py` decodes `payloads.json/frames` this way:
+
+```python
+register_view("npz-base64", View(npz_base64))  # npz_base64(text) -> {name: array}
+fs = FileSystem.from_spec(
+    {"path": "payloads.json", "children": {"frames": {"attrs": {"view": "npz-base64"}}}},
+    relative_to=root,
+)
+fs.read("frames/positions", (0, slice(2)))
+```
+
+The node's value is read and decoded on each request below it. Its locations
+continue inside the file, as `payloads.json` at `frames/positions`, so digests
+follow the file. Only the attribute is exported; register the same name before
+loading the specification. An unregistered name raises `KeyError` when the node is
+used. Nodes below an interpreted node cannot be edited.
 
 `FileSystem.from_directory(path, *patterns)` binds a directory and mounts the
 files matching glob patterns that registered readers support, at their physical

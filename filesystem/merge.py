@@ -125,7 +125,6 @@ class _MergedDataset:
 class _MergedGroup(_Composed):
     """Keys of the sources, resolved by rules when merged."""
 
-    origin = format = None
     merged = "keys"
 
     sources: dict[str, FileSystem]
