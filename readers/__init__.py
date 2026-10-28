@@ -81,7 +81,7 @@ class NodeInfo:
     shape: tuple[int, ...] | None = None
     # The loaded value's type, known once a value is classified.
     type: str | None = None
-    # A file root's reader format, or "directory".
+    # The root's format from its view, such as a file's "hdf5", or "directory".
     format: str | None = None
     # Whether a namespace edit moved this subtree away from its source position.
     relocated: bool = False
@@ -184,67 +184,80 @@ def _path_get(value: Any, key: str) -> Any:
     return value
 
 
-def _check_infile_path(key: Any) -> None:
-    if key is not None and not isinstance(key, str): raise TypeError("infile_path must be a string or None.")
+def _check_key(key: Any) -> None:
+    if key is not None and not isinstance(key, str): raise TypeError("key must be a string or None.")
 
 
 @dataclass(frozen=True)
-class Reader:
-    # File suffixes handled by this reader
-    suffixes: tuple[str, ...]
-    # Loads one file and returns its complete key-value data
-    load: Callable[..., Mapping[str, Any]]
-    # Optionally reads one key or selection directly, without loading everything
-    read: Callable[..., Any] | None = None
-    # Optional inspect(file, key=None): immediate children; non-scalar values may be omitted.
-    inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
-    # Optional metadata-only classification/listing at any infile path.
-    inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
-    # Format of each file it reads, such as "pdb".
-    format: str = field(default="file", kw_only=True, compare=False)
+class View:
+    """Interprets one object: its value, and the kinds, children and values at keys below it."""
 
-    def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
-        """Read a file or one field, forwarding selection to direct readers."""
-        _check_infile_path(key)
+    # Returns the object's complete value
+    load: Callable[..., Any]
+    # Optional read(obj, key, selection): one key or selection directly, without loading everything
+    read: Callable[..., Any] | None = None
+    # Optional inspect(obj, key=None): immediate children; non-scalar values may be omitted.
+    inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
+    # Optional inspect_node(obj, key=None): kind and children, or dataset metadata, at any key.
+    inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
+    # Format of the object's root, such as "pdb".
+    format: str | None = field(default=None, kw_only=True, compare=False)
+
+    def get(self, obj: Any, key: str | None = None, selection: Any | None = None) -> Any:
+        """Read the object or one key, forwarding selection to a direct read."""
+        _check_key(key)
         if selection is not None and key is None:
-            raise ValueError("selection requires a single infile path.")
-        if key is None: return self.load(path)
-        if self.read is not None: return self.read(path, key, selection)
-        value = _path_get(self.load(path), key)
+            raise ValueError("selection requires a single key.")
+        if key is None: return self.load(obj)
+        if self.read is not None: return self.read(obj, key, selection)
+        value = _path_get(self.load(obj), key)
         if isinstance(value, (list, tuple)) and isinstance(selection, tuple):
             # JSON arrays are lists and need array indexing for multiple axes.
             import numpy as np
             value = np.asarray(value)
         return value if selection is None else value[selection]
 
-    def info(self, path: str | Path, key: str | None = None) -> NodeInfo:
+    def info(self, obj: Any, key: str | None = None) -> NodeInfo:
         """Use metadata when supported, otherwise classify one loaded value."""
-        if self.inspect_node is not None: return self.inspect_node(path, key)
+        if self.inspect_node is not None: return self.inspect_node(obj, key)
         if self.inspect is not None:
             if key is None:
-                return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(path)))
+                return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(obj)))
             if key and "/" not in key:
-                for name, kind, _ in self.items(path):
+                for name, kind, _ in self.items(obj):
                     if name == key:
                         if kind != "group": return NodeInfo(kind)
                         break
-        return value_info(self.get(path, key))
+        return value_info(self.get(obj, key))
 
-    def items(self, path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
+    def items(self, obj: Any, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
         """Inspect immediate group children as (name, kind, value)"""
-        _check_infile_path(key)
+        _check_key(key)
         key = key.strip("/") or None if key else None
         if self.inspect is not None:
-            yield from self.inspect(path, key)
+            yield from self.inspect(obj, key)
         elif self.inspect_node is not None:
-            info = self.info(path, key)
+            info = self.info(obj, key)
             if info.kind != "group": raise NotADirectoryError(key)
             for name in info.children:
                 child = f"{key}/{name}" if key else name
-                kind = self.info(path, child).kind
-                yield name, kind, self.get(path, child) if kind == "scalar" else None
+                kind = self.info(obj, child).kind
+                yield name, kind, self.get(obj, child) if kind == "scalar" else None
         else:
-            yield from _mapping_items(self.get(path, key))
+            yield from _mapping_items(self.get(obj, key))
+
+
+@dataclass(frozen=True)
+class Reader(View):
+    """A view of files: its object is a file's path, and suffixes select it."""
+
+    # File suffixes handled by this reader
+    suffixes: tuple[str, ...] = field(default=(), kw_only=True)
+    format: str = field(default="file", kw_only=True, compare=False)
+
+
+# Mappings, and lists of mappings, as groups: the view of in-memory results and of JSON and pickle data.
+MAPPING = View(lambda value: value)
 
 
 class DebugReader(Reader):
@@ -391,8 +404,9 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
 
 
 for _reader in (
-    Reader((".pkl", ".pickle"), pickle_load, format="pickle"),
-    Reader((".json",), json_load, format="json"),
-    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, format="hdf5"),
-    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, inspect_node=archive_info, format="archive")
+    Reader(pickle_load, suffixes=(".pkl", ".pickle"), format="pickle"),
+    Reader(json_load, suffixes=(".json",), format="json"),
+    Reader(hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, suffixes=(".h5", ".hdf5"), format="hdf5"),
+    Reader(archive_load, archive_get, archive_inspect, inspect_node=archive_info, suffixes=_ARCHIVE_SUFFIXES,
+           format="archive")
     ): register_reader(_reader)

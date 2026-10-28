@@ -64,6 +64,15 @@ The reader is inferred from the filename unless supplied explicitly. Neither
 is shorthand for wrapping and mounting each relative filename this way. Repeated
 filenames are registered once; overlapping file paths are rejected before mounting.
 
+Every source is an object interpreted by a `View`: its `load`, and optionally
+`read`, `inspect` and `inspect_node`, answer for the object at a key. A `Reader`
+is a `View` whose object is a file's path, selected by its `suffixes`.
+`FileSystem.from_value(value)` roots a filesystem at an in-memory object, by
+default with `MAPPING`, which treats mappings and lists of mappings as groups.
+Pass `view=` to interpret other objects; give it `inspect_node` to decide which
+nodes are groups. In-memory sources have no files to locate and cannot be
+exported with `to_spec()`.
+
 `FileSystem.from_directory(path, *patterns)` binds a directory and mounts the
 files matching glob patterns that registered readers support, at their physical
 relative paths. Unsupported files and directories are skipped. Use `"*.json"` to

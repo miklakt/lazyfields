@@ -74,4 +74,4 @@ def _pdb_inspect(path, key=None):
     yield from ((key, "dataset", None) for key in (*_PDB_COLUMNS, "bonds"))
 
 
-PROTEIN_DATA_BANK = Reader((".pdb", ".ent"), _pdb_load, _pdb_read, _pdb_inspect, format="pdb")
+PROTEIN_DATA_BANK = Reader(_pdb_load, _pdb_read, _pdb_inspect, suffixes=(".pdb", ".ent"), format="pdb")

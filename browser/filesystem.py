@@ -123,16 +123,16 @@ def panes(master, filesystem, *, navigation_widgets=()):
                      if entry[:2] != ("!disabled", "!selected")]
         style.map("Treeview", **{option: [("selected", "!focus", colour), *inherited]})
 
-    panes = ttk.Panedwindow(master, orient="horizontal")
-    panes.pack(fill="both", expand=True)
-    tree = ttk.Treeview(panes, show="tree")
-    details = ttk.Treeview(panes, columns=("type", "value"), displaycolumns=("value", "type"))
+    split = ttk.Panedwindow(master, orient="horizontal")
+    split.pack(fill="both", expand=True)
+    tree = ttk.Treeview(split, show="tree")
+    details = ttk.Treeview(split, columns=("type", "value"), displaycolumns=("value", "type"))
     for column, text in (("#0", "Node"), ("type", "Type"), ("value", "Value")):
         details.heading(column, text=text)
     details.column("type", width=110, stretch=False)
     details.tag_configure("attribute", foreground="gray")
-    panes.add(tree, weight=1)
-    panes.add(details, weight=2)
+    split.add(tree, weight=1)
+    split.add(details, weight=2)
     ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in {**_KINDS, **_FLAGS}.items())).place(
         relx=1, rely=1, anchor="se", x=-6, y=-3)
     infos, children, previews = {}, {}, {}
@@ -143,8 +143,8 @@ def panes(master, filesystem, *, navigation_widgets=()):
             previews[path] = _cells(value)
         if info.format == "directory":
             previews[path] = ("directory", f"{len(filesystem.listdir(path))} entries")
-        elif info.format:
-            previews[path] = (info.format, _file_value(filesystem.node(path).origin.file_path))
+        elif info.format and (origin := filesystem.node(path).origin) is not None:
+            previews[path] = (info.format, _file_value(origin.file_path))
         tree.insert(parent, "end", iid=path, text=_label(info, name))
         if info.kind == "group":
             tree.insert(path, "end")  # Children remain undiscovered until visited.
@@ -231,7 +231,12 @@ def panes(master, filesystem, *, navigation_widgets=()):
         return "break"
 
     def open_node(path, view=None):
-        open_value(master, path, filesystem.read(path), view, filesystem.attrs(path))
+        if view is _browse:  # A subtree browses from its own sources, without loading it.
+            window = tk.Toplevel(master)
+            window.title(path)
+            panes(window, filesystem.clone(path))("/")
+        else:
+            open_value(master, path, filesystem.read(path), view, filesystem.attrs(path))
 
     def enter(event):
         item = event.widget.identify_row(event.y)
@@ -286,7 +291,7 @@ def panes(master, filesystem, *, navigation_widgets=()):
 
 def _browse(value, attrs):
     """Browse an in-memory group with root attributes."""
-    return lambda window: panes(window, FileSystem.from_value(value, attrs))("/")
+    return lambda window: panes(window, FileSystem.from_value(value, attrs=attrs))("/")
 
 
 register_viewer("Browser", lambda node: node.kind == "group", _browse)

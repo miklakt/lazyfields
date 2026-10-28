@@ -19,9 +19,8 @@ import time
 from itertools import count
 from pathlib import Path
 
-from .filesystem import FileSystem
+from .filesystem import FileSystem, _Source
 from .specification import add_spec_arguments, filesystem_from_arguments
-from ..readers import require_reader
 
 PREVIEW_ROWS = 5
 # Sources without direct reads load whole files; skip previews above this size.
@@ -44,10 +43,9 @@ def preview(filesystem: FileSystem, path: str, kind: str):
         return None
 
     def render():
-        node = filesystem.node(path)
-        origin = node.origin
-        if origin is None or require_reader(origin.file_path).read is None:
-            total = sum(file.stat().st_size for file in node.files())
+        source = filesystem._lookup(path)._source
+        if not isinstance(source, _Source) or source.view.read is None:  # Slicing loads whole sources.
+            total = sum(file.stat().st_size for file in filesystem.node(path).files())
             if total > PREVIEW_LOAD_LIMIT:
                 return f"{path}: preview skipped, it would load {total / 2**20:.0f} MiB\n"
         value = filesystem.read(path, slice(0, PREVIEW_ROWS))

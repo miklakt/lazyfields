@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import NodeInfo, NodeKind, Reader, _reader_match, require_reader, value_info
+from ..readers import MAPPING, NodeInfo, NodeKind, View, _reader_match, require_reader, value_info
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset, _MergedGroup
@@ -59,50 +59,55 @@ class SourceLocator:
         return self.file_path / (self.infile_path or "")
 
 
-@dataclass(frozen=True)
-class _FileSource:
-    """A reader bound to a physical source."""
+@dataclass(frozen=True, eq=False)
+class _Source:
+    """An object interpreted by a view at a key; a file when the object is its path."""
 
     merged = None
 
-    reader: Reader
-    origin: SourceLocator
+    view: View
+    obj: Any
+    key: str | None = None
+
+    @property
+    def origin(self) -> SourceLocator | None:
+        return SourceLocator(self.obj, self.key) if isinstance(self.obj, Path) else None
 
     def read(self, selection=None):
-        return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
+        return self.view.get(self.obj, self.key, selection)
 
     @property
     def format(self):
-        return self.reader.format if self.origin.infile_path is None else None
+        return self.view.format if self.key is None else None
 
     def info(self, *, full=True):
-        if self.origin.infile_path is None and not full:
-            return NodeInfo("group")
-        info = self.reader.info(self.origin.file_path, self.origin.infile_path)
-        # Readers without metadata describe a dataset only by loading it.
+        if self.key is None and not full and isinstance(self.obj, Path):
+            return NodeInfo("group")  # A file's root is a group; saying so opens nothing.
+        info = self.view.info(self.obj, self.key)
+        # Views without metadata describe a dataset only by loading it.
         return value_info(self.read()) if full and info.kind == "dataset" and info.dtype is None else info
 
     def items(self):
-        return ((str(name), kind, value) for name, kind, value in
-                self.reader.items(self.origin.file_path, self.origin.infile_path))
+        return ((str(name), kind, value) for name, kind, value in self.view.items(self.obj, self.key))
 
     def locate(self, selection=None):
-        if selection is not None and self.origin.infile_path is None:
+        if selection is not None and self.key is None:
             raise ValueError("selection requires a dataset path.")
-        return [replace(self.origin, selection=selection)]
+        origin = self.origin
+        return [replace(origin, selection=selection)] if origin is not None else []
 
     def digest(self):
+        if self.origin is None:  # An in-memory object changes without a trace; only its identity counts.
+            return _digest((id(self.obj), self.key))
         try:
-            stat = self.origin.file_path.stat()
+            stat = self.obj.stat()
             signature = (stat.st_size, stat.st_mtime_ns)
         except FileNotFoundError:
             signature = None
-        return _digest((str(self.origin.file_path), self.origin.infile_path, signature))
+        return _digest((str(self.obj), self.key, signature))
 
     def descendant(self, path):
-        parent = self.origin.infile_path
-        origin = replace(self.origin, infile_path=f"{parent}/{path}" if parent else path)
-        return FileSystem._from_source(replace(self, origin=origin))
+        return FileSystem._from_source(replace(self, key=f"{self.key}/{path}" if self.key else path))
 
 
 @dataclass(frozen=True)
@@ -205,7 +210,7 @@ class FileSystem:
     Namespace edits leave source files unchanged.
     """
 
-    _source: _FileSource | _Directory | _MergedDataset | _MergedGroup | None = None
+    _source: _Source | _Directory | _MergedDataset | _MergedGroup | None = None
     _children: dict[str, FileSystem] | None = None
     _source_children: tuple[str, ...] | None = None  # The source's child names when expanded, for export.
     _attrs: Mapping[str, Any] = {}  # From the specification; replaced, never mutated.
@@ -244,12 +249,12 @@ class FileSystem:
         return self._source.merged if self._source is not None else None
 
     @property
-    def _backing(self) -> _FileSource | _MergedDataset | _ChildrenSource:
+    def _backing(self) -> _Source | _MergedDataset | _ChildrenSource:
         """Namespace children once expanded or composed, otherwise the lazy source."""
         return self._source if self._children is None else _ChildrenSource(self._children)
 
     @classmethod
-    def _from_source(cls, source: _FileSource | _Directory | _MergedDataset | _MergedGroup) -> FileSystem:
+    def _from_source(cls, source: _Source | _Directory | _MergedDataset | _MergedGroup) -> FileSystem:
         """Bind a lazy source without reinitializing a physical namespace."""
         origin = source.origin
         result = cls.__new__(cls)
@@ -259,20 +264,22 @@ class FileSystem:
         return result
 
     @classmethod
-    def from_file(cls, path: str | Path, reader: Reader | None = None) -> FileSystem:
-        """Root a filesystem at a file's contents without reading them."""
-        if reader is not None and not isinstance(reader, Reader):
-            raise TypeError("reader must be a Reader instance.")
+    def from_file(cls, path: str | Path, reader: View | None = None) -> FileSystem:
+        """Root a filesystem at a file's contents without reading them; reader is chosen by suffix if not given."""
+        if reader is not None and not isinstance(reader, View):
+            raise TypeError("reader must be a View, such as a Reader.")
         path = Path(path).absolute()
-        return cls._from_source(_FileSource(reader or require_reader(path), SourceLocator(path)))
+        return cls._from_source(_Source(reader or require_reader(path), path))
 
     @classmethod
-    def from_value(cls, value: Mapping | list, attrs: Mapping[str, Any] | None = None) -> FileSystem:
-        """Root a filesystem at an in-memory group, such as a mapping of results, like a file's contents.
+    def from_value(cls, value: Any, *, view: View = MAPPING, attrs: Mapping[str, Any] | None = None) -> FileSystem:
+        """Root a filesystem at an in-memory object, interpreted by view; by default a mapping of results.
 
         attrs, if given, become its root's attributes.
         """
-        result = cls.from_file("<value>", Reader((), lambda _: value))
+        if not isinstance(view, View):
+            raise TypeError("view must be a View instance.")
+        result = cls._from_source(_Source(view, value))
         result._attrs = dict(attrs or {})
         return result
 
@@ -291,7 +298,7 @@ class FileSystem:
 
     def to_spec(
         self, *, relative_to: str | Path | None = None,
-        readers: Mapping[str, Reader] | None = None,
+        readers: Mapping[str, View] | None = None,
     ) -> dict:
         """Export the composition as a data-only specification.
 
@@ -305,7 +312,7 @@ class FileSystem:
     @classmethod
     def from_spec(
         cls, spec: Mapping, *, relative_to: str | Path | None = None,
-        readers: Mapping[str, Reader] | None = None,
+        readers: Mapping[str, View] | None = None,
     ) -> FileSystem:
         """Restore a specification with source paths relative to relative_to or cwd."""
         from .specification import from_spec

@@ -14,9 +14,9 @@ from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import FileSystem, SourceLocator, _Directory, _FileSource, _is_name
+from .filesystem import FileSystem, _Directory, _Source, _is_name
 from .merge import _MergedDataset, _MergedGroup, collect, concatenate, hstack, merge, prefer, prefix, stack, vstack
-from ..readers import Reader, _reader_match, require_reader
+from ..readers import View, _reader_match, require_reader
 
 _BINDING = ("path", "reader", "merge", "axis", "sources", "mount")
 _FIELDS = {*_BINDING, "attrs", "children", "$comment"}
@@ -25,17 +25,17 @@ _RULES = {rule.__name__: rule for rule in (collect, prefer, prefix, stack, conca
 
 def _readers(readers):
     readers = dict(readers or {})
-    if any(not isinstance(name, str) or not name or not isinstance(reader, Reader)
+    if any(not isinstance(name, str) or not name or not isinstance(reader, View)
            for name, reader in readers.items()):
-        raise TypeError("readers must map nonempty names to Reader instances.")
+        raise TypeError("readers must map nonempty names to views, such as Readers.")
     return readers
 
 
 def _default_reader(file, parent):
     """The reader of a file unless named: its parent's inside the same file, otherwise by suffix."""
     source = parent._source if parent is not None else None
-    if isinstance(source, _FileSource) and source.origin.file_path == file:
-        return source.reader
+    if isinstance(source, _Source) and source.origin is not None and source.origin.file_path == file:
+        return source.view
     return _reader_match(file)[0]
 
 
@@ -78,13 +78,15 @@ def to_spec(filesystem, *, relative_to=None, readers=None):
     def binding(entry, position, parent):
         """Fields binding entry below parent, at position, and the position of its children."""
         source = entry._source
-        if isinstance(source, _FileSource):
+        if isinstance(source, _Source):
             origin = source.origin
+            if origin is None:
+                raise ValueError("An in-memory object cannot be described by a specification.")
             fields = {"path": path(origin.position, position)}
-            if source.reader is not _default_reader(origin.file_path, parent):
-                if id(source.reader) not in names:
+            if source.view is not _default_reader(origin.file_path, parent):
+                if id(source.view) not in names:
                     raise ValueError(f"Supply a reader name for {origin.file_path!s} in readers.")
-                fields["reader"] = names[id(source.reader)]
+                fields["reader"] = names[id(source.view)]
             return fields, origin.position
         if isinstance(source, _Directory):
             directory = source.origin.position
@@ -179,8 +181,8 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
         if name is not None and name not in readers:
             raise ValueError(f"Unknown reader name: {name!r}")
         reader = readers[name] if name is not None else _default_reader(file, parent) or require_reader(file)
-        infile = position.relative_to(file).as_posix() if file != position else None
-        return cls._from_source(_FileSource(reader, SourceLocator(file, infile)))
+        key = position.relative_to(file).as_posix() if file != position else None
+        return cls._from_source(_Source(reader, file, key))
 
     def globs(rules):
         if not isinstance(rules, list) or any(
