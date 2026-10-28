@@ -1,4 +1,4 @@
-import hashlib, logging, pickle, shutil, sys, tarfile, warnings, zipfile
+import hashlib, logging, shutil, sys, tarfile, warnings, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
@@ -14,7 +14,6 @@ except ImportError:
     import json
 
 
-def pickle_load(path: str | Path) -> Mapping[str, Any]: return pickle.loads(Path(path).read_bytes())
 def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
 
 
@@ -421,8 +420,10 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).info(inner_path, key)
 
 
+from .pickled import PICKLE, pickle_load  # noqa: E402  Builds on the names above.
+
 for _reader in (
-    Reader(pickle_load, suffixes=(".pkl", ".pickle"), format="pickle"),
+    PICKLE,
     Reader(json_load, suffixes=(".json",), format="json"),
     Reader(hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, suffixes=(".h5", ".hdf5"), format="hdf5"),
     Reader(archive_load, archive_get, archive_inspect, inspect_node=archive_info, suffixes=_ARCHIVE_SUFFIXES,

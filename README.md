@@ -78,6 +78,13 @@ Supported file extensions are `.pkl`, `.pickle`, `.json`, `.h5`, `.hdf5`, `.zip`
 An archive must contain exactly one supported data file.
 Support for other formats can be added by providing a custom reader.
 
+Pickle files are read as data, without running code they contain. Their structure, and the dtype and shape of NumPy
+arrays, come from scanning the file, so listing a large pickle reads almost nothing. Loading builds only built-in
+types, dates and times, decimals, ordered and default dicts, and NumPy arrays. Any other object, such as a pandas
+DataFrame or one of your own classes, becomes a record of what it is made of: its `type` name, the `args` it is
+built from, and its `state` and `items`. Its code is never imported or run, and the data inside it, such as a
+DataFrame's column arrays, stays readable.
+
 >  Extracted archive contents are reused from a temporary directory while the Python process is running.
 
 ### Indexing and data access
@@ -365,4 +372,5 @@ over the physical files.
 
 `example/composed_filesystem/README.md` describes filesystems and the specification
 format. `example/large_arrays/README.md` shows how to browse a specification in the
-OS file manager with `lf-mount`.
+OS file manager with `lf-mount`. `example/pickled_objects/README.md` browses a pickle
+holding a pandas DataFrame and a custom object, as records and through a view.
