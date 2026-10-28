@@ -57,6 +57,7 @@ class _Record(Mapping):
     """
 
     type: str
+    __hash__ = object.__hash__  # Stands in for whatever it records, including as a dict key; identity is enough.
 
     def __new__(cls, *args, **kwargs):
         record = super().__new__(cls)
@@ -75,6 +76,9 @@ class _Record(Mapping):
     def __len__(self):
         return len(self._parts)
 
+    def __repr__(self):
+        return f"{self.type}({_outline(self._parts)!r})"
+
     def __setstate__(self, state):
         self._parts["state"] = _positional(state) if isinstance(state, tuple) else state
 
@@ -90,6 +94,17 @@ class _Record(Mapping):
 
     def __call__(self, *args, **kwargs):  # Calling a recorded object is recorded too.
         return _record_type(f"{self.type}()")(*args, **kwargs)
+
+
+def _outline(value):
+    """value with any nested record reduced to its type: records often share deeply, so repr stays bounded."""
+    if isinstance(value, _Record):
+        return f"<{value.type}>"
+    if isinstance(value, dict):
+        return {key: _outline(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_outline(item) for item in value)
+    return value
 
 
 @lru_cache(maxsize=None)
@@ -288,7 +303,9 @@ def _inspect_node(path, key=None) -> NodeInfo:
     node = _structure(path, key)
     kind = _kind(node)
     if kind == "group":
-        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)))
+        # A group's type names its class only when it stands for a reconstructed object, not a real container.
+        record_type = node.type if isinstance(node, _Record) else None
+        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)), type=record_type)
     if kind == "scalar":
         return NodeInfo(kind)
     return _array(node) or (value_info(node) if _plain(node) else NodeInfo(kind))

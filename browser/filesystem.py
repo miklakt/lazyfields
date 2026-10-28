@@ -67,6 +67,11 @@ _FLAGS = {"relocated": "↪", "merged": "⋈"}
 _FACTS = ("format", "merged", "axis", "dtype", "shape", "type")  # Derived facts listed beside attributes.
 
 
+def _collapsed(info):
+    """Default collapsed when a group's type marks it reconstructed, not a real container; attrs overrides either way."""
+    return info.attrs.get("collapsed", info.kind == "group" and info.type is not None)
+
+
 def _label(info, name):
     """Tree text: flag markers, then a format or kind marker, then the name."""
     flags = "".join(f"{marker} " for flag, marker in _FLAGS.items() if getattr(info, flag))
@@ -146,7 +151,8 @@ def panes(master, filesystem, *, navigation_widgets=()):
         elif info.format and (origin := filesystem.node(path).origin) is not None:
             previews[path] = (info.format, _file_value(origin.file_path))
         tree.insert(parent, "end", iid=path, text=_label(info, name))
-        if info.kind == "group":
+        # A tree's own root always expands, even as a record: it was opened to see inside it.
+        if info.kind == "group" and (parent == "" or not _collapsed(info)):
             tree.insert(path, "end")  # Children remain undiscovered until visited.
         else:
             children[path] = None
@@ -231,17 +237,16 @@ def panes(master, filesystem, *, navigation_widgets=()):
         return "break"
 
     def open_node(path, view=None):
-        if view is _browse:  # A subtree browses from its own sources, without loading it.
-            window = tk.Toplevel(master)
-            window.title(path)
-            panes(window, filesystem.clone(path))("/")
-        else:
-            open_value(master, path, filesystem.read(path), view, filesystem.attrs(path))
+        # Browsing stays lazy: a clone of its own source, not the value loaded.
+        value = filesystem.clone(path) if view is _browse else filesystem.read(path)
+        open_value(master, path, value, view, filesystem.attrs(path))
 
     def enter(event):
         item = event.widget.identify_row(event.y)
         if item in infos and infos[item].kind in ("dataset", "scalar"):
             open_node(item)
+        elif item in infos and _collapsed(infos[item]):
+            open_node(item, _browse)
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
             select(item)
@@ -290,8 +295,9 @@ def panes(master, filesystem, *, navigation_widgets=()):
 
 
 def _browse(value, attrs):
-    """Browse an in-memory group with root attributes."""
-    return lambda window: panes(window, FileSystem.from_value(value, attrs=attrs))("/")
+    """Browse a lazy source as it stands, or an in-memory group with root attributes."""
+    source = value if isinstance(value, FileSystem) else FileSystem.from_value(value, attrs=attrs)
+    return lambda window: panes(window, source)("/")
 
 
 register_viewer("Browser", lambda node: node.kind == "group", _browse)

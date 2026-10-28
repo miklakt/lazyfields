@@ -4,6 +4,7 @@ from dataclasses import replace
 from importlib.util import find_spec
 from pprint import pformat
 
+from ..filesystem import FileSystem
 from ..readers import as_array, value_info
 
 _viewers = {}
@@ -91,6 +92,8 @@ def _embed_figure(window, figure):
 def _show_text(window, value):
     from tkinter.scrolledtext import ScrolledText
 
+    if isinstance(value, FileSystem):  # A lazy source, read only once text is actually requested.
+        value = value.read()
     text = ScrolledText(window, width=100, height=30, wrap="word")
     text.pack(fill="both", expand=True)
     text.insert("1.0", value if isinstance(value, str) else pformat(value, width=100, sort_dicts=False))
