@@ -111,7 +111,7 @@ def update_reference_table(
             raise ValueError("relative_to is only supported for filesystem specifications; "
                              "a directory source defines its own root.")
         relative_to = str(Path(source).resolve())
-        source = {"paths": ["*"]}
+        source = {"mount": [{"glob": "*"}]}
     elif relative_to is None:
         relative_to = reference_df.attrs.get("filesystem_relative_to")
     relative_to = str(relative_to) if relative_to is not None else None

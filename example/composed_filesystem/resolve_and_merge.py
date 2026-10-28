@@ -28,7 +28,7 @@ def compose(root: Path) -> FileSystem:
         blocks = FileSystem.merge(sources, rules={
             "description": prefix(),
             "block_index": collect(),
-            "coordinates": prefer(*sources),
+            "coordinates": prefer(),
             "values": stack(axis=0),
         })
         view.replace(f"{name}/file_refs", blocks.node())

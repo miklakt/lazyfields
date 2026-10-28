@@ -37,8 +37,7 @@ def open_value(master, title, value, view=None, attrs=None):
     import tkinter as tk
     from tkinter import messagebox, ttk
 
-    info = value_info(value)
-    node = replace(info, attrs={**info.attrs, **(attrs or {})})
+    node = replace(value_info(value), attrs=attrs or {})
     view = view or suitable_viewers(node)[0][1]
     window = tk.Toplevel(master)
     window.title(title)
@@ -102,9 +101,8 @@ def _numeric(node, ndims):
     """Whether node is a dataset of numbers with one of ndims dimensions longer than 1."""
     import numpy as np
 
-    shape = node.attrs.get("shape")
-    return (node.kind == "dataset" and np.dtype(node.attrs["dtype"]).kind in "biuf" and all(shape)
-            and sum(size != 1 for size in shape) in ndims)
+    return (node.kind == "dataset" and np.dtype(node.dtype).kind in "biuf" and all(node.shape)
+            and sum(size != 1 for size in node.shape) in ndims)
 
 
 def _array_figure(value):
@@ -175,4 +173,4 @@ register_viewer("Text", lambda node: True, _TEXT)
 if find_spec("matplotlib") is not None:
     register_viewer("Plot", lambda node: _numeric(node, (1, 2)), _plot)
     register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
-    register_viewer("Figure", lambda node: node.attrs.get("type") == "matplotlib.figure.Figure", _tk(_embed_figure))
+    register_viewer("Figure", lambda node: node.type == "matplotlib.figure.Figure", _tk(_embed_figure))

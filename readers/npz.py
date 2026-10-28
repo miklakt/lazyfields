@@ -44,9 +44,9 @@ def _npz_info(path, key=None):
         return NodeInfo("group", tuple(name for name, _, _ in _npz_headers(path)))
     for name, kind, attrs in _npz_headers(path):
         if name == key:
-            return NodeInfo(kind, attrs=attrs if kind == "dataset" else {})
+            return NodeInfo(kind, **(attrs if kind == "dataset" else {}))
     raise KeyError(key)
 
 
 NUMPY_ARCHIVE = Reader((".npz",), _npz_load, _npz_read, _npz_inspect, inspect_node=_npz_info,
-                       attrs={"file_format": "npz"})
+                       format="npz")

@@ -17,13 +17,13 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 def is_numeric_3d(node):
     """Numeric 3D datasets, by their shape, which only datasets have."""
-    shape = node.attrs.get("shape", ())
-    return len(shape) == 3 and all(shape) and np.dtype(node.attrs["dtype"]).kind in "biuf"
+    shape = node.shape or ()
+    return len(shape) == 3 and all(shape) and np.dtype(node.dtype).kind in "biuf"
 
 
 def is_image(node):
     """Recognize channel-first RGB arrays using metadata alone."""
-    return is_numeric_3d(node) and node.attrs["shape"][0] == 3
+    return is_numeric_3d(node) and node.shape[0] == 3
 
 
 def is_volume(node):

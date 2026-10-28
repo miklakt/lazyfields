@@ -83,7 +83,7 @@ def main():
     for name, sha256 in PDB_SHA256.items():
         fetch(f"https://files.rcsb.org/download/{name}", sha256, DATA_DIR / name, f"PDB entry {name}")
     spec = {"children": {
-        "volume.npz": {"path": "volume.npz", "overrides": {
+        "volume.npz": {"path": "volume.npz", "children": {
             "voxels": {"attrs": volume_metadata()}}},
         "image.npz": {"path": "image.npz"},
         **{name: {"path": name} for name in PDB_SHA256},

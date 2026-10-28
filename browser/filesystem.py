@@ -1,12 +1,12 @@
 """Read-only Tk filesystem browser."""
 
 import argparse
+from dataclasses import replace
 from datetime import datetime
 from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from ..readers import NodeInfo
 from .viewers import open_value, register_viewer, suitable_viewers
 
 
@@ -61,7 +61,17 @@ def _file_value(path):
     return f"{size:.4g} {unit}, {datetime.fromtimestamp(stat.st_mtime).isoformat(sep=' ', timespec='seconds')}"
 
 
-_MARKERS = {"group": "⊞", "dataset": "▦", "scalar": "·", "relocated": "↪", "merged": "⋈"}
+_KINDS = {"group": "⊞", "dataset": "▦", "scalar": "·"}
+_FORMATS = {"directory": "📁"}  # Any other format is a file root.
+_FLAGS = {"relocated": "↪", "merged": "⋈"}
+_FACTS = ("format", "merged", "axis", "dtype", "shape", "type")  # Derived facts listed beside attributes.
+
+
+def _label(info, name):
+    """Tree text: flag markers, then a format or kind marker, then the name."""
+    flags = "".join(f"{marker} " for flag, marker in _FLAGS.items() if getattr(info, flag))
+    marker = _FORMATS.get(info.format, "📄") if info.format else _KINDS[info.kind]
+    return f"{flags}{marker} {name}"
 
 
 def bind_context_menu(widget, callback):
@@ -123,27 +133,20 @@ def panes(master, filesystem, *, navigation_widgets=()):
     details.tag_configure("attribute", foreground="gray")
     panes.add(tree, weight=1)
     panes.add(details, weight=2)
-    ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in _MARKERS.items())).place(
+    ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in {**_KINDS, **_FLAGS}.items())).place(
         relx=1, rely=1, anchor="se", x=-6, y=-3)
-    kinds, children, previews = {}, {}, {}
+    infos, children, previews = {}, {}, {}
 
     def insert(parent, path, name, kind=None, value=None):
-        node = filesystem.node(path)
-        if kind is None:
-            kind = node.kind
-        elif kind == "scalar" or kind == "dataset" and value is not None:
+        info = infos[path] = filesystem.info(path, full=False)
+        if kind == "scalar" or kind == "dataset" and value is not None:
             previews[path] = _cells(value)
-        kinds[path] = kind
-        origin, marker = node.origin, _MARKERS[kind]
-        if origin is not None and origin.infile_path is None:
-            file_format = filesystem.attrs(path, defaults=False).get("file_format", "file")
-            marker, previews[path] = "📄", (file_format, _file_value(origin.file_path))
-        elif node.is_directory:
-            marker, previews[path] = "📁", ("directory", f"{len(node.listdir())} entries")
-        prefix = "".join(f"{_MARKERS[name]} " for name, flag in (("relocated", node.is_relocated),
-                                                                 ("merged", node.is_merged)) if flag)
-        tree.insert(parent, "end", iid=path, text=f"{prefix}{marker} {name}")
-        if kind == "group":
+        if info.format == "directory":
+            previews[path] = ("directory", f"{len(filesystem.listdir(path))} entries")
+        elif info.format:
+            previews[path] = (info.format, _file_value(filesystem.node(path).origin.file_path))
+        tree.insert(parent, "end", iid=path, text=_label(info, name))
+        if info.kind == "group":
             tree.insert(path, "end")  # Children remain undiscovered until visited.
         else:
             children[path] = None
@@ -156,18 +159,22 @@ def panes(master, filesystem, *, navigation_widgets=()):
                                    for name, kind, value in filesystem.items(item))
         return children[item]
 
+    def described(path):
+        """Info with a dataset's dtype and shape; a group's children are listed by the tree instead."""
+        return filesystem.info(path, full=infos[path].kind != "group")
+
     def columns(path):
         """Type and value preview for a node."""
         preview = 8  # Entries read per axis: more than the value's shortened text shows.
-        if kinds[path] == "group":
+        if infos[path].kind == "group":
             return previews.get(path, ("", ""))
         if path not in previews:
             try:
-                attrs = filesystem.attrs(path)
-                corner = tuple(slice(0, preview) for _ in attrs["shape"])
+                info = described(path)
+                corner = tuple(slice(0, preview) for _ in info.shape)
                 if len(corner) == 1:
                     corner = corner[0]
-                previews[path] = (_array_name(attrs["dtype"], attrs["shape"]),
+                previews[path] = (_array_name(info.dtype, info.shape),
                                   one_line_repr(filesystem.read(path, corner or None)))
             except Exception as exc:
                 return "", f"Error: {exc}"
@@ -182,13 +189,15 @@ def panes(master, filesystem, *, navigation_widgets=()):
             entries = populate(item)
             for child in (item,) if entries is None else entries:
                 details.insert("", "end", iid=child, text=tree.item(child, "text"), values=columns(child))
-            attrs = filesystem.attrs(item)
+            info = described(item)
         except Exception as exc:
             details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
             return
-        if attrs:
+        facts = ((name, getattr(info, name)) for name in _FACTS if getattr(info, name) is not None)
+        rows = [*facts, *info.attrs.items()]
+        if rows:
             details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
-            for name, value in attrs.items():
+            for name, value in rows:
                 details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
 
     def select(item):
@@ -222,11 +231,11 @@ def panes(master, filesystem, *, navigation_widgets=()):
         return "break"
 
     def open_node(path, view=None):
-        open_value(master, path, filesystem.read(path), view, filesystem.attrs(path, defaults=False))
+        open_value(master, path, filesystem.read(path), view, filesystem.attrs(path))
 
     def enter(event):
         item = event.widget.identify_row(event.y)
-        if kinds.get(item) in ("dataset", "scalar"):
+        if item in infos and infos[item].kind in ("dataset", "scalar"):
             open_node(item)
         elif item and tree.exists(item):
             tree.item(tree.parent(item), open=True)
@@ -235,7 +244,7 @@ def panes(master, filesystem, *, navigation_widgets=()):
     def set_root(path):
         tree.delete(*tree.get_children())
         details.delete(*details.get_children())
-        for cache in (kinds, children, previews):
+        for cache in (infos, children, previews):
             cache.clear()
         root = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
         tree.item(root, open=True)
@@ -249,14 +258,14 @@ def panes(master, filesystem, *, navigation_widgets=()):
 
     def open_menu(widget, selected, x, y):
         """Offer viewers and copying for the selected row."""
-        item = selected if selected in kinds else ""
+        item = selected if selected in infos else ""
         if (widget is tree and not item) or "separator" in widget.item(selected, "tags"):
             return
         widget.selection_set(selected)
         menu.delete(0, "end")
         if item:
             names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
-            for name, viewer in suitable_viewers(NodeInfo(kinds[item], names, filesystem.attrs(item))):
+            for name, viewer in suitable_viewers(replace(described(item), children=names)):
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",

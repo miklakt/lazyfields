@@ -39,7 +39,7 @@ or FUSE-T on macOS, WinFsp on Windows), mount a specification file or inline JSO
 lf-mount example/large_arrays/mount_by_folder.json ~/lazyfields_mnt
 lf-mount example/composed_filesystem/resolve_and_merge.json ~/lazyfields_mnt \
     --relative-to example/composed_filesystem/data
-lf-mount '{"paths": ["h5/*"]}' ~/lazyfields_mnt --relative-to example/large_arrays
+lf-mount '{"mount": [{"glob": "h5/*"}]}' ~/lazyfields_mnt --relative-to example/large_arrays
 ```
 
 `python3 -m lazyfields.filesystem.os_mount` accepts the same arguments.

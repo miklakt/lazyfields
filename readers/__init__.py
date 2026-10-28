@@ -54,21 +54,15 @@ def as_array(value: Any) -> Any:
     return array
 
 
-def dataset_attrs(value: Any) -> dict[str, Any]:
-    """Return a dataset's dtype and shape."""
-    if not (hasattr(value, "dtype") and hasattr(value, "shape")) or value.dtype == object:
-        value = as_array(value)
-    return {"dtype": str(value.dtype), "shape": tuple(value.shape)}
-
-
 def value_info(value: Any) -> "NodeInfo":
-    """Classify a value and describe its children or dataset attributes."""
+    """Classify a value and describe its children, or a dataset's dtype, shape and type."""
     kind = value_kind(value)
     if kind == "group":
         return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(value)))
     if kind == "dataset":
-        return NodeInfo(kind, attrs={**dataset_attrs(value),
-                                     "type": f"{type(value).__module__}.{type(value).__qualname__}"})
+        array = value if hasattr(value, "shape") and getattr(value, "dtype", object) != object else as_array(value)
+        return NodeInfo(kind, dtype=str(array.dtype), shape=tuple(array.shape),
+                        type=f"{type(value).__module__}.{type(value).__qualname__}")
     return NodeInfo(kind)
 
 
@@ -79,10 +73,21 @@ def _mapping_items(value):
 
 @dataclass(frozen=True)
 class NodeInfo:
-    """Node kind, child names, and available dataset metadata."""
+    """Facts derived from a node's source; attrs holds the metadata given to it."""
 
     kind: NodeKind
     children: tuple[str, ...] = ()
+    dtype: str | None = None
+    shape: tuple[int, ...] | None = None
+    # The loaded value's type, known once a value is classified.
+    type: str | None = None
+    # A file root's reader format, or "directory".
+    format: str | None = None
+    # Whether a namespace edit moved this subtree away from its source position.
+    relocated: bool = False
+    # The merge rule that computed this node, such as "stack", or "keys" for a group, and its axis.
+    merged: str | None = None
+    axis: int | None = None
     attrs: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -157,7 +162,7 @@ def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
     with _hdf5_node(path, key) as node:
         kind = _hdf5_kind(node)
         if kind == "dataset":
-            return NodeInfo(kind, attrs={"dtype": str(node.dtype), "shape": node.shape})
+            return NodeInfo(kind, dtype=str(node.dtype), shape=node.shape)
         return NodeInfo(kind, tuple(node.keys()) if kind == "group" else ())
 
 
@@ -195,8 +200,8 @@ class Reader:
     inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
     # Optional metadata-only classification/listing at any infile path.
     inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
-    # Attributes of each file it reads, known without reading it, such as {"file_format": "pdb"}.
-    attrs: Mapping[str, Any] = field(default_factory=dict, kw_only=True, compare=False)
+    # Format of each file it reads, such as "pdb".
+    format: str = field(default="file", kw_only=True, compare=False)
 
     def get(self, path: str | Path, key: str | None = None, selection: Any | None = None) -> Any:
         """Read a file or one field, forwarding selection to direct readers."""
@@ -262,7 +267,7 @@ class DebugReader(Reader):
             return call
 
         super().__init__(
-            suffixes=reader.suffixes, attrs=reader.attrs,
+            suffixes=reader.suffixes, format=reader.format,
             **{name: logged(name, getattr(reader, name))
                for name in ("load", "read", "inspect", "inspect_node")},
         )
@@ -386,8 +391,8 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
 
 
 for _reader in (
-    Reader((".pkl", ".pickle"), pickle_load, attrs={"file_format": "pickle"}),
-    Reader((".json",), json_load, attrs={"file_format": "json"}),
-    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, attrs={"file_format": "hdf5"}),
-    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, inspect_node=archive_info)
+    Reader((".pkl", ".pickle"), pickle_load, format="pickle"),
+    Reader((".json",), json_load, format="json"),
+    Reader((".h5", ".hdf5"), hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, format="hdf5"),
+    Reader(_ARCHIVE_SUFFIXES, archive_load, archive_get, archive_inspect, inspect_node=archive_info, format="archive")
     ): register_reader(_reader)

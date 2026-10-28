@@ -6,8 +6,8 @@ knows nothing of rows or parents. Register one with
 `register_viewer(name, accepts, view)`:
 
 - `accepts(node)` decides without reading the node's value, from `node.kind`,
-  `node.attrs`, such as a dataset's shape, dtype, or loaded type, and
-  `node.children`, the names of its immediate children.
+  a dataset's `node.shape`, `node.dtype`, or loaded `node.type`, its
+  `node.attrs`, and `node.children`, the names of its immediate children.
 - `view(value, attrs)` gets the value and the same attrs. It either shows the
   value itself and returns `None`, as `grid.plot()` does in PyVista's window,
   or returns a matplotlib `Figure` to embed in the browser's window. A function

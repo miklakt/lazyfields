@@ -6,14 +6,13 @@ import hashlib
 import os
 from copy import copy
 from dataclasses import dataclass, field, replace
-from glob import has_magic
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from ..readers import NodeInfo, NodeKind, Reader, _reader_match, require_reader, value_info
 
 if TYPE_CHECKING:
-    from .merge import _MergedDataset
+    from .merge import _MergedDataset, _MergedGroup
 
 __all__ = ["FileSystem", "Node", "SourceLocator"]
 
@@ -64,7 +63,7 @@ class SourceLocator:
 class _FileSource:
     """A reader bound to a physical source."""
 
-    is_merged = False
+    merged = None
 
     reader: Reader
     origin: SourceLocator
@@ -73,18 +72,15 @@ class _FileSource:
         return self.reader.get(self.origin.file_path, self.origin.infile_path, selection)
 
     @property
-    def attrs(self):
-        """Reader attributes for the file root."""
-        return self.reader.attrs if self.origin.infile_path is None else {}
+    def format(self):
+        return self.reader.format if self.origin.infile_path is None else None
 
-    def defaults(self):
-        """dtype, shape and type of the loaded value, for readers without metadata."""
-        return value_info(self.read()).attrs
-
-    def info(self, *, list_children=True):
-        if self.origin.infile_path is None and not list_children:
+    def info(self, *, full=True):
+        if self.origin.infile_path is None and not full:
             return NodeInfo("group")
-        return self.reader.info(self.origin.file_path, self.origin.infile_path)
+        info = self.reader.info(self.origin.file_path, self.origin.infile_path)
+        # Readers without metadata describe a dataset only by loading it.
+        return value_info(self.read()) if full and info.kind == "dataset" and info.dtype is None else info
 
     def items(self):
         return ((str(name), kind, value) for name, kind, value in
@@ -111,7 +107,7 @@ class _FileSource:
 
 @dataclass(frozen=True)
 class _ChildrenSource:
-    """An expanded or composed group, answering from its namespace children."""
+    """A group answering from its namespace children."""
 
     children: dict[str, FileSystem]
 
@@ -120,12 +116,12 @@ class _ChildrenSource:
             raise ValueError("selection requires a dataset path.")
         return {name: child.read() for name, child in self.children.items()}
 
-    def info(self, *, list_children=True):
-        return NodeInfo("group", tuple(self.children) if list_children else ())
+    def info(self, *, full=True):
+        return NodeInfo("group", tuple(self.children) if full else ())
 
     def items(self):
         for name, child in self.children.items():
-            kind = child._backing.info(list_children=False).kind
+            kind = child._backing.info(full=False).kind
             yield name, kind, child.read() if kind == "scalar" else None
 
     def locate(self, selection=None):
@@ -139,6 +135,26 @@ class _ChildrenSource:
     def descendant(self, path):
         name, _, rest = path.partition("/")
         return self.children[name]._lookup(rest)
+
+
+@dataclass(frozen=True)
+class _Composed(_ChildrenSource):
+    """Children resolved once, when built; editing works on copies, keeping these for export."""
+
+    def descendant(self, path):
+        name, _, rest = path.partition("/")
+        return self.children[name].clone(rest)
+
+
+@dataclass(frozen=True)
+class _Directory(_Composed):
+    """A directory with the supported files its glob patterns matched."""
+
+    merged = None
+    format = "directory"
+
+    origin: SourceLocator
+    patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -170,38 +186,13 @@ class Node:
     def digest(self) -> str:
         return self._filesystem.digest(self.path)
 
-    @property
-    def _entry(self) -> FileSystem:
-        return self._filesystem._lookup(self.path)
+    def info(self, *, full: bool = True) -> NodeInfo:
+        return self._filesystem.info(self.path, full=full)
 
     @property
     def origin(self) -> SourceLocator | None:
         """Original source coordinates, retained through namespace edits."""
-        return self._entry._origin
-
-    @property
-    def is_merged(self) -> bool:
-        """Whether this node is a merge-created group or computed dataset."""
-        return self._entry.is_merged
-
-    @property
-    def is_mount(self) -> bool:
-        """Whether this position was explicitly attached through mount()."""
-        return self._entry.is_mount
-
-    @property
-    def is_relocated(self) -> bool:
-        """Whether this attachment relocates physical sources in the namespace."""
-        return self._entry.is_relocated
-
-    @property
-    def is_directory(self) -> bool:
-        return (self.origin is None and self.kind == "group"
-                and (self._filesystem._namespace_path / self.path).is_dir())
-
-    @property
-    def kind(self) -> NodeKind:
-        return self._entry._backing.info(list_children=False).kind
+        return self._filesystem._lookup(self.path)._origin
 
     @property
     def attrs(self) -> dict[str, Any]:
@@ -214,14 +205,10 @@ class FileSystem:
     Namespace edits leave source files unchanged.
     """
 
-    is_merged = False
-    is_mount = False
-    is_relocated = False
-    _source: _FileSource | _MergedDataset | None = None
+    _source: _FileSource | _Directory | _MergedDataset | _MergedGroup | None = None
     _children: dict[str, FileSystem] | None = None
-    _source_children: tuple[str, ...] | None = None
+    _source_children: tuple[str, ...] | None = None  # The source's child names when expanded, for export.
     _attrs: Mapping[str, Any] = {}  # From the specification; replaced, never mutated.
-    _path_patterns: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
     def __init__(
         self,
@@ -243,8 +230,8 @@ class FileSystem:
             self.mount(path, self.from_file(self.relative_to / path).node())
 
     @staticmethod
-    def merge(sources: Mapping[str, Node], *, rules: Mapping) -> FileSystem:
-        """Compose named source groups using rules from lazyfields.filesystem.merge."""
+    def merge(sources: Mapping[str, Node], *, rules) -> FileSystem:
+        """Merge named sources with a rule from lazyfields.filesystem.merge, or key by key with a mapping of them."""
         from .merge import merge
         return merge(sources, rules=rules)
 
@@ -253,18 +240,21 @@ class FileSystem:
         return self._source.origin if self._source is not None else None
 
     @property
+    def _merged(self) -> str | None:
+        return self._source.merged if self._source is not None else None
+
+    @property
     def _backing(self) -> _FileSource | _MergedDataset | _ChildrenSource:
         """Namespace children once expanded or composed, otherwise the lazy source."""
         return self._source if self._children is None else _ChildrenSource(self._children)
 
     @classmethod
-    def _from_source(cls, source: _FileSource | _MergedDataset) -> FileSystem:
+    def _from_source(cls, source: _FileSource | _Directory | _MergedDataset | _MergedGroup) -> FileSystem:
         """Bind a lazy source without reinitializing a physical namespace."""
         origin = source.origin
         result = cls.__new__(cls)
         result.relative_to = origin.file_path.parent if origin else Path.cwd()
         result._source = source
-        result.is_merged = source.is_merged
         result._namespace_path = origin.position if origin else result.relative_to
         return result
 
@@ -280,35 +270,23 @@ class FileSystem:
     def from_value(cls, value: Mapping | list, attrs: Mapping[str, Any] | None = None) -> FileSystem:
         """Root a filesystem at an in-memory group, such as a mapping of results, like a file's contents.
 
-        attrs, if given, are its root's, as a reader's are each file's.
+        attrs, if given, become its root's attributes.
         """
-        return cls.from_file("<value>", Reader((), lambda _: value, attrs=attrs or {}))
+        result = cls.from_file("<value>", Reader((), lambda _: value))
+        result._attrs = dict(attrs or {})
+        return result
 
     @classmethod
-    def from_directory(cls, path: str | Path, pattern: str = "*") -> FileSystem:
-        """Mount matching supported files at their relative paths without reading them."""
-        root = Path(path)
+    def from_directory(cls, path: str | Path, *patterns: str) -> FileSystem:
+        """Bind a directory, mounting the supported files matching glob patterns at their relative paths."""
+        root = Path(path).resolve()
         if not root.is_dir():
             raise NotADirectoryError(str(root))
-        return cls._from_paths(root, [pattern])
-
-    @classmethod
-    def _from_paths(cls, root: Path, paths: Iterable[str]) -> FileSystem:
-        """Register literal filenames and the supported files matching glob patterns."""
-        paths = [_relative_file_path(path).as_posix() for path in paths]
-        if not any(map(has_magic, paths)):
-            return cls(paths, relative_to=root)
-        if not root.is_dir():
-            raise NotADirectoryError(str(root))
-        matches = sorted({
-            match for path in paths
-            for match in ((file.relative_to(root) for file in root.glob(path)
-                           if file.is_file() and _reader_match(file)[0] is not None)
-                          if has_magic(path) else [Path(path)])
-        })
-        result = cls(matches, relative_to=root)
-        # Retain patterns so an unedited registration exports them, not its matches.
-        result._path_patterns = (tuple(paths), tuple(file.as_posix() for file in matches))
+        patterns = tuple(_relative_file_path(pattern).as_posix() for pattern in patterns)
+        matches = sorted({file.relative_to(root) for pattern in patterns for file in root.glob(pattern)
+                          if file.is_file() and _reader_match(file)[0] is not None})
+        result = cls._from_source(_Directory(cls(matches, relative_to=root)._children, SourceLocator(root), patterns))
+        result.relative_to = root
         return result
 
     def to_spec(
@@ -372,41 +350,31 @@ class FileSystem:
         result._namespace_path = self._namespace_path / _normalize_path(path)
         return result
 
-    def _relocated(self, destination: Path) -> bool:
-        """Compare source positions without reading or discovering children."""
-        if self._origin is not None:
-            return destination != self._origin.position
-        return self.is_merged or any(
-            child._relocated(destination / name) for name, child in self._children.items())
+    def _moved(self, position: Path) -> bool:
+        """Whether this entry's source position differs from its namespace position."""
+        return self._origin is not None and self._origin.position != position
 
-    def _attachment(self, path: str | Path, source: Node) -> FileSystem:
-        """Prepare a mounted snapshot before changing the destination namespace."""
+    @staticmethod
+    def _snapshot(source: Node) -> FileSystem:
         if not isinstance(source, Node):
             raise TypeError("Mount sources must be nodes obtained with node(path).")
-        entry = source._filesystem.clone(source.path)
-        destination = self._namespace_path / _normalize_path(path)
-        entry.is_mount = True
-        entry.is_relocated = entry._relocated(destination)
-        return entry
-
-    def _replace_child(self, name: str, entry: FileSystem) -> None:
-        """Commit an existing child's replacement, appended as a fresh mount."""
-        del self._children[name]
-        self._children[name] = entry
+        return source._filesystem.clone(source.path)
 
     def mount(self, path: str | Path, source: Node) -> None:
         """Attach an independent subtree at a vacant path; create missing parents."""
-        entry = self._attachment(path, source)
+        entry = self._snapshot(source)
         parent, name = self._parent(path, create=True)
         if name in parent._children:
             raise FileExistsError(str(path))
         parent._children[name] = entry
 
     def replace(self, path: str | Path, source: Node) -> None:
-        """Atomically replace a subtree, appending the new mount to its parent's listing."""
-        entry = self._attachment(path, source)
+        """Atomically replace a subtree, keeping its place in its parent's listing."""
+        entry = self._snapshot(source)
         parent, name = self._parent(path)
-        parent._replace_child(name, entry)
+        if name not in parent._children:
+            raise KeyError(str(path))
+        parent._children[name] = entry
 
     def unmount(self, path: str | Path) -> None:
         """Remove a namespace subtree without writing its source files."""
@@ -421,16 +389,21 @@ class FileSystem:
     def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
         return self._lookup(path)._backing.read(selection)
 
-    def attrs(self, path: str | Path = "", *, defaults: bool = True) -> dict[str, Any]:
-        entry = self._lookup(path)
-        attrs = {**(entry._source.attrs if entry._source is not None else {}), **entry._attrs}
-        if not defaults or entry._children is not None or {"dtype", "shape"} <= attrs.keys():
-            return attrs
-        info = entry._source.info(list_children=False)
-        attrs = {**info.attrs, **attrs}
-        if info.kind == "dataset" and not {"dtype", "shape"} <= attrs.keys():
-            attrs = {**entry._source.defaults(), **attrs}
-        return attrs
+    def attrs(self, path: str | Path = "") -> dict[str, Any]:
+        """Metadata given to a node; facts derived from its source are in info()."""
+        return dict(self._lookup(path)._attrs)
+
+    def info(self, path: str | Path = "", *, full: bool = True) -> NodeInfo:
+        """Derived facts with the node's attrs; full adds child names, dtype and shape, which may read metadata."""
+        path = _normalize_path(path)
+        entry, position = self._lookup(path), self._namespace_path / path
+        source = entry._source
+        file_format = source.format if source is not None else "directory" if position.is_dir() else None
+        # Only where the namespace departs from its sources: below a moved or merged parent, nothing is.
+        parent = self._lookup(path.rpartition("/")[0]) if path else None
+        relocated = entry._moved(position) and not (parent and (parent._merged or parent._moved(position.parent)))
+        return replace(entry._backing.info(full=full), format=file_format, relocated=relocated,
+                       merged=entry._merged, attrs=dict(entry._attrs))
 
     def listdir(self, path: str | Path = "") -> tuple[str, ...]:
         info = self._lookup(path)._backing.info()

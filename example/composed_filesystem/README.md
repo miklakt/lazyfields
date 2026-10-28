@@ -64,14 +64,14 @@ The reader is inferred from the filename unless supplied explicitly. Neither
 is shorthand for wrapping and mounting each relative filename this way. Repeated
 filenames are registered once; overlapping file paths are rejected before mounting.
 
-`FileSystem.from_directory(path, pattern="*")` mounts matching files supported by
-registered readers, preserving their physical relative paths. Unsupported files
-and directories are skipped. Use `pattern="*.json"` to select JSON files, or
-`pattern="**/*.json"` to include nested folders. Construction does not read file
-contents.
+`FileSystem.from_directory(path, *patterns)` binds a directory and mounts the
+files matching glob patterns that registered readers support, at their physical
+relative paths. Unsupported files and directories are skipped. Use `"*.json"` to
+select JSON files, or `"**/*.json"` to include nested folders. Without patterns
+the directory is empty. Construction does not read file contents.
 
-An unedited directory filesystem retains its glob in `to_spec()`, so rebuilding
-the specification discovers the currently matching files.
+The directory keeps its patterns in `to_spec()`, so rebuilding the specification
+discovers the currently matching files; edits are kept as changes beside them.
 
 ## Clone, mount, replace, unmount
 
@@ -103,8 +103,8 @@ Mounting, replacing, or unmounting the root is rejected; use `clone(path)` to ch
 `replace(path, source)` prepares an independent mounted copy and swaps it into an
 existing path in one namespace update. Preparation failures leave the old attachment
 intact. It raises `KeyError` for a missing destination and does not create parents.
-Like unmount followed by mount, it moves the entry to the end of its parent's
-listing. The source can be inside the subtree being replaced.
+The entry keeps its place in its parent's listing. The source can be inside the
+subtree being replaced.
 
 Use `FileSystem()` for an empty namespace. `clone(path)` returns another
 `FileSystem` rooted at that subtree. A mount target must be a node obtained
@@ -170,8 +170,8 @@ multiple sources have no single file stat and return `None`. Stats are read on
 request and are not cached. `locate(path)` supplies source paths when aggregate
 information is needed, such as the latest source modification time for a table row.
 
-Filesystems and their `Node` handles expose `node`, `listdir`,
-`read`, and `locate`. Handles also expose `path` and `kind`. An empty path or `/`
+Filesystems and their `Node` handles expose `node`, `listdir`, `info`,
+`read`, and `locate`. Handles also expose `path` and `origin`. An empty path or `/`
 names the namespace root. Repeated separators and `.` normalize; `..` is rejected.
 Handle-relative `node(path)` binds a descendant. Selections are separate from paths.
 
@@ -186,7 +186,7 @@ names until explicitly edited; there is no automatic rediscovery or refresh.
 
 A merged node's attributes follow its rule, without guessing. A node taken whole from one
 source, by preference, by prefix, or as the only occurrence of its key, keeps that node's
-attributes. A computed dataset has only the `dtype`, `shape`, and `type` its operation
+attributes. A computed dataset's `info()` has only the `dtype`, `shape`, and `type` its operation
 gives, worked out from the inputs' metadata without reading their values: whether an
 input's attribute, such as a length, holds for the result, sums, or no longer applies
 depends on its meaning. The merged group itself has none. A specification's `attrs` can
@@ -210,7 +210,7 @@ to inspect the current namespace.
 
 Every filesystem can export its current composition as a plain, JSON-compatible
 dictionary. No operation history, parent pointers, Python source, or pickle is
-required. Existing imperative construction works unchanged:
+required:
 
 ```python
 import json
@@ -226,179 +226,70 @@ restored = FileSystem.from_spec(
 restored.read("alpha/file_refs/values")
 ```
 
-All exported paths are relative. `to_spec()` uses the filesystem's `relative_to`
-directory by default; pass `relative_to` to choose a different export base.
-`from_spec()` resolves paths against the supplied `relative_to` directory, or
-the current working directory when omitted. The base itself is not saved, and
-absolute paths in specifications are rejected. Sources outside the chosen base
-use `..`; preserve that relative layout when moving them, or choose a common base.
-Export performs no source reads, metadata inspection, or directory discovery.
-Restoring explicit file lists and exact child snapshots is likewise read-free.
-Patterns scan directories without reading file contents. Restoring source overlays
-discovers immediate child names in each edited source group; readers without
-metadata support may load file contents for this discovery. Array computations
-remain lazy.
-Export returns a detached dictionary; later edits to it or the filesystem do not
-affect one another. Call `to_spec()` again to capture later edits.
+`to_spec()` uses the filesystem's `relative_to` directory as the base by default;
+pass `relative_to` to choose another. `from_spec()` resolves paths against the
+supplied `relative_to` directory, or the current working directory. The base
+itself is not saved. Export performs no source reads, metadata inspection, or
+directory discovery, and returns a detached dictionary; call `to_spec()` again to
+capture later edits.
 
-Node types are inferred from fields and parent context:
+Each node is bound in one of three ways, or is a virtual group:
 
-- `path` identifies a file, with optional `infile_path` and a named `reader`.
-- `paths` registers relative filenames or glob patterns, such as `blocks/*.json`
-  or `**/*.json`. Patterns select supported files, skip directories and unsupported
-  formats, and combine matches in sorted order without duplicates.
-  Parent groups and mount boundaries are reconstructed from the filenames, so
-  `{"paths": ["blocks/*.json"]}` places the block files under `blocks`. Patterns
-  are exported only relative to the registration's own base; exported relative
-  to another base, as with `from_directory("data/blocks")` relative to `data`,
-  the files are written as explicit `path` children.
-- `op` and ordered `sources` identify a computed dataset, with `axis` for
-  `stack` or `concatenate`. Other supported operations are `collect`, `vstack`,
-  and `hstack`. Axis zero is the default and is omitted on export.
-- Otherwise, a child of a file-backed parent inherits its file binding. At the
-  root or under a virtual group, the default is a virtual group.
+- `path` names a position: a directory, a file, or a place inside a file, such
+  as `"partitions.json/partitions"`. It is relative to the parent's position, or
+  to the base when it starts with `/`; `..` steps out of a group, a file or a
+  directory. A file's reader follows its suffix, or the parent's inside the same
+  file, unless `reader` names one.
+- `mount` lists glob rules, `[{"glob": "blocks/*.json"}]`, that mount the matching
+  supported files of the node's directory at their relative paths.
+- `merge` with `sources` merges the children of `sources`: an operation such as
+  `"stack"` (with `axis`) gives one dataset, and a mapping of keys to rules, with
+  `"*"` for unlisted keys, merges groups key by key.
 
-An explicit `type` overrides inference. Export uses `"type": "group"` only
-when a virtual group beneath a file-backed parent needs to prevent inheritance.
-Conflicting or unsupported fields are rejected.
-
-A namespace containing ordinary file registrations is compacted automatically:
+A virtual group, and a merge, take their parent's position. Any node can carry
+`attrs`. `children` then changes the children its binding gives, by name: `null`
+removes one, a patch changes or rebinds one in place, and a new name adds one.
+Unchanged children are omitted. For example, `FileSystem.from_directory(root,
+"**/*.json")` with `metadata/alpha.json/coefficients` unmounted and a file added exports:
 
 ```json
 {
-  "paths": ["blocks/alpha_first.json", "metadata/alpha.json", "partitions.json"]
-}
-```
-
-Literal filenames select a fixed set. To discover membership again on each
-reconstruction, use patterns, optionally mixed with literal filenames:
-
-```json
-{
-  "paths": ["blocks/*.json", "metadata/*.json", "partitions.json"]
-}
-```
-
-`{"paths": ["**/*.json"]}` includes JSON files at all depths, including the root.
-`{"paths": ["*/*.json"]}` selects exactly one directory level and excludes
-`partitions.json` at the root. Patterns with no matches produce an empty namespace.
-`from_directory()` retains its original pattern for an unmodified registration
-tree, including an empty one. Edits fall back to an explicit namespace or file
-list so reconstruction preserves those edits. Empty groups, aliases, and custom
-reader bindings likewise use the general hierarchical format when needed.
-
-For example, a file subtree alone needs only:
-
-```json
-{
-  "path": "partitions.json",
-  "infile_path": "partitions"
-}
-```
-
-A file or group can have `children`, a mapping from child names to specifications.
-For a file, absent `children` delegates to the original source.
-Present `children` records the exact current
-namespace, including removals; `children: {}` represents an empty group. Mapping
-insertion order determines child order; merge inputs always use ordered arrays.
-The file binding remains available for origin and stat information. A natural
-file child needs only `{}`: its filename, infile path, and reader are inherited
-from the parent and its child name. For example:
-
-```json
-{
-  "path": "partitions.json",
-  "infile_path": "partitions/alpha",
+  "mount": [{"glob": "**/*.json"}],
   "children": {
-    "scalar_a": {},
-    "vector": {},
-    "file_ref": {"path": "metadata/alpha.json"}
+    "metadata": {"children": {"alpha.json": {"children": {"coefficients": null}}}},
+    "extra": {"path": "blocks/alpha_first.json"}
   }
 }
 ```
 
-This snapshot retains exactly those three child names. An empty file-backed group
-has a file binding and `children: {}`; an empty virtual group beneath a file has
-`"type": "group"` and `children: {}`, and has no physical origin.
-
-`to_spec()` automatically omits unchanged children when the source group's
-original child names are known, recording only overrides and unmounts. Otherwise
-it retains exact `children` listings. No export mode is required. The loader
-accepts both forms, including a mixture at different nodes:
+A patch updates `attrs` name by name, where `null` removes an attribute. Binding
+fields in a patch rebind that child in place, keeping its attributes; `null`
+clears a binding field the new binding lacks, as when a field is replaced by a merge:
 
 ```json
-{
-  "path": "partitions.json",
-  "infile_path": "partitions/alpha",
-  "overrides": {
-    "file_ref": {"path": "metadata/alpha.json"}
-  },
-  "unmount": ["vector"]
-}
+{"file_refs": {"path": null, "merge": {"values": "stack", "*": "prefer"},
+               "sources": {"children": {"first": {"path": "/blocks/alpha_first.json"}}}}}
 ```
 
-This inherits all current source children, replaces `file_ref`, and hides `vector`.
-`overrides` also supports nested edits to an inherited group. `unmount` contains
-immediate child names, matching the existing method's namespace-only behavior;
-it never deletes source data. A missing name is still hidden if it reappears in
-the source on a later reconstruction. A name cannot be both overridden and
-unmounted at the same node. `children` cannot be combined with either edit field
-at that node. Overlays require a file-backed source; virtual groups and resolved
-merge groups retain explicit children.
+Restoring discovers child names wherever a patch edits a source group, and
+re-resolves merge keys and mount globs. Readers without metadata support may load
+file contents for this discovery; array computations remain lazy. Captures,
+conditions, `at` placement, definitions and pattern selectors are not supported
+and raise an error.
 
-Overlay discovery happens once per reconstruction. Newly added source fields are
-visible on reconstruction; there is no automatic refresh afterward. Unchanged
-children retain source order, while explicitly mounted replacements are appended
-in override order, matching `replace`. Nested edits to an inherited
-group keep that group's position.
+Facts derived from the source are kept apart from `attrs`, in
+`filesystem.info(path)`: its `kind`, `children`, and a dataset's `dtype` and
+`shape`. HDF5 and NPZ give those from metadata; other readers load the dataset,
+and then also give its Python `type`, such as `matplotlib.figure.Figure`. A file
+root's `format` is its reader's, such as `"pdb"`, and a directory's is
+`"directory"`, both known without reading. `info(path, full=False)` skips child
+names, `dtype` and `shape`, so it reads nothing. Relocation is not saved: `info`
+reports it where a subtree's source position first differs from its namespace
+position, not below a relocated or merged node.
 
-Any node can carry `attrs`, such as `{"units": "nm", "viewer": "Slices"}`;
-`node.attrs` adds them over the `dtype` and `shape` that datasets have by
-default. HDF5 and NPZ give those from metadata; other readers load the dataset,
-unless `attrs` already give both, and then also give its Python `type`, such as
-`matplotlib.figure.Figure`. A file also has the attributes its reader gives every
-file, such as `{"file_format": "pdb"}`, known without reading it. For a field
-inside a file, use an override:
-
-```json
-{"path": "row_00.h5", "overrides": {"array3d": {"attrs": {"units": "nm"}}}}
-```
-
-Viewers in the browsers decide whether they fit from a node's kind, `attrs`, and
-children's names; its `viewer` attribute names the one opened by default, and
-listed first, when it fits.
-
-When first expanding a source group, the runtime retains its original child names
-as an immutable tuple. Export derives overrides and hidden names from that tuple
-and the current tree, without a command log or source reread. If a node came from
-an exact specification and its original names are unknown, export keeps
-that node's exact `children` listing rather than guessing which names were removed.
-
-Namespace positions follow the hierarchy. Physical base directories are never
-repeated per node. A standalone root with an aliased namespace position can retain
-an optional relative `namespace_path`.
-
-Mounts are inferred for foreign file bindings and merged subtrees. Natural file
-children, structural groups, and children produced by a merge are not implicitly
-mounts. `is_mount` is emitted only when the actual boundary differs from that
-inference. Relocation follows the mount's position and sources; `is_relocated`
-is likewise only an override. Computed datasets imply `is_merged`; merged groups
-retain `is_merged: true`, since resolved preference/prefix outputs alone cannot
-identify their merge provenance.
-
-Merges are saved after key discovery: prefixing has already produced named
-children, and preference has selected a source subtree. Computed datasets retain
-their ordered input specifications and operation. Restoration therefore does not
-repeat discovery or validate input shapes until they are read.
-
-The composed example exports an overlay with concrete references for alpha, beta,
-and gamma. New manifest partitions can appear when it is reconstructed, but their
-reference fields remain ordinary source values. Existing resolved references keep
-their selected filenames. Rebuild the view with the Python construction code to
-resolve new or changed references. Values in selected files remain live and lazy.
-An exact snapshot instead retains its discovered partition and field names.
-Directory patterns discover file membership again on reconstruction. Literal
-file lists continue to select only the explicitly named files.
+Viewers in the browsers decide whether they fit from a node's `info`, including
+its `attrs` and children's names; its `viewer` attribute names the one opened by
+default, and listed first, when it fits.
 
 Custom readers need explicit names on both sides:
 
@@ -411,8 +302,7 @@ restored = FileSystem.from_spec(spec, readers=readers)
 Readers inferred from the current suffix registry need no name; restoration uses
 that registry again. An unregistered reader override without a supplied name
 raises an error instead of silently changing behavior. No reader callbacks are
-serialized. Specifications capture the supported filesystem state, not arbitrary
-Python attributes, monkeypatched methods, or subclass-specific behavior.
+serialized.
 
 ## Scope
 

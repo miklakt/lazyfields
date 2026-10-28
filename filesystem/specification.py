@@ -1,4 +1,12 @@
-"""Export and restore filesystem specifications with paths relative to a shared base."""
+"""Export and restore filesystem specifications.
+
+A node is bound by "path" (a directory, a file, or a place inside a file), by "merge" of
+the children of its "sources", or by "mount" glob rules in its directory; otherwise it is a
+virtual group. Its "children" change what the binding gives: null removes a child, a patch
+changes or rebinds one in place, and a new name adds one. Paths are relative to the parent's
+position, or to the base when they start with "/". Captures, conditions, placement with "at",
+definitions and pattern selectors are not supported.
+"""
 
 import json
 import os
@@ -6,21 +14,13 @@ from glob import has_magic
 from pathlib import Path
 from typing import Mapping
 
-from .filesystem import FileSystem, SourceLocator, _FileSource, _is_name
-from .merge import _MergedDataset, collect, concatenate, hstack, stack, vstack
+from .filesystem import FileSystem, SourceLocator, _Directory, _FileSource, _is_name
+from .merge import _MergedDataset, _MergedGroup, collect, concatenate, hstack, merge, prefer, prefix, stack, vstack
 from ..readers import Reader, _reader_match, require_reader
 
-
-_FLAGS = ("is_mount", "is_relocated", "is_merged")
-_COMMON = {"type", "namespace_path", "attrs", *_FLAGS}
-_FIELDS = {
-    "file": {"path", "infile_path", "reader", "children", "overrides", "unmount"},
-    "files": {"paths"},
-    "group": {"children"},
-    "merge": {"op", "axis", "sources"},
-}
-_RULES = {"collect": collect, "stack": stack, "concatenate": concatenate,
-          "vstack": vstack, "hstack": hstack}
+_BINDING = ("path", "reader", "merge", "axis", "sources", "mount")
+_FIELDS = {*_BINDING, "attrs", "children", "$comment"}
+_RULES = {rule.__name__: rule for rule in (collect, prefer, prefix, stack, concatenate, vstack, hstack)}
 
 
 def _readers(readers):
@@ -31,257 +31,226 @@ def _readers(readers):
     return readers
 
 
-def _inherited_source(parent, name):
-    """The natural file binding of a child; no metadata discovery is needed."""
-    if parent is None or not isinstance(parent._source, _FileSource):
-        return None
-    return parent._source.descendant(name)._source
+def _default_reader(file, parent):
+    """The reader of a file unless named: its parent's inside the same file, otherwise by suffix."""
+    source = parent._source if parent is not None else None
+    if isinstance(source, _FileSource) and source.origin.file_path == file:
+        return source.reader
+    return _reader_match(file)[0]
 
 
-def _same_source(source, inherited):
-    return (isinstance(source, _FileSource) and inherited is not None and
-            source.origin == inherited.origin and source.reader is inherited.reader)
+def _pristine(entry):
+    """entry's binding alone, without namespace edits."""
+    return FileSystem._from_source(entry._source) if entry._source is not None else None
 
 
-def _default_mount(entry, parent, name):
-    if parent is None or parent.is_merged:
-        return False
-    return (not _same_source(entry._source, _inherited_source(parent, name)) and
-            (entry._source is not None or entry.is_merged))
+def _rule_spec(rule):
+    return {"merge": rule.operation, "axis": rule.axis} if rule.axis else rule.operation
 
 
-def _node_type(spec, parent):
-    if "type" in spec:
-        return spec["type"]
-    if "paths" in spec:
-        return "files"
-    if "path" in spec:
-        return "file"
-    if "op" in spec or "sources" in spec:
-        return "merge"
-    return "file" if parent is not None and isinstance(parent._source, _FileSource) else "group"
+def _parse_rule(value, axis=None):
+    if isinstance(value, Mapping):
+        if value.keys() - {"merge", "axis"}:
+            raise ValueError(f"A merge rule has only merge and axis: {dict(value)!r}")
+        value, axis = value.get("merge"), value.get("axis")
+    if not isinstance(value, str) or value not in _RULES:
+        raise ValueError(f"Unknown merge rule: {value!r}")
+    return _RULES[value](**({} if axis is None else {"axis": axis}))
 
 
-def _validate_node(data, parent):
-    """Validate node fields and both namespace forms before binding sources."""
-    kind = _node_type(data, parent)
-    if not isinstance(kind, str) or kind not in _FIELDS:
-        raise ValueError(f"Unknown filesystem specification type: {kind!r}")
-    unknown = data.keys() - (_COMMON | _FIELDS[kind])
-    if unknown:
-        raise ValueError(f"Unknown fields for {kind}: {sorted(unknown, key=str)}")
-    if "namespace_path" in data and parent is not None:
-        raise ValueError("Only a standalone root can specify namespace_path.")
-    for flag in _FLAGS:
-        if flag in data and type(data[flag]) is not bool:
-            raise TypeError(f"{flag} must be a boolean.")
-    attrs = data.get("attrs", {})
-    if not isinstance(attrs, Mapping) or any(not isinstance(name, str) for name in attrs):
-        raise TypeError("attrs must map attribute names to values.")
-    if "children" in data and ("overrides" in data or "unmount" in data):
-        raise ValueError("Use either children or overrides/unmount at each node.")
-    unmounted = data.get("unmount", [])
-    if not isinstance(unmounted, list):
-        raise TypeError("unmount must be a list of child names.")
-    for key in ("children", "overrides", "unmount"):
-        if key not in data:
-            continue
-        names = data[key]
-        if key != "unmount" and not isinstance(names, Mapping):
-            raise TypeError(f"{key} must map child names to specifications.")
-        for name in names:
-            if not _is_name(name):
-                raise ValueError(f"Invalid child name: {name!r}")
-    if len(set(unmounted)) != len(unmounted):
-        raise ValueError("unmount must contain distinct child names.")
-    if set(data.get("overrides", {})) & set(unmounted):
-        raise ValueError("A child cannot appear in both overrides and unmount.")
-    return kind
-
-
-def _registered_paths(spec, prefix=""):
-    """Recognize an ordinary file registration tree without losing empty groups."""
-    if set(spec) == {"path"}:
-        return [prefix] if spec["path"] == prefix else None
-    if set(spec) != {"children"} or not spec["children"]:
-        return None
-    paths = []
-    for name, child in spec["children"].items():
-        found = _registered_paths(child, f"{prefix}/{name}" if prefix else name)
-        if found is None:
-            return None
-        paths.extend(found)
-    return paths
+def _updated(attrs, changes):
+    """attrs with changes applied name by name; null removes a name."""
+    return {name: value for name, value in {**attrs, **changes}.items() if value is not None}
 
 
 def to_spec(filesystem, *, relative_to=None, readers=None):
-    """Infer compact source edits or exact children, without source reads."""
+    """Describe bindings, attributes and changed children, without reading sources."""
     base = Path(relative_to).resolve() if relative_to is not None else filesystem.relative_to
-    readers = _readers(readers)
+    names = {id(reader): name for name, reader in _readers(readers).items()}
 
-    def path(value):
-        return Path(os.path.relpath(value, base)).as_posix()
+    def path(target, position):
+        """target from position, or from the base as "/..." where that would climb out."""
+        relative = Path(os.path.relpath(target, position))
+        if relative.parts[:1] == ("..",) and target.is_relative_to(base):
+            return "/" + target.relative_to(base).as_posix()
+        return relative.as_posix()
 
-    def visit(entry, parent=None, name=None, namespace=None):
+    def binding(entry, position, parent):
+        """Fields binding entry below parent, at position, and the position of its children."""
         source = entry._source
         if isinstance(source, _FileSource):
             origin = source.origin
-            inherited = _inherited_source(parent, name)
-            result = {}
-            if not _same_source(source, inherited):
-                result["path"] = path(origin.file_path)
-                if origin.infile_path is not None:
-                    result["infile_path"] = origin.infile_path
-                reader_name = next((key for key, reader in readers.items()
-                                    if reader is source.reader), None)
-                if reader_name is not None:
-                    result["reader"] = reader_name
-                elif _reader_match(origin.file_path)[0] is not source.reader:
+            fields = {"path": path(origin.position, position)}
+            if source.reader is not _default_reader(origin.file_path, parent):
+                if id(source.reader) not in names:
                     raise ValueError(f"Supply a reader name for {origin.file_path!s} in readers.")
-        elif isinstance(source, _MergedDataset):
-            result = {"op": source.rule.operation, "sources": [visit(child) for child in source.sources]}
-            if source.rule.argument:  # A stack or concatenate axis other than 0.
-                result["axis"] = source.rule.argument
-        elif source is None:
-            result = {"type": "group"} if _node_type({}, parent) == "file" else {}
+                fields["reader"] = names[id(source.reader)]
+            return fields, origin.position
+        if isinstance(source, _Directory):
+            directory = source.origin.position
+            fields = {} if directory == position else {"path": path(directory, position)}
+            if source.patterns:
+                fields["mount"] = [{"glob": pattern} for pattern in source.patterns]
+            return fields, directory
+        if isinstance(source, _MergedDataset):
+            fields = {"merge": source.rule.operation, **({"axis": source.rule.axis} if source.rule.axis else {})}
+        elif isinstance(source, _MergedGroup):
+            fields = {"merge": {key: _rule_spec(rule) for key, rule in source.rules.items()}}
         else:
-            raise TypeError(f"Unsupported filesystem source: {type(source).__name__}")
-        if entry._attrs:
-            result["attrs"] = dict(entry._attrs)
+            return {}, position
+        inputs = {name: describe(entry, position, None) for name, entry in source.sources.items()}
+        return {**fields, "sources": {"children": inputs}}, position
 
-        if namespace is None:
-            namespace = source.origin.position if isinstance(source, _FileSource) else entry.relative_to
-            if entry._namespace_path != namespace:
-                namespace = entry._namespace_path
-                result["namespace_path"] = path(namespace)
-        if entry._children is not None:
-            children = {
-                child_name: visit(child, entry, child_name, namespace / child_name)
-                for child_name, child in entry._children.items()
-            }
-            if isinstance(source, _FileSource) and entry._source_children is not None:
-                overrides = {key: child for key, child in children.items() if child}
-                unmounted = [key for key in entry._source_children if key not in children]
-                if overrides:
-                    result["overrides"] = overrides
-                if unmounted:
-                    result["unmount"] = unmounted
-            else:
-                result["children"] = children
-        if entry.is_mount != _default_mount(entry, parent, name):
-            result["is_mount"] = entry.is_mount
-        relocated = entry.is_mount and entry._relocated(namespace)
-        if entry.is_relocated != relocated:
-            result["is_relocated"] = entry.is_relocated
-        if entry.is_merged != isinstance(source, _MergedDataset):
-            result["is_merged"] = entry.is_merged
+    def describe(entry, position, parent):
+        """The full description of entry below parent, at position."""
+        fields, inner = binding(entry, position, parent)
+        if entry._attrs:
+            fields["attrs"] = dict(entry._attrs)
+        children = changes(entry, _pristine(entry), inner)
+        if children:
+            fields["children"] = children
+        return fields
+
+    def patch(entry, given, position, parent):
+        """The patch turning given, a child of parent's binding, into entry."""
+        fields, inner = binding(entry, position, parent)
+        given_fields = binding(given, position, parent)[0]
+        if fields == given_fields:
+            fields, baseline = {}, given
+        else:  # Rebinding: fields the new binding lacks are cleared.
+            fields, baseline = {**dict.fromkeys(given_fields), **fields}, _pristine(entry)
+        attrs = {name: entry._attrs.get(name) for name in {**given._attrs, **entry._attrs}
+                 if entry._attrs.get(name) != given._attrs.get(name)}
+        if attrs:
+            fields["attrs"] = attrs
+        children = changes(entry, baseline, inner)
+        if children:
+            fields["children"] = children
+        return fields
+
+    def changes(entry, baseline, position):
+        """Children entries turning the children of baseline into entry's."""
+        if entry._children is None:
+            return {}
+        if baseline is None:
+            given = {}
+        elif baseline._children is not None:
+            given = baseline._children
+        else:
+            given = {name: baseline._source.descendant(name) for name in entry._source_children or ()}
+        result = {name: None for name in given if name not in entry._children}
+        for name, child in entry._children.items():
+            if name not in given:
+                result[name] = describe(child, position, entry)
+            elif changed := patch(child, given[name], position, entry):
+                result[name] = changed
         return result
 
-    spec = visit(filesystem)
-    paths = _registered_paths(spec)
-    patterns = filesystem._path_patterns
-    # Patterns are relative to the registration base, so only that base can export them.
-    if patterns is not None and filesystem.relative_to == base:
-        if spec == {"children": {}}:
-            paths = []
-        if paths is not None and tuple(paths) == patterns[1]:
-            return {"paths": list(patterns[0])}
-    # Literal glob characters in filenames must remain explicit file bindings.
-    return {"paths": paths} if paths is not None and not any(map(has_magic, paths)) else spec
+    return describe(filesystem, base, None)
 
 
 def from_spec(cls, spec, *, relative_to=None, readers=None):
-    """Rebind exact snapshots directly; discover source children for overlays."""
+    """Build the described filesystem; merges and mount rules inspect their sources while building."""
     base = Path(relative_to).resolve() if relative_to is not None else Path.cwd()
     readers = _readers(readers)
-    active = set()
 
-    def path(value):
-        if not isinstance(value, str):
-            raise TypeError("Physical paths must be strings.")
-        if Path(value).is_absolute():
-            raise ValueError("Specification paths must be relative to relative_to or cwd.")
-        # Physical paths may contain '..'; logical child names may not.
-        return Path(os.path.abspath(base / value))
-
-    def visit(data, parent=None, name=None, namespace=None):
+    def check(data):
         if not isinstance(data, Mapping):
-            raise TypeError("Each filesystem specification must be a mapping.")
-        if id(data) in active:
-            raise ValueError("Cyclic filesystem specification.")
-        active.add(id(data))
-        try:
-            kind = _validate_node(data, parent)
-            overlay = "overrides" in data or "unmount" in data
-            unmounted = data.get("unmount", [])
-            if kind == "file":
-                inherited = _inherited_source(parent, name)
-                if "path" not in data and inherited is None:
-                    raise ValueError("A file needs path unless it inherits its parent's file binding.")
-                filename = path(data["path"]) if "path" in data else inherited.origin.file_path
-                infile = data.get("infile_path", inherited.origin.infile_path
-                                  if "path" not in data else None)
-                if infile is not None and (not isinstance(infile, str) or
-                                          any(part == ".." for part in infile.split("/"))):
-                    raise ValueError("infile_path must be a string without '..' segments.")
-                if "reader" in data:
-                    reader_name = data["reader"]
-                    if not isinstance(reader_name, str) or reader_name not in readers:
-                        raise ValueError(f"Unknown reader name: {reader_name!r}")
-                    reader = readers[reader_name]
-                else:
-                    reader = inherited.reader if "path" not in data else require_reader(filename)
-                entry = cls._from_source(_FileSource(reader, SourceLocator(filename, infile)))
-            elif kind == "files":
-                paths = data.get("paths")
-                if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
-                    raise TypeError("paths must be a list of relative filenames.")
-                entry = cls._from_paths(base, paths)
-            elif kind == "merge":
-                operation, sources = data.get("op"), data.get("sources")
-                if not isinstance(operation, str) or operation not in _RULES:
-                    raise ValueError(f"Unknown dataset merge operation: {operation!r}")
-                # Only stack and concatenate accept an axis; the other rules reject it as an argument.
-                rule = _RULES[operation](**{"axis": data["axis"]} if "axis" in data else {})
-                if not isinstance(sources, list) or not sources:
-                    raise ValueError("Merge sources must be a nonempty list.")
-                entry = cls._from_source(_MergedDataset(tuple(visit(item) for item in sources), rule))
-            else:
-                entry = cls(relative_to=base)
+            raise TypeError("A node description must be an object.")
+        unknown = data.keys() - _FIELDS
+        if unknown:
+            raise ValueError(f"Unsupported node fields: {sorted(unknown, key=str)}")
+        attrs = data.get("attrs", {})
+        if not isinstance(attrs, Mapping) or not all(isinstance(name, str) for name in attrs):
+            raise TypeError("attrs must map attribute names to values.")
+        if data.get("reader") is not None and data.get("path") is None:
+            raise ValueError("reader needs path beside it.")
+        if (data.get("axis") is not None or data.get("sources") is not None) and data.get("merge") is None:
+            raise ValueError("axis and sources need merge beside them.")
 
-            entry.relative_to = base
-            if "attrs" in data:
-                entry._attrs = dict(data["attrs"])
-            if namespace is None:  # A root keeps its namespace path; children receive theirs while visiting.
-                namespace = entry._namespace_path = (path(data["namespace_path"]) if "namespace_path" in data
-                                                     else entry._namespace_path if kind == "file" else base)
-            entry.is_merged = data.get("is_merged", entry.is_merged)
-            entry.is_mount = data.get("is_mount", _default_mount(entry, parent, name))
-            if "children" in data:
-                entry._children = {}
-            elif overlay:
-                children = entry._expand()
-                for child_name in unmounted:
-                    children.pop(child_name, None)
-                # Retain tombstones even if the current source lacks those names.
-                entry._source_children = tuple(dict.fromkeys((*entry._source_children, *unmounted)))
-            for child_name, child in data.get("children", data.get("overrides", {})).items():
-                replacement = visit(child, entry, child_name, namespace / child_name)
-                if overlay and replacement.is_mount and child_name in entry._children:
-                    entry._replace_child(child_name, replacement)
-                else:
-                    entry._children[child_name] = replacement
-            entry.is_relocated = data.get("is_relocated", entry.is_mount and entry._relocated(namespace))
-            return entry
-        finally:
-            active.remove(id(data))
+    def resolve(value, position):
+        if not isinstance(value, str) or not value:
+            raise TypeError("path must be a nonempty string.")
+        return Path(os.path.normpath(base / value[1:] if value.startswith("/") else position / value))
 
-    return visit(spec)
+    def bind(position, name, parent):
+        """Bind the file containing position, at the place inside it."""
+        file = next((path for path in (position, *position.parents) if path.is_file()), position)
+        if name is not None and name not in readers:
+            raise ValueError(f"Unknown reader name: {name!r}")
+        reader = readers[name] if name is not None else _default_reader(file, parent) or require_reader(file)
+        infile = position.relative_to(file).as_posix() if file != position else None
+        return cls._from_source(_FileSource(reader, SourceLocator(file, infile)))
+
+    def globs(rules):
+        if not isinstance(rules, list) or any(
+                not isinstance(rule, Mapping) or rule.keys() - {"glob", "$comment"}
+                or not isinstance(rule.get("glob"), str) for rule in rules):
+            raise ValueError('Only mount rules of the form {"glob": pattern} are supported.')
+        return [rule["glob"] for rule in rules]
+
+    def merged(data, position):
+        inputs = build(data["sources"], position)
+        nodes = {name: inputs.node(name) for name in inputs.listdir()}
+        if isinstance(data["merge"], Mapping):
+            if "axis" in data:
+                raise ValueError("A key-by-key merge gives each rule its own axis.")
+            return merge(nodes, rules={key: _parse_rule(rule) for key, rule in data["merge"].items()})
+        return merge(nodes, rules=_parse_rule(data["merge"], data.get("axis")))
+
+    def build(data, position, parent=None):
+        check(data)
+        if data.get("path") is not None:
+            position = resolve(data["path"], position)
+        if data.get("merge") is not None:
+            entry = merged(data, position)
+        elif data.get("mount") is not None or data.get("path") is not None and position.is_dir():
+            entry = cls.from_directory(position, *globs(data.get("mount") or []))
+        elif data.get("path") is not None:
+            entry = bind(position, data.get("reader"), parent)
+        else:
+            entry = cls(relative_to=position)
+        entry._attrs = _updated({}, data.get("attrs", {}))
+        apply(entry, data.get("children", {}), position)
+        return entry
+
+    def apply(entry, children, position):
+        """Apply children entries in order: null removes, binding fields rebind in place, others patch."""
+        if isinstance(children, Mapping):
+            entries = children.items()
+        elif isinstance(children, list) and all(isinstance(item, Mapping) and len(item) == 1 for item in children):
+            entries = [next(iter(item.items())) for item in children]
+        else:
+            raise TypeError("children must be an object or an array of single-entry objects.")
+        for name, patch in entries:
+            if not _is_name(name) or has_magic(name) or "${" in name:
+                raise ValueError(f"Unsupported children selector: {name!r}")
+            existing = entry._expand()
+            child = existing.get(name)
+            if patch is None:
+                existing.pop(name, None)
+                continue
+            check(patch)
+            if any(key in patch for key in _BINDING):
+                replacement = build(patch, position, entry)
+                if child is not None:
+                    replacement._attrs = _updated(child._attrs, patch.get("attrs", {}))
+                existing[name] = replacement
+            elif child is not None:
+                child._attrs = _updated(child._attrs, patch.get("attrs", {}))
+                apply(child, patch.get("children", {}), child._origin.position if child._origin else position)
+            elif patch.get("children"):  # An annotation alone waits until the name exists.
+                existing[name] = build(patch, position, entry)
+
+    root = build(spec, base)
+    root.relative_to = base
+    return root
 
 
 def add_spec_arguments(parser):
     """Add a specification, as a JSON file or inline JSON, and --relative-to for its paths to parser."""
-    parser.add_argument("spec", help='specification JSON file, or inline JSON such as \'{"paths": ["*.h5"]}\'')
+    parser.add_argument("spec", help="specification JSON file, or inline JSON such as "
+                                     '\'{"mount": [{"glob": "*.h5"}]}\'')
     parser.add_argument("--relative-to", type=Path,
                         help="base directory of specification paths "
                              "(default: the file's directory, or the working directory for inline JSON)")
