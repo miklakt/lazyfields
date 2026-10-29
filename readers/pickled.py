@@ -83,6 +83,8 @@ class _Record(Mapping):
     """
 
     type: str
+    __eq__ = object.__eq__
+    __hash__ = object.__hash__
 
     def __new__(cls, *args, **kwargs):
         record = super().__new__(cls)

@@ -22,7 +22,7 @@ class Run:
 
 
 def _plot():
-    """A Figure: not data, so it is an opaque leaf unless matplotlib is trusted - see browser/viewers.py."""
+    """A Figure: not plain data, so its reader must explicitly trust matplotlib to build it."""
     figure = Figure()
     figure.add_subplot().plot([-1.25, -1.10, -0.95])
     return figure

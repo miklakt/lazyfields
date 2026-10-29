@@ -4,7 +4,7 @@ from pathlib import Path
 
 from lazyfields.browser import browse_filesystem
 from lazyfields.filesystem import FileSystem
-from lazyfields.readers import View, register_view
+from lazyfields.readers import View, pickle_reader, register_view
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
@@ -15,11 +15,13 @@ def columns(table):
 
 
 def main():
-    register_view("dataframe-columns", View(columns), trust="pandas")
-    # The data directory with results.pkl as it is, and the file again with its table read through the view.
+    register_view("dataframe-columns", View(columns))
+    trusted = pickle_reader(trust=["pandas", "matplotlib"])
+    # The directory uses the safe default; readable mounts the file again through an explicitly trusted reader.
     fs = FileSystem.from_spec({"mount": [{"glob": "*.pkl"}], "children": {
-        "readable": {"path": "results.pkl", "children": {"table": {"attrs": {"view": "dataframe-columns"}}}},
-    }}, relative_to=DATA_DIR)
+        "readable": {"path": "results.pkl", "reader": "trusted-pickle",
+                     "children": {"table": {"attrs": {"view": "dataframe-columns"}}}},
+    }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted})
     browse_filesystem(fs)
 
 
