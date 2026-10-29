@@ -16,20 +16,13 @@ def show_error(parent, title, exc):
     messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=parent)
 
 
-def register_viewer(name, accepts, view, *, trust=None):
+def register_viewer(name, accepts, view):
     """Register view(value, attrs) for nodes accepted by accepts(node).
 
     accepts receives a NodeInfo. view returns a matplotlib Figure, a function
     filling a Tk frame, or None when it opens its own window.
     Re-registering a name replaces it at highest priority.
-
-    trust lets a pickled class, or a module or package prefix, unpickle for real instead of staying
-    an opaque leaf, so this viewer receives the live object it expects; see pickled._allow for the
-    tradeoff that comes with it.
     """
-    if trust is not None:
-        from ..readers.pickled import _allow
-        _allow(trust)
     _viewers.pop(name, None)
     _viewers[name] = accepts, view
 
@@ -190,4 +183,4 @@ if find_spec("matplotlib") is not None:
     register_viewer("Plot", lambda node: _numeric(node, (1, 2)), _plot)
     register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
     register_viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
-                     _tk(_embed_figure), trust="matplotlib")
+                     _tk(_embed_figure))

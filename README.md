@@ -82,8 +82,13 @@ Pickle files are read as data, without running code they contain. Their structur
 arrays, come from scanning the file, so listing a large pickle reads almost nothing. Loading builds only built-in
 types, dates and times, decimals, ordered and default dicts, and NumPy arrays. Any other object, such as a pandas
 DataFrame or one of your own classes, becomes a record of what it is made of: its `type` name, the `args` it is
-built from, and its `state` and `items`. Its code is never imported or run, and the data inside it, such as a
-DataFrame's column arrays, stays readable.
+built from, and its `state` and `items`. Its code is never imported or run, and the data inside it stays readable.
+Only pickle protocols 4 and 5 are accepted.
+
+When real objects are needed, configure that pickle reader explicitly and pass it through the existing `reader`
+argument, for example `FileSystem.from_file(path, reader=lf.pickle_reader(trust="matplotlib"))`. Trust is local to
+that reader. It accepts classes, `(module, name)` pairs, or module prefixes; `trust=True` deliberately restores
+ordinary unsafe loading for modern pickles without changing the filesystem or browser code.
 
 >  Extracted archive contents are reused from a temporary directory while the Python process is running.
 

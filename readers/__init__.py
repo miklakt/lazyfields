@@ -202,26 +202,14 @@ class View:
     # Format of the object's root, such as "pdb".
     format: str | None = field(default=None, kw_only=True, compare=False)
 
-    def _load(self, obj: Any) -> Any:
-        """self.load(obj), replacing a confusing failure with a clear one if it touched an untrusted leaf."""
-        from .pickled import _leaf_error, _touched
-        _touched.clear()
-        try:
-            return self.load(obj)
-        except Exception as exc:
-            clearer = _leaf_error()
-            if clearer is not None:
-                raise clearer from exc
-            raise
-
     def get(self, obj: Any, key: str | None = None, selection: Any | None = None) -> Any:
         """Read the object or one key, forwarding selection to a direct read."""
         _check_key(key)
         if selection is not None and key is None:
             raise ValueError("selection requires a single key.")
-        if key is None: return self._load(obj)
+        if key is None: return self.load(obj)
         if self.read is not None: return self.read(obj, key, selection)
-        value = _path_get(self._load(obj), key)
+        value = _path_get(self.load(obj), key)
         if isinstance(value, (list, tuple)) and isinstance(selection, tuple):
             # JSON arrays are lists and need array indexing for multiple axes.
             import numpy as np
@@ -313,17 +301,10 @@ def register_reader(reader: Reader) -> Reader:
 _VIEWS: dict[str, View] = {}
 
 
-def register_view(name: str, view: View, *, trust=None) -> View:
-    """Name a view; a node whose "view" attribute names it is browsed as the object view interprets.
-
-    trust, when the view reads pickled data, lets a class, or a module or package prefix, unpickle
-    for real instead of staying an opaque leaf; see pickled._allow for what it accepts and the tradeoff.
-    """
+def register_view(name: str, view: View) -> View:
+    """Name a view; a node whose "view" attribute names it is browsed as the object view interprets."""
     if not isinstance(name, str) or not name or not isinstance(view, View):
         raise TypeError("register_view needs a nonempty name and a View.")
-    if trust is not None:
-        from .pickled import _allow
-        _allow(trust)
     _VIEWS[name] = view
     return view
 
@@ -439,7 +420,7 @@ def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).info(inner_path, key)
 
 
-from .pickled import PICKLE, pickle_load  # noqa: E402  Builds on the names above.
+from .pickled import PICKLE, pickle_load, pickle_reader  # noqa: E402  Builds on the names above.
 
 for _reader in (
     PICKLE,
