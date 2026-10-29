@@ -1,8 +1,10 @@
-"""Pickle files read as data: structure from opcodes that are never run, values from a fixed set of data types.
+"""Pickle files read as data: structure from opcodes that are never run, trusted types unpickled for real.
 
-Listing, kinds, and NumPy dtypes and shapes come from scanning the opcodes, skipping large byte payloads.
-Loading builds only data types. Any other object becomes a record of what it is made of, its type, arguments
-and state, so the data inside it stays readable while its code is never imported or run.
+A value built only from types that are _ALLOWED or explicitly trusted - see register_view's and
+register_viewer's trust= argument - comes back for real, and from then on is just a value: browsed
+through value_kind and value_info exactly like any other in-memory value, nothing pickle-specific about
+it. Anything else is never imported or run: it is an opaque leaf naming only its type, with nothing
+underneath it to open.
 """
 
 import _compat_pickle
@@ -27,6 +29,10 @@ _ALLOWED = frozenset({
     ("numpy", "dtype"), ("numpy", "ndarray"), ("numpy.core.multiarray", "_reconstruct"),
     ("numpy.core.multiarray", "scalar"), ("numpy.core.numeric", "_frombuffer"),
 })
+# Glue many libraries pickle their bound callbacks with: trusted only once something else is, since a bound
+# method reduces to (getattr, (instance, name)), which *runs* getattr on whatever instance the pickle names -
+# safe once that instance's own class is itself trusted to be real, but not a default risk for untrusted data.
+_GLUE = frozenset({("builtins", "object"), ("builtins", "getattr"), ("functools", "partial")})
 _MAPPINGS = {("builtins", "dict"), ("collections", "OrderedDict"), ("collections", "defaultdict")}
 _SCALARS = {("builtins", "bytes"), ("builtins", "complex"), ("datetime", "date"), ("datetime", "datetime"),
             ("datetime", "time"), ("datetime", "timedelta"), ("decimal", "Decimal"),
@@ -45,90 +51,137 @@ def _qualified(module: str, name: str) -> tuple[str, str]:
     return _compat_pickle.IMPORT_MAPPING.get(module, module).replace("numpy._core", "numpy.core"), name
 
 
-def _positional(items) -> dict[str, Any]:
-    return {str(index): item for index, item in enumerate(items)}
+_TRUSTED: set[tuple[str, str] | str] = set()
 
 
-class _Record(Mapping):
-    """An object of a type that is not data, as its parts instead of the object: browsable, never run.
+def _allow(trust) -> None:
+    """Trust register_view's and register_viewer's trust= argument to unpickle for real and run its code.
 
-    Pickling calls the type, or its constructor function, with args, then gives the object its state and items.
-    The record keeps each of those as given; tuples become positional mappings, so their contents stay reachable.
+    Not for general use: register_view and register_viewer are the only callers, so trust is only
+    ever granted alongside something that can actually use the real object.
+
+    A target is a class (trusted exactly), an exact (module, name) pair, a module or package prefix
+    string such as "matplotlib" (trusts everything under it), or a list of any of these. A complex
+    object such as a Figure nests many classes in its pickled state; every one of them needs to be
+    trusted too, or it loads as an opaque leaf instead, so a library-wide prefix is usually what makes
+    such an object come back whole. This is as safe, or as unsafe, as pickle.load is for whatever is
+    trusted: only reachable from code that trusts the pickles it will be given.
     """
+    if trust is None:
+        return
+    if isinstance(trust, list):
+        for target in trust:
+            _allow(target)
+    elif isinstance(trust, tuple):
+        _TRUSTED.add(trust)
+    elif isinstance(trust, type):
+        _TRUSTED.add((trust.__module__, trust.__qualname__))
+    elif isinstance(trust, str):
+        _TRUSTED.add(trust)
+    else:
+        raise TypeError("trust needs a class, a module prefix string, a (module, name) pair, or a list of these.")
+
+
+def _buildable(qualified: tuple[str, str]) -> bool:
+    """Whether a global is safe to build for real: a baseline data type, or explicitly trusted."""
+    if qualified in _ALLOWED or qualified in _TRUSTED:
+        return True
+    if _TRUSTED and qualified in _GLUE:
+        return True
+    module, _ = qualified
+    return any(isinstance(prefix, str) and (module == prefix or module.startswith(f"{prefix}."))
+               for prefix in _TRUSTED)
+
+
+@dataclass(frozen=True)
+class _Opaque:
+    """What scanning finds in place of anything not built for real: its type, with nothing underneath."""
 
     type: str
-    __hash__ = object.__hash__  # Stands in for whatever it records, including as a dict key; identity is enough.
+
+    def __repr__(self):
+        return f"<{self.type}>"
+
+
+def _global(module: str, name: str):
+    """A GLOBAL reference during scanning: a reference to build later, or already-known opaque."""
+    qualified = _qualified(module, name)
+    return _Ref(qualified) if _buildable(qualified) else _Opaque(".".join(qualified))
+
+
+_touched: list[str] = []  # Opaque leaf types stood in for since _leaf_error last read this, for a clear error.
+
+
+def _leaf_error() -> Exception | None:
+    """A clear error naming the last opaque leaf stood in for since this was last called, if any."""
+    if not _touched:
+        return None
+    leaf, _touched[:] = _touched[-1], []
+    return RuntimeError(f"{leaf} was never built for real, so using it here failed: trust it through "
+                        f"register_view's or register_viewer's trust= argument.")
+
+
+class _Unbuilt:
+    """Stands in for any untrusted global while loading for real: holds nothing of what it is given.
+
+    __getattr__ returns itself for plain names so a bound method elsewhere in the same pickle - one
+    pickles as (getattr, (instance, name)) - can resolve against an unrelated opaque instance without
+    crashing the whole load. Dunder lookups still raise, so value_kind's shape-based scalar check (see
+    the class attribute below) still recognizes this as a leaf with nothing to open, not a dataset.
+    Every fallback also records itself in _touched, so code reading the real value afterwards - a view,
+    say - can turn a confusing failure into a clear one instead, once it actually tries to use this leaf.
+    """
+
+    shape = ()
 
     def __new__(cls, *args, **kwargs):
-        record = super().__new__(cls)
-        record._parts = {"type": cls.type, "args": _positional(args)} | ({"kwargs": kwargs} if kwargs else {})
-        return record
+        return object.__new__(cls)
 
     def __init__(self, *args, **kwargs):
         pass
 
-    def __getitem__(self, key):
-        return self._parts[key]
-
-    def __iter__(self):
-        return iter(self._parts)
-
-    def __len__(self):
-        return len(self._parts)
-
-    def __repr__(self):
-        return f"{self.type}({_outline(self._parts)!r})"
-
     def __setstate__(self, state):
-        self._parts["state"] = _positional(state) if isinstance(state, tuple) else state
-
-    def __setitem__(self, key, value):
-        self._parts.setdefault("items", {})[key] = value
-
-    def extend(self, values):
-        items = self._parts.setdefault("items", {})
-        items.update(_positional([*items.values(), *values]))
+        pass
 
     def append(self, value):
-        self.extend([value])
+        pass
 
-    def __call__(self, *args, **kwargs):  # Calling a recorded object is recorded too.
-        return _record_type(f"{self.type}()")(*args, **kwargs)
+    def extend(self, values):
+        pass
 
+    def __setitem__(self, key, value):
+        pass
 
-def _outline(value):
-    """value with any nested record reduced to its type: records often share deeply, so repr stays bounded."""
-    if isinstance(value, _Record):
-        return f"<{value.type}>"
-    if isinstance(value, dict):
-        return {key: _outline(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return type(value)(_outline(item) for item in value)
-    return value
+    def __call__(self, *args, **kwargs):
+        _touched.append(self.type)
+        return self
+
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        _touched.append(self.type)
+        return self
+
+    def __repr__(self):
+        return f"<{self.type}>"
 
 
 @lru_cache(maxsize=None)
-def _record_type(name: str) -> type[_Record]:
-    """A stand-in for the global name: calling it records the call, and nothing named is imported."""
-    return type(name.rpartition(".")[2], (_Record,), {"type": name})
-
-
-def _resolved(module: str, name: str):
-    """A data type's global as a reference for the scan, or the record type standing in for any other."""
-    name = _qualified(module, name)
-    return _Ref(name) if name in _ALLOWED else _record_type(".".join(name))
+def _unbuilt(name: str) -> type:
+    """A class standing in for an untrusted global while loading for real: builds nothing but its name."""
+    return type(name.rpartition(".")[2], (_Unbuilt,), {"type": name})
 
 
 class _DataUnpickler(pickle.Unpickler):
-    """Builds data types; other globals become record types. Persistent IDs and out-of-band buffers stay refused."""
+    """Builds trusted types for real; anything else becomes an _Unbuilt instance naming only its type."""
 
     def find_class(self, module, name):
-        resolved = _resolved(module, name)
-        return super().find_class(*resolved.name) if isinstance(resolved, _Ref) else resolved
+        qualified = _qualified(module, name)
+        return super().find_class(*qualified) if _buildable(qualified) else _unbuilt(".".join(qualified))
 
 
 def pickle_load(path: str | Path) -> Any:
-    """A pickle file's value: data types built, other objects as records of their parts."""
+    """A pickle file's value: trusted types built for real, anything else an opaque, unopenable leaf."""
     with open(path, "rb") as file:
         return _DataUnpickler(file).load()
 
@@ -162,8 +215,8 @@ def _operations(file) -> Iterable[tuple[str, Any]]:
 
 def _call(function, args, kwargs=None):
     """What calling function with args builds, so far as scanning can know without running it."""
-    if isinstance(function, (type, _Record)):  # Record types, and records, record the call as loading does.
-        return function(*args, **(kwargs or {}))
+    if isinstance(function, _Opaque):  # An untrusted call stays untrusted, whatever it is given.
+        return function
     name = function.name if isinstance(function, _Ref) and function.args is None else None
     if name in _MAPPINGS:  # Rebuilt as dicts, so their items fill in and paths reach them.
         return {}
@@ -211,11 +264,11 @@ def _scan(file):
             stack.append(items if name == "LIST" else dict(zip(items[::2], items[1::2])))
         elif name in ("APPEND", "APPENDS"):
             items = take(1 if name == "APPEND" else None)
-            if isinstance(stack[-1], (list, _Record)):
+            if isinstance(stack[-1], list):
                 stack[-1].extend(items)
         elif name in ("SETITEM", "SETITEMS"):
             items = take(2 if name == "SETITEM" else None)
-            if isinstance(stack[-1], (dict, _Record)):
+            if isinstance(stack[-1], dict):
                 for key, value in zip(items[::2], items[1::2]):
                     stack[-1][key] = value
         elif name in ("FROZENSET", "ADDITEMS"):
@@ -223,18 +276,16 @@ def _scan(file):
             if name == "FROZENSET":
                 stack.append(_Ref(("builtins", "frozenset"), ()))
         elif name in ("GLOBAL", "STACK_GLOBAL"):
-            stack.append(_resolved(*(argument.split(" ", 1) if name == "GLOBAL" else take(2))))
+            stack.append(_global(*(argument.split(" ", 1) if name == "GLOBAL" else take(2))))
         elif name in ("REDUCE", "NEWOBJ", "NEWOBJ_EX"):
             stack.append(_call(*take(3 if name == "NEWOBJ_EX" else 2)))
         elif name in ("INST", "OBJ"):
             items = take()
-            function = _resolved(*argument.split(" ", 1)) if name == "INST" else items.pop(0)
+            function = _global(*argument.split(" ", 1)) if name == "INST" else items.pop(0)
             stack.append(_call(function, tuple(items)))
         elif name == "BUILD":
             state, = take(1)
-            if isinstance(stack[-1], _Record):
-                stack[-1].__setstate__(state)
-            elif isinstance(stack[-1], _Ref):
+            if isinstance(stack[-1], _Ref):
                 stack[-1].state = state
         elif name == "NEXT_BUFFER":
             stack.append(_Ref(("builtins", "bytes"), ()))
@@ -269,6 +320,8 @@ def _plain(node) -> bool:
 
 
 def _kind(node) -> NodeKind:
+    if isinstance(node, _Opaque):
+        return "scalar"
     if isinstance(node, _Ref):
         return "scalar" if node.name in _SCALARS else "dataset"
     return value_kind(node)
@@ -302,13 +355,16 @@ def _array(node) -> NodeInfo | None:
 def _inspect_node(path, key=None) -> NodeInfo:
     node = _structure(path, key)
     kind = _kind(node)
-    if kind == "group":
-        # A group's type names its class only when it stands for a reconstructed object, not a real container.
-        record_type = node.type if isinstance(node, _Record) else None
-        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)), type=record_type)
     if kind == "scalar":
-        return NodeInfo(kind)
-    return _array(node) or (value_info(node) if _plain(node) else NodeInfo(kind))
+        return NodeInfo(kind, type=node.type if isinstance(node, _Opaque) else None)
+    if kind == "group":
+        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)))
+    array = _array(node)
+    if array is not None:
+        return array
+    if _plain(node):
+        return value_info(node)
+    return NodeInfo(kind, type=".".join(node.name) if isinstance(node, _Ref) else None)
 
 
 def _inspect(path, key=None) -> Iterable[tuple[str, NodeKind, Any]]:

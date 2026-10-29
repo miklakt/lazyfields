@@ -22,7 +22,7 @@ class Run:
 
 
 def _plot():
-    """A Figure: importable, but not a data type, so it comes back as a record too, never rendered live."""
+    """A Figure: not data, so it is an opaque leaf unless matplotlib is trusted - see browser/viewers.py."""
     figure = Figure()
     figure.add_subplot().plot([-1.25, -1.10, -0.95])
     return figure

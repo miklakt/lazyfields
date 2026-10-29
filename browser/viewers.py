@@ -10,13 +10,26 @@ from ..readers import as_array, value_info
 _viewers = {}
 
 
-def register_viewer(name, accepts, view):
+def show_error(parent, title, exc):
+    """A standard error dialog for an exception, so every Tk entry point reports failures the same way."""
+    from tkinter import messagebox
+    messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=parent)
+
+
+def register_viewer(name, accepts, view, *, trust=None):
     """Register view(value, attrs) for nodes accepted by accepts(node).
 
     accepts receives a NodeInfo. view returns a matplotlib Figure, a function
     filling a Tk frame, or None when it opens its own window.
     Re-registering a name replaces it at highest priority.
+
+    trust lets a pickled class, or a module or package prefix, unpickle for real instead of staying
+    an opaque leaf, so this viewer receives the live object it expects; see pickled._allow for the
+    tradeoff that comes with it.
     """
+    if trust is not None:
+        from ..readers.pickled import _allow
+        _allow(trust)
     _viewers.pop(name, None)
     _viewers[name] = accepts, view
 
@@ -36,7 +49,7 @@ def suitable_viewers(node):
 def open_value(master, title, value, view=None, attrs=None):
     """Show a value using the chosen or preferred viewer, with a text toggle."""
     import tkinter as tk
-    from tkinter import messagebox, ttk
+    from tkinter import ttk
 
     node = replace(value_info(value), attrs=attrs or {})
     view = view or suitable_viewers(node)[0][1]
@@ -51,7 +64,7 @@ def open_value(master, title, value, view=None, attrs=None):
             shown(frame)
     except Exception as exc:
         window.destroy()
-        messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=master)
+        show_error(master, title, exc)
         return
     if shown is None:  # Shown in a window of its own.
         window.destroy()
@@ -176,4 +189,5 @@ register_viewer("Text", lambda node: True, _TEXT)
 if find_spec("matplotlib") is not None:
     register_viewer("Plot", lambda node: _numeric(node, (1, 2)), _plot)
     register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
-    register_viewer("Figure", lambda node: node.type == "matplotlib.figure.Figure", _tk(_embed_figure))
+    register_viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
+                     _tk(_embed_figure), trust="matplotlib")

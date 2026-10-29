@@ -7,7 +7,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from .viewers import open_value, register_viewer, suitable_viewers
+from .viewers import open_value, register_viewer, show_error, suitable_viewers
 
 
 def one_line_repr(value, width=160):
@@ -238,7 +238,11 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
 
     def open_node(path, view=None):
         # Browsing stays lazy: a clone of its own source, not the value loaded.
-        value = filesystem.clone(path) if view is _browse else filesystem.read(path)
+        try:
+            value = filesystem.clone(path) if view is _browse else filesystem.read(path)
+        except Exception as exc:
+            show_error(master, path, exc)
+            return
         open_value(master, path, value, view, filesystem.attrs(path))
 
     def enter(event):
@@ -274,8 +278,13 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         widget.selection_set(selected)
         menu.delete(0, "end")
         if item:
-            names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
-            for name, viewer in suitable_viewers(replace(described(item), children=names)):
+            try:
+                names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
+                viewers = suitable_viewers(replace(described(item), children=names))
+            except Exception as exc:
+                show_error(master, item, exc)
+                return
+            for name, viewer in viewers:
                 menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",

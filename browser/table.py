@@ -10,6 +10,7 @@ import pandas as pd
 from .. import store  # noqa: F401  Registers the store accessor.
 from .filesystem import bind_context_menu, one_line_repr, panes
 from .methods import ask_arguments, run_and_show
+from .viewers import show_error
 
 
 def _cell(column, value):
@@ -33,7 +34,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     Right-clicking runs a registered method on the selected rows and shows its result.
     """
     import tkinter as tk
-    from tkinter import messagebox, ttk
+    from tkinter import ttk
 
     if isinstance(reference_df, (str, Path)):
         reference_df = pd.read_pickle(reference_df)
@@ -197,7 +198,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             try:
                 run_and_show(window, f"{target} · {name}({text})", lambda: method(*args, **kwargs))
             except Exception as exc:
-                messagebox.showerror(name, f"{type(exc).__name__}: {exc}", parent=window)
+                show_error(window, name, exc)
             finally:
                 window.configure(cursor="")
 
