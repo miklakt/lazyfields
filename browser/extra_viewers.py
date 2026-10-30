@@ -21,13 +21,14 @@ from .viewers import Viewer, _embed_figure, _tk, numeric
 def _fill_table(window, value, limit=5000):
     from tkinter import ttk
 
-    import pandas as pd
-
     from .filesystem import one_line_repr
 
-    if isinstance(value, pd.Series):
-        value = value.to_frame(name=value.name if value.name is not None else "value")
-    if isinstance(value, pd.DataFrame):
+    type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+    if type_name in ("pandas.DataFrame", "pandas.Series"):
+        import pandas as pd
+
+        if isinstance(value, pd.Series):
+            value = value.to_frame(name=value.name if value.name is not None else "value")
         index_name = " / ".join(str(name) for name in value.index.names if name is not None) or "index"
         index, columns = value.index, list(value.columns)
         rows = value.itertuples(index=False, name=None)
