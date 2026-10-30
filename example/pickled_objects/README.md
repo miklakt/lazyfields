@@ -30,15 +30,17 @@ Trusting a prefix runs that library's own unpickling code on the file, the
 same as `pickle.load` would for that code. Configure it only for pickle files
 you trust.
 
-`browse.py` mounts the file a second time as `readable` with a trusted reader:
+`browse.py` mounts the same file twice, side by side, once through each reader:
 
 ```python
 trusted = pickle_reader(trust=["pandas", "matplotlib"])
-FileSystem.from_spec({"mount": [{"glob": "*.pkl"}], "children": {
-    "readable": {"path": "results.pkl", "reader": "trusted-pickle"},
+FileSystem.from_spec({"children": {
+    "untrusted": {"path": "results.pkl"},
+    "trusted": {"path": "results.pkl", "reader": "trusted-pickle"},
 }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted})
 ```
 
-Under `readable`, pandas and matplotlib are trusted, so `table` is a real
+Under `trusted`, pandas and matplotlib are trusted, so `table` is a real
 `DataFrame` opened by the Table viewer, and `plot` is a real Figure handled by
-the existing Figure viewer. The default `results.pkl` mount remains inert.
+the existing Figure viewer. `run` stays an inert record under both mounts:
+trusting pandas and matplotlib doesn't trust the script's own `Run` class.

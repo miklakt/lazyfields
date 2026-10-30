@@ -11,9 +11,10 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 def main():
     trusted = pickle_reader(trust=["pandas", "matplotlib"])
-    # The directory uses the safe default; readable mounts the file again through an explicitly trusted reader.
-    fs = FileSystem.from_spec({"mount": [{"glob": "*.pkl"}], "children": {
-        "readable": {"path": "results.pkl", "reader": "trusted-pickle"},
+    # Two mounts of the same file, side by side: one through the safe default, one explicitly trusted.
+    fs = FileSystem.from_spec({"children": {
+        "untrusted": {"path": "results.pkl"},
+        "trusted": {"path": "results.pkl", "reader": "trusted-pickle"},
     }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted})
     browse_filesystem(fs)
 
