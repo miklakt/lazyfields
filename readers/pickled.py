@@ -16,31 +16,30 @@ from typing import Any, Iterable
 from . import NodeInfo, NodeKind, Reader, _group_entries, _path_get, value_info, value_kind
 
 _ALLOWED = frozenset({
-    *(("builtins", name) for name in (
-        "bool", "bytearray", "bytes", "complex", "dict", "float", "frozenset", "getattr", "int", "list", "object",
-        "range", "set", "slice", "str", "tuple")),
+    *(("builtins", name) for name in ("bytearray", "complex", "getattr", "object", "range", "slice")),
     ("collections", "OrderedDict"), ("collections", "defaultdict"), ("collections", "deque"),
     ("datetime", "date"), ("datetime", "datetime"), ("datetime", "time"), ("datetime", "timedelta"),
     ("datetime", "timezone"), ("decimal", "Decimal"),
     ("functools", "partial"), ("itertools", "count"),
-    ("numpy", "dtype"), ("numpy", "ndarray"), ("numpy.core.multiarray", "_reconstruct"),
-    ("numpy.core.multiarray", "scalar"), ("numpy.core.numeric", "_frombuffer"),
+    ("numpy", "dtype"), ("numpy", "ndarray"), ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.multiarray", "scalar"), ("numpy._core.numeric", "_frombuffer"),
 })
-_MAPPINGS = {("builtins", "dict"), ("collections", "OrderedDict"), ("collections", "defaultdict")}
+_MAPPINGS = {("collections", "OrderedDict"), ("collections", "defaultdict")}
 _SCALARS = {("builtins", "bytes"), ("builtins", "complex"), ("datetime", "date"), ("datetime", "datetime"),
             ("datetime", "time"), ("datetime", "timedelta"), ("decimal", "Decimal"),
-            ("numpy.core.multiarray", "scalar")}
+            ("numpy._core.multiarray", "scalar")}
 # Opcodes whose argument is the value they push.
-_VALUES = {"INT", "BININT", "BININT1", "BININT2", "LONG", "LONG1", "LONG4", "FLOAT", "BINFLOAT",
-           "STRING", "BINSTRING", "SHORT_BINSTRING", "UNICODE", "BINUNICODE", "SHORT_BINUNICODE", "BINUNICODE8",
+_VALUES = {"BININT", "BININT1", "BININT2", "LONG1", "LONG4", "BINFLOAT",
+           "BINUNICODE", "SHORT_BINUNICODE", "BINUNICODE8",
            "SHORT_BINBYTES", "BINBYTES", "BINBYTES8", "BYTEARRAY8"}
+_OPCODES = _VALUES | {
+    "NONE", "NEWTRUE", "NEWFALSE", "EMPTY_DICT", "EMPTY_LIST", "EMPTY_TUPLE", "EMPTY_SET",
+    "MARK", "MEMOIZE", "BINGET", "LONG_BINGET", "TUPLE", "TUPLE1", "TUPLE2", "TUPLE3",
+    "APPEND", "APPENDS", "SETITEM", "SETITEMS", "FROZENSET", "ADDITEMS", "STACK_GLOBAL",
+    "REDUCE", "NEWOBJ", "NEWOBJ_EX", "BUILD", "NEXT_BUFFER", "READONLY_BUFFER", "PROTO", "FRAME", "STOP",
+}
 # Byte payloads, by the size of their length prefix; the scan seeks past those above _INLINE bytes.
 _PAYLOADS, _INLINE = {"bytes1": 1, "bytes4": 4, "bytes8": 8, "bytearray8": 8}, 1024
-
-
-def _qualified(module: str, name: str) -> tuple[str, str]:
-    # NumPy 2 moved numpy.core to numpy._core; treat both spellings as the same allowlisted module.
-    return module.replace("numpy._core", "numpy.core"), name
 
 
 def _trust(trust):
@@ -128,7 +127,7 @@ def _record_type(name: str) -> type[_Record]:
 
 def _resolved(module: str, name: str, trust=frozenset()):
     """A data type's global as a reference for the scan, or the record type standing in for any other."""
-    name = _qualified(module, name)
+    name = module, name
     return _Ref(name) if _trusted(*name, trust) else _record_type(".".join(name))
 
 
@@ -149,7 +148,7 @@ class _DataUnpickler(pickle.Unpickler):
         self.trust = trust
 
     def find_class(self, module, name):
-        qualified = _qualified(module, name)
+        qualified = module, name
         if self.trust is None:
             return super().find_class(*qualified)
         if qualified == ("builtins", "getattr"):
@@ -167,7 +166,9 @@ class _DataUnpickler(pickle.Unpickler):
 def _load(path: str | Path, trust=frozenset()) -> Any:
     with open(path, "rb") as file:
         for name, _ in _operations(file):
-            if trust is not None and name.startswith("EXT"):
+            if name.startswith("EXT") and trust is not None:
+                raise pickle.UnpicklingError(f"Pickle opcode {name} is not supported.")
+            if not name.startswith("EXT") and name not in _OPCODES:
                 raise pickle.UnpicklingError(f"Pickle opcode {name} is not supported.")
             if name == "STOP": break
         file.seek(0)
@@ -245,19 +246,12 @@ def _scan(file, trust=frozenset()):
             stack.append(_CONSTANTS[name]())
         elif name == "MARK":
             marks.append(len(stack))
-        elif name in ("POP", "POP_MARK"):
-            take(1 if name == "POP" else None)
-        elif name == "DUP":
-            stack.append(stack[-1])
-        elif name in ("PUT", "BINPUT", "LONG_BINPUT", "MEMOIZE"):
-            memo[len(memo) if name == "MEMOIZE" else argument] = stack[-1]
-        elif name in ("GET", "BINGET", "LONG_BINGET"):
+        elif name == "MEMOIZE":
+            memo[len(memo)] = stack[-1]
+        elif name in ("BINGET", "LONG_BINGET"):
             stack.append(memo[argument])
         elif name in ("TUPLE1", "TUPLE2", "TUPLE3", "TUPLE"):
             stack.append(tuple(take(int(name[-1]) if name[-1].isdigit() else None)))
-        elif name in ("LIST", "DICT"):
-            items = take()
-            stack.append(items if name == "LIST" else dict(zip(items[::2], items[1::2])))
         elif name in ("APPEND", "APPENDS"):
             items = take(1 if name == "APPEND" else None)
             if isinstance(stack[-1], (list, _Record)):
@@ -271,14 +265,10 @@ def _scan(file, trust=frozenset()):
             take()
             if name == "FROZENSET":
                 stack.append(_Ref(("builtins", "frozenset"), ()))
-        elif name in ("GLOBAL", "STACK_GLOBAL"):
-            stack.append(_resolved(*(argument.split(" ", 1) if name == "GLOBAL" else take(2)), trust))
+        elif name == "STACK_GLOBAL":
+            stack.append(_resolved(*take(2), trust))
         elif name in ("REDUCE", "NEWOBJ", "NEWOBJ_EX"):
             stack.append(_call(*take(3 if name == "NEWOBJ_EX" else 2)))
-        elif name in ("INST", "OBJ"):
-            items = take()
-            function = _resolved(*argument.split(" ", 1), trust) if name == "INST" else items.pop(0)
-            stack.append(_call(function, tuple(items)))
         elif name == "BUILD":
             state, = take(1)
             if isinstance(stack[-1], _Record):
@@ -337,9 +327,9 @@ def _array(node) -> NodeInfo | None:
     """The dtype and shape of a NumPy array the pickle would build."""
     if not isinstance(node, _Ref):
         return None
-    if node.name == ("numpy.core.multiarray", "_reconstruct") and isinstance(node.state, tuple):
+    if node.name == ("numpy._core.multiarray", "_reconstruct") and isinstance(node.state, tuple):
         shape, dtype = node.state[1], _dtype(node.state[2])
-    elif node.name == ("numpy.core.numeric", "_frombuffer"):
+    elif node.name == ("numpy._core.numeric", "_frombuffer"):
         shape, dtype = node.args[2], _dtype(node.args[1])
     else:
         return None

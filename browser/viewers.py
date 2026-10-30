@@ -215,6 +215,4 @@ if find_spec("matplotlib") is not None:
     register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
     register_viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
                      _tk(_embed_figure))
-register_viewer("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series",
-                                                     "pandas.core.frame.DataFrame",
-                                                     "pandas.core.series.Series"), _tk(_show_table))
+register_viewer("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series"), _tk(_show_table))
