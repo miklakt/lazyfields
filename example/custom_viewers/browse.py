@@ -1,4 +1,10 @@
-"""Inject volume, RGB image and molecule viewers into one mounted filesystem browser, with NPZ and PDB readers."""
+"""Inject volume, RGB image, molecule, channel-splitting and point-cloud viewers, plus the built-in
+slices, plot and table viewers, into one mounted filesystem browser, with NPZ and PDB readers.
+
+Split Channels returns plain named arrays, no Tk or matplotlib of its own: open_value shows its
+result with whichever viewer fits, here XYZ Scatter, exactly as a registered store method's result
+would be shown.
+"""
 
 import json
 from pathlib import Path
@@ -6,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from lazyfields.browser import browse_filesystem, register_viewer
+from lazyfields.browser.extra_viewers import PLOT, SLICES, TABLE
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import register_reader
 from lazyfields.readers.npz import NUMPY_ARCHIVE
@@ -29,6 +36,16 @@ def is_image(node):
 def is_volume(node):
     """Offer volume rendering for numeric 3D arrays other than RGB images."""
     return is_numeric_3d(node) and not is_image(node)
+
+
+def split_channels(value, attrs, *, order="rgb"):
+    """Each channel-first array's channel flattened to its own named array.
+
+    order maps each array position to a channel letter, for images stored in another channel order.
+    The result is shown by whichever viewer fits it, here XYZ Scatter — no Tk or matplotlib here.
+    """
+    names = {"r": "red", "g": "green", "b": "blue"}
+    return {names[letter]: channel.ravel() for letter, channel in zip(order, np.asarray(value))}
 
 
 def show_image(value, attrs):
@@ -93,14 +110,45 @@ def show_molecule(value, attrs):
     return figure
 
 
+def is_xyz_group(node):
+    """Any group with at least three children, offered as a point cloud with axes chosen in a popup.
+
+    accepts only sees child names here, not their shapes, so this is a loose heuristic: groups meant
+    for this viewer should hold only 1D arrays of the same length, such as Split Channels' result or
+    a molecule's x/y/z/element columns, which also happens to qualify.
+    """
+    return node.kind == "group" and len(node.children) >= 3
+
+
+def show_xyz_group(value, attrs, *, x="red", y="green", z="blue"):
+    """Point cloud from three named 1D arrays in the group; axes are picked in the popup above."""
+    from matplotlib.figure import Figure
+
+    figure = Figure(layout="constrained")
+    axes = figure.add_subplot(projection="3d")
+    axes.scatter(np.asarray(value[x]), np.asarray(value[y]), np.asarray(value[z]), s=2)
+    axes.set(xlabel=x, ylabel=y, zlabel=z)
+    return figure
+
+
 def main():
     if not (DATA_DIR / "mount.json").exists():  # Written last.
         raise FileNotFoundError("Run example/custom_viewers/generate_dataset.py first.")
     register_reader(NUMPY_ARCHIVE)
     register_reader(PROTEIN_DATA_BANK)
     register_viewer("Volume", is_volume, show_volume)
+    # Registered first: wins the default glance at a photo over Split Channels, which comes next.
     register_viewer("Image", is_image, show_image)
-    register_viewer("Molecule", is_molecule, show_molecule)
+    register_viewer("Split Channels", is_image, split_channels)
+    # Marked specific: its exact x/y/z/element shape should win over Browser, which also matches
+    # any group.
+    register_viewer("Molecule", is_molecule, show_molecule, specific=True)
+    # Left unmarked: this loose "any group of three or more children" heuristic loses the tie against
+    # Browser, which registered first, so a nested result browses before it scatters.
+    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group)
+    register_viewer(SLICES)
+    register_viewer(PLOT)
+    register_viewer(TABLE)
     filesystem = FileSystem.from_spec(json.loads((DATA_DIR / "mount.json").read_text()),
                                       relative_to=DATA_DIR)
     browse_filesystem(filesystem)

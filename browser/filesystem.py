@@ -173,7 +173,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         """Type and value preview for a node."""
         preview = 8  # Entries read per axis: more than the value's shortened text shows.
         if infos[path].kind == "group":
-            return previews.get(path, ("", ""))
+            return previews.get(path, (infos[path].type or "", ""))
         if path not in previews:
             try:
                 info = described(path)
@@ -285,8 +285,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
                 show_error(master, item, exc)
                 return
             for viewer in viewers:
-                menu.add_command(label=f"Open with {viewer.name}",
-                                  command=lambda viewer=viewer: open_node(item, viewer.view))
+                menu.add_command(label=viewer.name, command=lambda viewer=viewer: open_node(item, viewer.view))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or widget.set(selected, "value")))
@@ -310,7 +309,10 @@ def _browse(value, attrs):
     return lambda window: panes(window, source, collapse=False)("/")
 
 
-register_viewer("Browser", lambda node: node.kind == "group", _browse)
+# Matches any group, and any dataset still reporting the children of what it's really built from
+# underneath (a reconstructed DataFrame, say) - a viewer specific to one's actual shape (Molecule,
+# say) marks itself specific to win over this, same as over any other unmarked, equally loose viewer.
+register_viewer("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
 
 
 def main(argv=None) -> None:

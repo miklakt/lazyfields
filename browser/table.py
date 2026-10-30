@@ -8,9 +8,22 @@ from pathlib import Path
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
+from .arguments import ask_arguments
 from .filesystem import bind_context_menu, one_line_repr, panes
-from .methods import ask_arguments, run_and_show
-from .viewers import show_error
+from .viewers import open_value, show_error
+
+
+def _run_and_show(master, title, call):
+    """Show a call's result with its preferred viewer; None opens no window.
+
+    A Series, one value per selected row, shows as a group of them named by row label.
+    """
+    result = call()
+    if isinstance(result, pd.Series):
+        result = None if all(value is None for value in result) else {
+            str(label): value for label, value in result.items()}
+    if result is not None:
+        open_value(master, title, result)
 
 
 def _cell(column, value):
@@ -196,7 +209,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             window.configure(cursor="watch")
             window.update_idletasks()
             try:
-                run_and_show(window, f"{target} · {name}({text})", lambda: method(*args, **kwargs))
+                _run_and_show(window, f"{target} · {name}({text})", lambda: method(*args, **kwargs))
             except Exception as exc:
                 show_error(window, name, exc)
             finally:

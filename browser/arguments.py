@@ -1,11 +1,11 @@
-"""Running registered methods from the table browser: a form for their arguments and showing results."""
+"""A Tk form for a callable's parameters: prefilled with defaults, parsed back as literals.
+
+Shared by registered store methods (browser/table.py) and viewer keyword arguments
+(browser/viewers.py).
+"""
 
 import ast
 from inspect import Parameter
-
-import pandas as pd
-
-from .viewers import open_value
 
 _POSITIONAL = (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
 
@@ -103,16 +103,3 @@ def ask_arguments(master, name, parameters, filled, submit):
     ttk.Button(form, text="Run", command=run).grid(row=len(parameters), column=1, sticky="e", padx=4, pady=4)
     form.bind("<Return>", run)
     form.bind("<Escape>", lambda event: form.destroy())
-
-
-def run_and_show(master, title, call):
-    """Show a call's result with its preferred viewer; None opens no window.
-
-    A Series, one value per selected row, shows as a group of them named by row label.
-    """
-    result = call()
-    if isinstance(result, pd.Series):
-        result = None if all(value is None for value in result) else {
-            str(label): value for label, value in result.items()}
-    if result is not None:
-        open_value(master, title, result)

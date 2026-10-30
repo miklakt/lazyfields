@@ -6,13 +6,16 @@ in browser/extra_viewers.py as plain Viewer instances you import and register yo
 """
 
 from dataclasses import dataclass, replace
+from inspect import Parameter, signature
 from pprint import pformat
 from typing import Any, Callable
 
 from ..filesystem import FileSystem
 from ..readers import NodeInfo, value_info
+from .arguments import ask_arguments
 
 _viewers = {}
+_filled: dict[Callable, dict[str, str]] = {}
 
 
 def show_error(parent, title, exc):
@@ -23,81 +26,107 @@ def show_error(parent, title, exc):
 
 @dataclass(frozen=True)
 class Viewer:
-    """Shows nodes accepted by accepts(node: NodeInfo) using view(value, attrs).
+    """Shows nodes accepted by accepts(node: NodeInfo) using view(value, attrs, **kwargs).
 
-    view returns a matplotlib Figure, a function filling a Tk frame, or None when it opens its
-    own window.
+    view returns a matplotlib Figure, a function filling a Tk frame, None when it opens its own
+    window, or any other value — shown in turn by whichever viewer suits it, same as a registered
+    store method's result. This is what lets a plain computation (no Tk, no matplotlib) register as
+    a viewer: return the data and let an existing viewer display it.
+
+    specific marks a viewer that should win over a looser one also accepting the same node (Browser
+    matches any group, say); everything else settles such ties by registration order — Browser itself
+    needs no marking since nothing generic is registered ahead of it.
     """
 
     name: str
     accepts: Callable[[NodeInfo], bool]
     view: Callable[..., Any]
+    specific: bool = False
 
 
-def register_viewer(viewer: Viewer | str, accepts=None, view=None) -> Viewer:
+def register_viewer(viewer: Viewer | str, accepts=None, view=None, *, specific=False) -> Viewer:
     """Register a Viewer, building one first if given (name, accepts, view) instead.
 
-    Re-registering a name replaces it at highest priority.
+    Re-registering a name replaces it; specific only applies when building a new Viewer here, not
+    to one already constructed with its own.
     """
     if not isinstance(viewer, Viewer):
-        viewer = Viewer(viewer, accepts, view)
+        viewer = Viewer(viewer, accepts, view, specific)
     _viewers.pop(viewer.name, None)
     _viewers[viewer.name] = viewer
     return viewer
 
 
 def suitable_viewers(node):
-    """Return accepted viewers, preferred first, then newest registered."""
+    """Return accepted viewers: an explicit per-node preference, then specific ones, Text last."""
     suitable = []
-    for viewer in reversed(_viewers.values()):
+    for viewer in _viewers.values():
         try:
             if viewer.accepts(node):
                 suitable.append(viewer)
         except Exception:
             pass
-    return sorted(suitable, key=lambda viewer: viewer.name != node.attrs.get("viewer"))
+    preferred = node.attrs.get("viewer")
+    return sorted(suitable, key=lambda viewer: (viewer.name != preferred, viewer.view is _TEXT, not viewer.specific))
 
 
 def open_value(master, title, value, view=None, attrs=None):
-    """Show a value using the chosen or preferred viewer's view(), with a text toggle."""
+    """Show a value using the chosen or preferred viewer's view(), with a text toggle.
+
+    A view may take extra keyword-only parameters after (value, attrs); their defaults are then
+    offered in a form before showing, same as a registered store method's arguments.
+    """
     import tkinter as tk
     from tkinter import ttk
 
     node = replace(value_info(value), attrs=attrs or {})
     view = view or suitable_viewers(node)[0].view
-    window = tk.Toplevel(master)
-    window.title(title)
-    frame = ttk.Frame(window)
-    try:
-        shown = view(value, node.attrs)
-        if type(shown).__module__ == "matplotlib.figure":
+    parameters = [parameter for parameter in list(signature(view).parameters.values())[2:]
+                  if parameter.kind is Parameter.KEYWORD_ONLY]
+
+    def show(args, kwargs, text):
+        try:
+            shown = view(value, node.attrs, *args, **kwargs)
+        except Exception as exc:
+            show_error(master, title, exc)
+            return
+        if shown is None:  # Shown in a window of its own.
+            return
+        is_figure = type(shown).__module__ == "matplotlib.figure"
+        if not is_figure and not callable(shown):
+            # Not a rendering: a plain result, shown by whichever viewer suits it instead. A group
+            # result browses first unless some viewer specifically claims it instead.
+            open_value(master, title, shown)
+            return
+        window = tk.Toplevel(master)
+        window.title(title)
+        frame = ttk.Frame(window)
+        if is_figure:
             _embed_figure(frame, shown)
-        elif shown is not None:
+        else:
             shown(frame)
-    except Exception as exc:
-        window.destroy()
-        show_error(master, title, exc)
-        return
-    if shown is None:  # Shown in a window of its own.
-        window.destroy()
-        return
-    if view is not _TEXT:
-        text = ttk.Frame(window)
+        if view is not _TEXT:
+            text_frame = ttk.Frame(window)
 
-        def toggle():
-            if not text.winfo_children():
-                _show_text(text, value)
-            current, other = (frame, text) if frame.winfo_manager() else (text, frame)
-            window.geometry(window.geometry())  # Preserve the window size while switching views.
-            current.pack_forget()
-            other.pack(fill="both", expand=True)
-            button.configure(text="Viewer" if other is text else "Text")
+            def toggle():
+                if not text_frame.winfo_children():
+                    _show_text(text_frame, value)
+                current, other = (frame, text_frame) if frame.winfo_manager() else (text_frame, frame)
+                window.geometry(window.geometry())  # Preserve the window size while switching views.
+                current.pack_forget()
+                other.pack(fill="both", expand=True)
+                button.configure(text="Viewer" if other is text_frame else "Text")
 
-        bar = ttk.Frame(window)
-        button = ttk.Button(bar, text="Text", width=7, command=toggle)
-        button.pack(side="right")
-        bar.pack(side="top", fill="x")
-    frame.pack(fill="both", expand=True)
+            bar = ttk.Frame(window)
+            button = ttk.Button(bar, text="Text", width=7, command=toggle)
+            button.pack(side="right")
+            bar.pack(side="top", fill="x")
+        frame.pack(fill="both", expand=True)
+
+    if parameters:
+        ask_arguments(master, title, parameters, _filled.setdefault(view, {}), show)
+    else:
+        show([], {}, "")
 
 
 def _tk(fill):
