@@ -8,6 +8,7 @@ and state, so the data inside it stays readable while its code is never imported
 import pickle
 import pickletools
 import types
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache, partial
@@ -228,6 +229,106 @@ class _DataUnpickler(pickle.Unpickler):
         return _record_type(".".join(qualified))
 
 
+def _index_values(index_record):
+    """The real plain values behind one axis's Index, or None if its shape isn't recognized."""
+    if not (isinstance(index_record, _Record) and index_record.type == "pandas.core.indexes.base._new_Index"):
+        return None
+    import numpy as np
+
+    kwargs = index_record["args"].get("1")
+    data = kwargs.get("data") if isinstance(kwargs, dict) else None
+    if isinstance(data, np.ndarray):
+        return data
+    if isinstance(data, _Record) and data.type == "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked":
+        # A pandas string (or other NDArrayBacked) extension array: its raw values, dtype ignored.
+        values = data["state"].get("1") if isinstance(data.get("state"), dict) else None
+        return values if isinstance(values, np.ndarray) else None
+    return None
+
+
+def _dataframe(record):
+    """A real DataFrame, rebuilt by pandas' own public constructor from already-real column arrays
+    and index values - or None if this record's shape isn't the one recognized here.
+
+    Only ever reads a record's parts; nothing from the pickle is imported or called to get here, and
+    the one piece of pandas code that runs is the ordinary, public DataFrame(...) constructor.
+    """
+    if not (isinstance(record, _Record) and record.type == "pandas.DataFrame"):
+        return None
+    import numpy as np
+
+    manager = record["state"].get("_mgr") if isinstance(record.get("state"), dict) else None
+    if not (isinstance(manager, _Record) and manager.type == "pandas.core.internals.managers.BlockManager"):
+        return None
+    blocks, axes = manager["args"].get("0"), manager["args"].get("1")
+    if not (isinstance(blocks, tuple) and isinstance(axes, list) and len(axes) == 2):
+        return None
+    columns, index = _index_values(axes[0]), _index_values(axes[1])
+    if columns is None or index is None:
+        return None
+    series = [None] * len(columns)
+    for block in blocks:
+        if not (isinstance(block, _Record) and block.type == "pandas._libs.internals._unpickle_block"):
+            return None
+        array, placement = block["args"].get("0"), block["args"].get("1")
+        if not (isinstance(array, np.ndarray) and array.ndim == 2 and isinstance(placement, slice)):
+            return None
+        for row, position in enumerate(range(*placement.indices(len(columns)))):
+            series[position] = array[row]
+    if any(column is None for column in series):
+        return None
+    # Depth to the caller of _load() varies with how deeply this record is nested, so stacklevel can't
+    # reliably point past this module; the message names what matters instead of where it's raised from.
+    warnings.warn(
+        "Rebuilding a DataFrame from an untrusted pickle using only its raw column and index arrays, "
+        "through pandas' public constructor - not the pickle's own pandas-specific reconstruction. "
+        "Extension dtypes, categoricals, MultiIndex, attrs and flags are not preserved this way; pass "
+        "trust=[\"pandas\"] for an exact reconstruction.")
+    import pandas as pd
+    return pd.DataFrame(dict(zip(columns, series)), index=index)
+
+
+def _reconstructed(value, seen=None):
+    """value with any recognized pandas record rebuilt as a real DataFrame; everything else is only
+    walked for records to recognize deeper in, never altered itself.
+
+    seen tracks every container already visited, by id(): pickled data routinely shares or even
+    cycles back on itself (a matplotlib Figure's own axes reference it back, for one), so walking
+    naively would recurse forever on perfectly ordinary data, not just adversarial input.
+    """
+    seen = {} if seen is None else seen
+    if id(value) in seen:
+        return seen[id(value)]
+    if isinstance(value, _Record):
+        dataframe = _dataframe(value)
+        if dataframe is not None:
+            seen[id(value)] = dataframe
+            return dataframe
+        seen[id(value)] = value
+        parts = value._parts
+        for part in ("args", "items"):
+            for key, nested in parts.get(part, {}).items():
+                parts[part][key] = _reconstructed(nested, seen)
+        if "state" in parts:
+            parts["state"] = _reconstructed(parts["state"], seen)
+        return value
+    if isinstance(value, dict):
+        seen[id(value)] = value
+        for key, nested in value.items():
+            value[key] = _reconstructed(nested, seen)
+        return value
+    if isinstance(value, list):
+        seen[id(value)] = value
+        for index, nested in enumerate(value):
+            value[index] = _reconstructed(nested, seen)
+        return value
+    if isinstance(value, tuple):
+        result = tuple(_reconstructed(item, seen) for item in value)
+        seen[id(value)] = result
+        return result
+    return value
+
+
 def _load(path: str | Path, trust=frozenset()) -> Any:
     with open(path, "rb") as file:
         for name, _ in _operations(file):
@@ -239,7 +340,7 @@ def _load(path: str | Path, trust=frozenset()) -> Any:
         file.seek(0)
         unpickler = _DataUnpickler(file, trust)
         try:
-            return unpickler.load()
+            return _reconstructed(unpickler.load())
         except Exception as error:
             # A trusted class can itself depend on a global this trust didn't cover (e.g. pandas'
             # Arrow-backed strings needing pyarrow): that global becomes an inert record, the trusted
@@ -385,9 +486,16 @@ def _plain(node) -> bool:
     return not isinstance(node, _Ref) and all(map(_plain, _parts(node)))
 
 
+# Record types loading may still turn into a real dataset value, even though scanning alone - never
+# building anything - can't yet tell whether this particular one has the exact shape that needs.
+_RECONSTRUCTABLE = {"pandas.DataFrame"}
+
+
 def _kind(node) -> NodeKind:
     if isinstance(node, _Ref):
         return "scalar" if node.name in _SCALARS else "dataset"
+    if isinstance(node, _Record) and node.type in _RECONSTRUCTABLE:
+        return "dataset"
     return value_kind(node)
 
 
@@ -424,8 +532,15 @@ def _inspect_node(path, key=None, *, trust=frozenset()) -> NodeInfo:
                         type=node.type if isinstance(node, _Record) else None)
     if kind == "scalar":
         return NodeInfo(kind)
-    return _array(node) or (value_info(node) if _plain(node) else
-                            NodeInfo(kind, type=".".join(node.name) if isinstance(node, _Ref) else None))
+    if (array := _array(node)) is not None:
+        return array
+    if _plain(node):
+        return value_info(node)
+    type_name = ".".join(node.name) if isinstance(node, _Ref) else node.type if isinstance(node, _Record) else None
+    # A reconstructable record is still, underneath, the group of pickle internals it always was;
+    # listing them here (unused for a plain NumPy/_Ref dataset) keeps that available as a fallback.
+    children = tuple(str(name) for name, _ in _group_entries(node)) if isinstance(node, _Record) else ()
+    return NodeInfo(kind, children, type=type_name)
 
 
 def _inspect(path, key=None, *, trust=frozenset()) -> Iterable[tuple[str, NodeKind, Any]]:

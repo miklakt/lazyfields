@@ -210,10 +210,10 @@ class View:
         if key is None: return self.load(obj)
         if self.read is not None: return self.read(obj, key, selection)
         value = _path_get(self.load(obj), key)
-        if isinstance(value, (list, tuple)) and isinstance(selection, tuple):
-            # JSON arrays are lists and need array indexing for multiple axes.
-            import numpy as np
-            value = np.asarray(value)
+        if isinstance(selection, tuple) and not (hasattr(value, "shape") and getattr(value, "dtype", object) != object):
+            # Only a real array already supports indexing by a tuple of slices, one per axis; anything
+            # else - a JSON list, a DataFrame missing a single dtype - needs converting to one first.
+            value = as_array(value)
         return value if selection is None else value[selection]
 
     def info(self, obj: Any, key: str | None = None) -> NodeInfo:
