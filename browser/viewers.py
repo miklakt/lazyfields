@@ -1,11 +1,16 @@
-"""Viewer registration, selection, and display."""
+"""Viewer registration, selection, and display.
 
-from dataclasses import replace
-from importlib.util import find_spec
+Only Text registers here, plus the registry machinery itself; Browser (browser/filesystem.py)
+registers alongside it. Everything shape-specific (Table, Plot, Slices, Scatter, Figure) lives
+in browser/extra_viewers.py as plain Viewer instances you import and register yourself.
+"""
+
+from dataclasses import dataclass, replace
 from pprint import pformat
+from typing import Any, Callable
 
 from ..filesystem import FileSystem
-from ..readers import as_array, value_info
+from ..readers import NodeInfo, value_info
 
 _viewers = {}
 
@@ -16,36 +21,50 @@ def show_error(parent, title, exc):
     messagebox.showerror(title, f"{type(exc).__name__}: {exc}", parent=parent)
 
 
-def register_viewer(name, accepts, view):
-    """Register view(value, attrs) for nodes accepted by accepts(node).
+@dataclass(frozen=True)
+class Viewer:
+    """Shows nodes accepted by accepts(node: NodeInfo) using view(value, attrs).
 
-    accepts receives a NodeInfo. view returns a matplotlib Figure, a function
-    filling a Tk frame, or None when it opens its own window.
+    view returns a matplotlib Figure, a function filling a Tk frame, or None when it opens its
+    own window.
+    """
+
+    name: str
+    accepts: Callable[[NodeInfo], bool]
+    view: Callable[..., Any]
+
+
+def register_viewer(viewer: Viewer | str, accepts=None, view=None) -> Viewer:
+    """Register a Viewer, building one first if given (name, accepts, view) instead.
+
     Re-registering a name replaces it at highest priority.
     """
-    _viewers.pop(name, None)
-    _viewers[name] = accepts, view
+    if not isinstance(viewer, Viewer):
+        viewer = Viewer(viewer, accepts, view)
+    _viewers.pop(viewer.name, None)
+    _viewers[viewer.name] = viewer
+    return viewer
 
 
 def suitable_viewers(node):
     """Return accepted viewers, preferred first, then newest registered."""
     suitable = []
-    for name, (accepts, view) in reversed(_viewers.items()):
+    for viewer in reversed(_viewers.values()):
         try:
-            if accepts(node):
-                suitable.append((name, view))
+            if viewer.accepts(node):
+                suitable.append(viewer)
         except Exception:
             pass
-    return sorted(suitable, key=lambda viewer: viewer[0] != node.attrs.get("viewer"))
+    return sorted(suitable, key=lambda viewer: viewer.name != node.attrs.get("viewer"))
 
 
 def open_value(master, title, value, view=None, attrs=None):
-    """Show a value using the chosen or preferred viewer, with a text toggle."""
+    """Show a value using the chosen or preferred viewer's view(), with a text toggle."""
     import tkinter as tk
     from tkinter import ttk
 
     node = replace(value_info(value), attrs=attrs or {})
-    view = view or suitable_viewers(node)[0][1]
+    view = view or suitable_viewers(node)[0].view
     window = tk.Toplevel(master)
     window.title(title)
     frame = ttk.Frame(window)
@@ -106,38 +125,7 @@ def _show_text(window, value):
     text.configure(state="disabled")
 
 
-def _show_table(window, value, limit=5000):
-    """Show a pandas DataFrame or Series as a scrollable, read-only table."""
-    from tkinter import ttk
-
-    import pandas as pd
-
-    from .filesystem import one_line_repr
-
-    if isinstance(value, pd.Series):
-        value = value.to_frame(name=value.name if value.name is not None else "value")
-    ids = [f"c{index}" for index in range(len(value.columns))]
-    table = ttk.Treeview(window, columns=ids, show="tree headings")
-    scroll = ttk.Scrollbar(window, orient="vertical", command=table.yview)
-    xscroll = ttk.Scrollbar(window, orient="horizontal", command=table.xview)
-    table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
-    index_name = " / ".join(str(name) for name in value.index.names if name is not None) or "index"
-    table.heading("#0", text=index_name)
-    table.column("#0", width=120, stretch=False)
-    for key, column in zip(ids, value.columns):
-        table.heading(key, text=str(column))
-        table.column(key, width=120, stretch=False)
-    for index, row in zip(value.index[:limit], value.itertuples(index=False, name=None)):
-        table.insert("", "end", text=one_line_repr(index, 80),
-                     values=tuple(one_line_repr(item, 80) for item in row))
-    if len(value) > limit:
-        ttk.Label(window, text=f"Showing {limit} of {len(value)} rows").pack(side="bottom", anchor="e")
-    xscroll.pack(side="bottom", fill="x")
-    scroll.pack(side="right", fill="y")
-    table.pack(fill="both", expand=True)
-
-
-def _numeric(node, ndims):
+def numeric(node, ndims):
     """Whether node is a dataset of numbers with one of ndims dimensions longer than 1."""
     import numpy as np
 
@@ -145,74 +133,5 @@ def _numeric(node, ndims):
             and sum(size != 1 for size in node.shape) in ndims)
 
 
-def _array_figure(value):
-    """value as an array without dimensions of length 1, and a figure with axes to show it."""
-    import numpy as np
-    from matplotlib.figure import Figure
-
-    figure = Figure(layout="constrained")
-    return np.squeeze(as_array(value)), figure, figure.add_subplot()
-
-
-def _heatmap(axes, array, **kwargs):
-    """One cell per value, with (0, 0) at the bottom left."""
-    return axes.imshow(array, origin="lower", aspect="auto", interpolation="nearest", **kwargs)
-
-
-def _plot(value, attrs):
-    """Line plot for 1D, heatmap with colorbar for 2D."""
-    array, figure, axes = _array_figure(value)
-    if array.ndim == 1:
-        axes.plot(array)
-    else:
-        figure.colorbar(_heatmap(axes, array))
-    return figure
-
-
-def _show_slices(window, value):
-    """Heatmap of a 3D array's slice along a chosen axis, picked with a slider; colors fixed across slices."""
-    import tkinter as tk
-    from tkinter import ttk
-
-    import numpy as np
-
-    array, figure, axes = _array_figure(value)
-    image = _heatmap(axes, array[0], vmin=array.min(), vmax=array.max())
-    figure.colorbar(image)
-    axis = tk.IntVar(value=0)
-
-    def show(*_):
-        index = round(scale.get())
-        image.set_data(np.take(array, index, axis.get()))
-        axes.set_title(f"axis {axis.get()}: {index} / {array.shape[axis.get()] - 1}")
-        figure.canvas.draw_idle()
-
-    def cut():
-        """Slice along the chosen axis from its first index, showing the whole slice."""
-        height, width = np.take(array, 0, axis.get()).shape
-        image.set_extent((-0.5, width - 0.5, -0.5, height - 0.5))
-        axes.set(xlim=(-0.5, width - 0.5), ylim=(-0.5, height - 0.5))
-        scale.configure(to=array.shape[axis.get()] - 1)
-        scale.set(0)
-        show()
-
-    bar = ttk.Frame(window)
-    ttk.Label(bar, text="Axis").pack(side="left")
-    for number, size in enumerate(array.shape):
-        ttk.Radiobutton(bar, text=f"{number} ({size})", value=number, variable=axis,
-                        command=cut).pack(side="left")
-    scale = ttk.Scale(bar, from_=0, to=len(array) - 1, command=show)
-    scale.pack(side="left", fill="x", expand=True, padx=(8, 0))
-    bar.pack(side="top", fill="x")
-    _embed_figure(window, figure)
-    show()
-
-
 _TEXT = _tk(_show_text)
 register_viewer("Text", lambda node: True, _TEXT)
-if find_spec("matplotlib") is not None:
-    register_viewer("Plot", lambda node: _numeric(node, (1, 2)), _plot)
-    register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
-    register_viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
-                     _tk(_embed_figure))
-register_viewer("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series"), _tk(_show_table))

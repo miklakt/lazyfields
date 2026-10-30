@@ -284,8 +284,9 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
             except Exception as exc:
                 show_error(master, item, exc)
                 return
-            for name, viewer in viewers:
-                menu.add_command(label=f"Open with {name}", command=lambda viewer=viewer: open_node(item, viewer))
+            for viewer in viewers:
+                menu.add_command(label=f"Open with {viewer.name}",
+                                  command=lambda viewer=viewer: open_node(item, viewer.view))
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or widget.set(selected, "value")))
