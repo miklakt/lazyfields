@@ -106,6 +106,37 @@ def _show_text(window, value):
     text.configure(state="disabled")
 
 
+def _show_table(window, value, limit=5000):
+    """Show a pandas DataFrame or Series as a scrollable, read-only table."""
+    from tkinter import ttk
+
+    import pandas as pd
+
+    from .filesystem import one_line_repr
+
+    if isinstance(value, pd.Series):
+        value = value.to_frame(name=value.name if value.name is not None else "value")
+    ids = [f"c{index}" for index in range(len(value.columns))]
+    table = ttk.Treeview(window, columns=ids, show="tree headings")
+    scroll = ttk.Scrollbar(window, orient="vertical", command=table.yview)
+    xscroll = ttk.Scrollbar(window, orient="horizontal", command=table.xview)
+    table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
+    index_name = " / ".join(str(name) for name in value.index.names if name is not None) or "index"
+    table.heading("#0", text=index_name)
+    table.column("#0", width=120, stretch=False)
+    for key, column in zip(ids, value.columns):
+        table.heading(key, text=str(column))
+        table.column(key, width=120, stretch=False)
+    for index, row in zip(value.index[:limit], value.itertuples(index=False, name=None)):
+        table.insert("", "end", text=one_line_repr(index, 80),
+                     values=tuple(one_line_repr(item, 80) for item in row))
+    if len(value) > limit:
+        ttk.Label(window, text=f"Showing {limit} of {len(value)} rows").pack(side="bottom", anchor="e")
+    xscroll.pack(side="bottom", fill="x")
+    scroll.pack(side="right", fill="y")
+    table.pack(fill="both", expand=True)
+
+
 def _numeric(node, ndims):
     """Whether node is a dataset of numbers with one of ndims dimensions longer than 1."""
     import numpy as np
@@ -184,3 +215,6 @@ if find_spec("matplotlib") is not None:
     register_viewer("Slices", lambda node: _numeric(node, (3,)), _tk(_show_slices))
     register_viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
                      _tk(_embed_figure))
+register_viewer("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series",
+                                                     "pandas.core.frame.DataFrame",
+                                                     "pandas.core.series.Series"), _tk(_show_table))
