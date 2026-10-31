@@ -118,7 +118,7 @@ def open_value(master, title, value, call=None, attrs=None):
     import tkinter as tk
     from tkinter import ttk
 
-    from .filesystem import build_method_menu
+    from .filesystem import _browse, build_method_menu
 
     # A browsed group arrives as its own lazy FileSystem; value_info would misread it as a dataset,
     # so ask the source itself what it is, leaving value_info for actual in-memory values.
@@ -154,8 +154,13 @@ def open_value(master, title, value, call=None, attrs=None):
                       if parameter.kind is Parameter.KEYWORD_ONLY]
 
         def show(args, kwargs, text=""):
+            # Browser consumes the lazy FileSystem as-is; every other method wants the value read out,
+            # exactly as the tree does (filesystem.read for non-Browser calls). Read once, then reuse.
+            if isinstance(value, FileSystem) and call is not _browse and "read" not in state:
+                state["read"] = value.read()
+            source = state.get("read", value) if call is not _browse else value
             try:
-                shown = call(value, node.attrs, *args, **kwargs)
+                shown = call(source, node.attrs, *args, **kwargs)
             except Exception as exc:
                 show_error(state["window"] or master, title, exc)
                 return
