@@ -93,7 +93,11 @@ def open_value(master, title, value, call=None, attrs=None):
     from tkinter import ttk
 
     node = replace(value_info(value), attrs=attrs or {})
-    call = call or suitable_methods(node)[0].call
+    if call is None:
+        method = suitable_methods(node)[0]
+        call, name = method.call, method.name
+    else:
+        name = next((method.name for method in _methods.values() if method.call is call), "Method")
     parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
                   if parameter.kind is Parameter.KEYWORD_ONLY]
 
@@ -128,7 +132,7 @@ def open_value(master, title, value, call=None, attrs=None):
                 window.geometry(window.geometry())  # Preserve the window size while switching views.
                 current.pack_forget()
                 other.pack(fill="both", expand=True)
-                button.configure(text="Method" if other is text_frame else "Text")
+                button.configure(text=name if other is text_frame else "Text")
 
             bar = ttk.Frame(window)
             button = ttk.Button(bar, text="Text", width=7, command=toggle)
