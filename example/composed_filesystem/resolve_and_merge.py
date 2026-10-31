@@ -10,7 +10,8 @@ import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.browser import browse_table
+from lazyfields.browser import browse_table, register_method
+from lazyfields.browser.extra_methods import PLOT
 
 
 def compose(root: Path) -> FileSystem:
@@ -42,6 +43,31 @@ def add_to_index(path):
     return step
 
 
+def weighted_vector(row, factor=1.0):
+    """Scale the partition vector by its indexed metadata weight and an optional factor."""
+    import numpy as np
+    return np.asarray(row["vector"]) * row["weight"] * factor
+
+
+def block_values(row, block=0):
+    """Select one 2D block from the lazily stacked block values."""
+    return row["file_refs/values", block]
+
+
+def register_row_methods(reference_df):
+    """Install the persistent row methods; return whether their saved definitions changed."""
+    before = (reference_df.attrs.get("store_methods", {}).copy(),
+              reference_df.attrs.get("store_method_categories", {}).copy())
+    registered = set(reference_df.store.get_registered_methods())
+    for method in (weighted_vector, block_values):
+        if method.__name__ in registered:
+            reference_df.store.unregister_method(method.__name__)
+        reference_df.store.register_method(method, category="Analysis/Plots")
+    after = (reference_df.attrs.get("store_methods", {}),
+             reference_df.attrs.get("store_method_categories", {}))
+    return before != after
+
+
 def main() -> None:
     debug_readers()
     root = Path(__file__).resolve().parent / "data"
@@ -53,13 +79,18 @@ def main() -> None:
     else:
         view = compose(root)
         spec_path.write_text(json.dumps(view.to_spec(), indent=2) + "\n", encoding="utf-8")
-    if reference_path.exists() and not rebuild:
+    save_reference = rebuild or not reference_path.exists()
+    if not save_reference:
         reference_df = pd.read_pickle(reference_path)
     else:
         # file_ref/label lands in row["label"], file_ref/weight in row["weight"].
         pipe = [add_to_index("file_ref/label"), add_to_index("file_ref/weight")]
         reference_df = lf.create_reference_table(view.to_spec(), relative_to=root, pipe=pipe)
+    # Re-register after loading too, so this script always demonstrates its current method bodies.
+    methods_changed = register_row_methods(reference_df)
+    if save_reference or methods_changed:
         reference_df.to_pickle(reference_path)
+    register_method(PLOT, category="Display/Plots")
     browse_table(reference_df)
 
 

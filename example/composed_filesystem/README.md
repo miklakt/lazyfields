@@ -31,6 +31,13 @@ a dataset in the right pane to open its formatted text popup. OS directories sho
 `▦`, and scalars `·` in both panes; only groups have expansion arrows. Children are inspected one level at a time. Returning to a parent
 shows remembered short text previews; full values are not cached. Relocated mount boundaries also show `↪`, so relocated file roots show `↪ 📄`.
 
+`resolve_and_merge.py` also registers the standard Plot method. Right-click a
+table row and use **Analysis → Plots → weighted_vector** for a line
+plot of the partition vector scaled by its metadata weight, or **block_values**
+for a heatmap of one selected block from the lazily stacked values. Both are
+stored row methods: their source is saved in the reference-table pickle, and
+their plain array results are handed to the standard Plot method.
+
 ## Fixtures
 
 All paths are relative to `example/composed_filesystem/data/`:
