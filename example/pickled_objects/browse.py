@@ -1,6 +1,5 @@
-"""Browse a pickle holding a DataFrame and a custom object: untrusted leaves, and a trusted, real view."""
+"""Browse a pickle holding a DataFrame and a custom object: untrusted leaves and trusted objects."""
 
-from dataclasses import replace
 from pathlib import Path
 
 from lazyfields.browser import browse_filesystem, register_method
@@ -25,7 +24,7 @@ def main():
     register_method(PLOT, category="Display/Plots")
     # specific: a reconstructed DataFrame still reports its pickle internals too, so it also matches
     # Browser's deliberately loose "any group" catch-all - Table should win that tie, not lose it.
-    register_method(replace(TABLE, specific=True), category="Display/Tables")
+    register_method(TABLE, specific=True, category="Display/Tables")
     browse_filesystem(fs)
 
 

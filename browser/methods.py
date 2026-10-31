@@ -16,6 +16,7 @@ from .arguments import ask_arguments
 
 _methods = {}
 _method_categories: dict[str, str] = {}
+_specific_methods: set[str] = set()
 _filled: dict[Callable, dict[str, str]] = {}
 
 
@@ -34,33 +35,32 @@ class Method:
     store method's result. A plain computation needs no Tk or matplotlib: return its data and let
     another method display it.
 
-    specific marks a method that should win over a looser one also accepting the same node (Browser
-    matches any group, say); everything else settles such ties by registration order — Browser itself
-    needs no marking since nothing generic is registered ahead of it.
     """
 
     name: str
     accepts: Callable[[NodeInfo], bool]
     call: Callable[..., Any]
-    specific: bool = False
 
 
 def register_method(method: Method | str, accepts=None, call=None, *, specific=False,
                     category: str | None = None) -> Method:
     """Register a Method, building one first if given (name, accepts, call) instead.
 
-    Re-registering a name replaces it; specific only applies when building a new Method here, not
-    to one already constructed with its own. category groups it in a filesystem menu without
-    becoming part of the Method itself.
+    Re-registering a name replaces it. category groups it in a filesystem menu; specific makes it
+    win over a looser matching method. Neither option becomes part of the Method itself.
     """
     if not isinstance(method, Method):
-        method = Method(method, accepts, call, specific)
+        method = Method(method, accepts, call)
     _methods.pop(method.name, None)
     _methods[method.name] = method
     if category is None:
         _method_categories.pop(method.name, None)
     else:
         _method_categories[method.name] = category
+    if specific:
+        _specific_methods.add(method.name)
+    else:
+        _specific_methods.discard(method.name)
     return method
 
 
@@ -80,7 +80,7 @@ def suitable_methods(node):
             pass
     preferred = node.attrs.get("method")
     return sorted(suitable, key=lambda method: (method.name != preferred, method.call is _TEXT,
-                                                not method.specific))
+                                                method.name not in _specific_methods))
 
 
 def open_value(master, title, value, call=None, attrs=None):

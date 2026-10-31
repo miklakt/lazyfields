@@ -345,7 +345,7 @@ def _browse(value, attrs):
 
 # Matches any group, and any dataset still reporting the children of what it's really built from
 # underneath (a reconstructed DataFrame, say) - a method specific to one's actual shape (Molecule,
-# say) marks itself specific to win over this, same as over any other unmarked, equally loose method.
+# say) can be registered as specific to win over this and other unmarked, equally loose methods.
 register_method("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
 
 
