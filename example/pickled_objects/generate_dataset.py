@@ -14,7 +14,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 @dataclass
 class Run:
-    """A class that only this script defines: reading the pickle elsewhere cannot import it."""
+    """A class that only this script defines: a separate process can't import it at all."""
 
     temperature: float
     started: datetime

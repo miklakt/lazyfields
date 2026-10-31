@@ -13,11 +13,13 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 def main():
     trusted = pickle_reader(trust=["pandas", "matplotlib"])
-    # Two mounts of the same file, side by side: one through the safe default, one explicitly trusted.
+    naive = pickle_reader(trust=True)  # Ordinary pickle.load semantics: every class runs, for real.
+    # Three mounts of the same file, side by side: the safe default, explicitly trusted, and naive.
     fs = FileSystem.from_spec({"children": {
         "untrusted": {"path": "results.pkl"},
         "trusted": {"path": "results.pkl", "reader": "trusted-pickle"},
-    }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted})
+        "naive": {"path": "results.pkl", "reader": "naive-pickle"},
+    }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted, "naive-pickle": naive})
     register_viewer(FIGURE)
     register_viewer(SCATTER)
     register_viewer(PLOT)
