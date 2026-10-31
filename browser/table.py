@@ -9,7 +9,7 @@ import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
 from .arguments import ask_arguments
-from .filesystem import bind_context_menu, one_line_repr, panes
+from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
 from .viewers import open_value, show_error
 
 
@@ -224,10 +224,15 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         if item not in table.selection():
             table.focus(item)
             table.selection_set(item)
-        menu.delete(0, "end")
-        names = reference_df.store.get_registered_methods()
+        _clear_menu(menu)
+        accessor = reference_df.store
+        names = accessor.get_registered_methods()
+        submenus = {}
         for name in names:
-            menu.add_command(label=f"Run {name}", command=lambda name=name: run(name))
+            _add_menu_command(
+                menu, submenus, accessor.get_registered_method_category(name),
+                label=f"Run {name}", command=lambda name=name: run(name),
+            )
         if not names:
             menu.add_command(label="No registered methods", state="disabled")
         menu.tk_popup(x, y)

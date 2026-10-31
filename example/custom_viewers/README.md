@@ -16,6 +16,9 @@ knows nothing of rows or parents. Register one with
 The browser opens and titles its window, reports errors, and adds a button that
 toggles to the value as text.
 
+Pass `category="View/Plots"` to `register_viewer(...)` to place that registration
+in nested View and Plots submenus, omit it to leave the viewer at the context-menu root.
+
 From the repository root, with Tk available:
 
 ```bash
@@ -51,7 +54,7 @@ air, render transparent.
 
 It registers Molecule for any group with `x`, `y`, `z`, and `element` children,
 so it also recognizes those columns pickled or stored in HDF5: right-click a PDB
-file and choose Open with Molecule, and drag to rotate. Atoms are drawn as balls
+file, choose Molecule, and drag to rotate. Atoms are drawn as balls
 and sticks in CPK colours, sized by their van der Waals radii. Bonds join atoms
 closer than their covalent radii and 0.4 Å together, as most molecular viewers
 infer them, together with those a `bonds` dataset gives by atom serial, such as

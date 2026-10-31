@@ -40,7 +40,7 @@ reference_df = lf.create_reference_table(data_dir, pipe=pipe)
 
 
 # %%
-@reference_df.store.register_method
+@reference_df.store.register_method(category="Analysis/Arrays")
 def length(row, key):
     """Finds the length of the array provided by the key"""
     try:

@@ -5,7 +5,7 @@ import only the ones you want and register them yourself:
 
     from lazyfields.browser import register_viewer
     from lazyfields.browser.extra_viewers import TABLE
-    register_viewer(TABLE)
+    register_viewer(TABLE, category="View/Tables")
 
 PLOT, SLICES, SCATTER and FIGURE need matplotlib (`pip install lazyfields[plot]`); it is only
 imported inside their view functions, so importing this module itself never requires it.

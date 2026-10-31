@@ -136,19 +136,19 @@ def main():
         raise FileNotFoundError("Run example/custom_viewers/generate_dataset.py first.")
     register_reader(NUMPY_ARCHIVE)
     register_reader(PROTEIN_DATA_BANK)
-    register_viewer("Volume", is_volume, show_volume)
+    register_viewer("Volume", is_volume, show_volume, category="View/Volumes")
     # Registered first: wins the default glance at a photo over Split Channels, which comes next.
-    register_viewer("Image", is_image, show_image)
-    register_viewer("Split Channels", is_image, split_channels)
+    register_viewer("Image", is_image, show_image, category="View/Images")
+    register_viewer("Split Channels", is_image, split_channels, category="Transform/Images")
     # Marked specific: its exact x/y/z/element shape should win over Browser, which also matches
-    # any group.
+    # any group. Left uncategorized, it appears directly in the context menu.
     register_viewer("Molecule", is_molecule, show_molecule, specific=True)
     # Left unmarked: this loose "any group of three or more children" heuristic loses the tie against
     # Browser, which registered first, so a nested result browses before it scatters.
-    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group)
-    register_viewer(SLICES)
-    register_viewer(PLOT)
-    register_viewer(TABLE)
+    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group, category="View/Plots")
+    register_viewer(SLICES, category="View/Volumes")
+    register_viewer(PLOT, category="View/Plots")
+    register_viewer(TABLE, category="View/Tables")
     filesystem = FileSystem.from_spec(json.loads((DATA_DIR / "mount.json").read_text()),
                                       relative_to=DATA_DIR)
     browse_filesystem(filesystem)

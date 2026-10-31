@@ -7,7 +7,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from .viewers import open_value, register_viewer, show_error, suitable_viewers
+from .viewers import _viewer_category, open_value, register_viewer, show_error, suitable_viewers
 
 
 def one_line_repr(value, width=160):
@@ -102,6 +102,27 @@ def bind_context_menu(widget, callback):
         widget.bind(shortcut, keyboard_menu)
 
 
+def _add_menu_command(menu, submenus, category=None, **options):
+    """Add a command below an optional slash-separated submenu path."""
+    target = menu
+    if category is not None:
+        path = ()
+        for name in category.split("/"):
+            path += (name,)
+            if path not in submenus:
+                submenus[path] = type(menu)(target, tearoff=False)
+                target.add_cascade(label=name, menu=submenus[path])
+            target = submenus[path]
+    target.add_command(**options)
+
+
+def _clear_menu(menu):
+    """Clear a reusable menu and destroy submenus created for its previous contents."""
+    for submenu in menu.winfo_children():
+        submenu.destroy()
+    menu.delete(0, "end")
+
+
 def browse_filesystem(filesystem):
     """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
@@ -121,6 +142,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
     collapse keeps reconstructed objects collapsed by default; a child browser turns it off, already a deliberate look.
     """
     import tkinter as tk
+    from tkinter import font as tkfont
     from tkinter import ttk
 
     style = ttk.Style(master)
@@ -265,6 +287,8 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         select(root)
 
     menu = tk.Menu(details, tearoff=False)
+    double_click_font = tkfont.nametofont("TkMenuFont", root=master).copy()
+    double_click_font.configure(weight="bold")
 
     def copy(path):
         details.clipboard_clear()
@@ -276,7 +300,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         if (widget is tree and not item) or "separator" in widget.item(selected, "tags"):
             return
         widget.selection_set(selected)
-        menu.delete(0, "end")
+        _clear_menu(menu)
         if item:
             try:
                 names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
@@ -284,8 +308,17 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
             except Exception as exc:
                 show_error(master, item, exc)
                 return
+            if infos[item].kind in ("dataset", "scalar"):
+                double_click_view = viewers[0].view
+            else:
+                double_click_view = _browse if _collapsed(infos[item], collapse) else None
+            submenus = {}
             for viewer in viewers:
-                menu.add_command(label=viewer.name, command=lambda viewer=viewer: open_node(item, viewer.view))
+                _add_menu_command(
+                    menu, submenus, _viewer_category(viewer), label=viewer.name,
+                    font=double_click_font if viewer.view is double_click_view else None,
+                    command=lambda viewer=viewer: open_node(item, viewer.view),
+                )
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or widget.set(selected, "value")))

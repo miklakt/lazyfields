@@ -147,10 +147,21 @@ class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame | pd.Series):
         self._obj = pandas_obj
         self._methods: dict[str, str] = pandas_obj.attrs.get("store_methods", {})
+        self._method_categories: dict[str, str] = pandas_obj.attrs.get("store_method_categories", {})
         self._compiled_methods: dict[str, Callable[..., Any]] = {}
 
-    def register_method(self, method: Callable[..., Any]) -> Callable[..., Any]:
-        """Register a row-wise method for this pandas object and its selections."""
+    def _set_method_categories(self, categories: dict[str, str]) -> None:
+        self._method_categories = categories
+        if categories:
+            self._obj.attrs["store_method_categories"] = categories
+        else:
+            self._obj.attrs.pop("store_method_categories", None)
+
+    def register_method(self, method: Callable[..., Any] | None = None, *,
+                        category: str | None = None) -> Callable[..., Any]:
+        """Register a row-wise method, optionally below a slash-separated browser category."""
+        if method is None:
+            return lambda method: self.register_method(method, category=category)
         name = getattr(method, "__name__", None)
         if not callable(method) or not isinstance(name, str) or not name.isidentifier():
             raise TypeError("A store method must be a named callable.")
@@ -165,6 +176,12 @@ class StoreAccessor:
         node.decorator_list = []
         self._methods = {**self._methods, name: ast.unparse(node)}
         self._obj.attrs["store_methods"] = self._methods
+        categories = self._method_categories.copy()
+        if category is None:
+            categories.pop(name, None)
+        else:
+            categories[name] = category
+        self._set_method_categories(categories)
         self._compiled_methods[name] = method
         return method
 
@@ -174,6 +191,9 @@ class StoreAccessor:
         del methods[name]
         self._methods = methods
         self._obj.attrs["store_methods"] = methods
+        categories = self._method_categories.copy()
+        categories.pop(name, None)
+        self._set_method_categories(categories)
         self._compiled_methods.pop(name, None)
 
     def _method(self, name: str) -> Callable[..., Any]:
@@ -207,6 +227,10 @@ class StoreAccessor:
 
     def get_registered_methods(self):
         return list(self._methods.keys())
+
+    def get_registered_method_category(self, name: str) -> str | None:
+        """Return menu metadata supplied when this method was registered."""
+        return self._method_categories.get(name)
 
     @property
     def filesystem(self) -> FileSystem:

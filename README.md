@@ -150,6 +150,10 @@ def length(row, key):
 lengths = reference_df.store.length("some_2darray_key")
 ```
 
+Methods appear directly in the table's context menu by default. Use
+`@reference_df.store.register_method(category="Analysis/Arrays")` to place one
+in nested submenus instead.
+
 Inside a method, other registered methods are called on the row, such as `row.length("key")`.
 Method names cannot shadow the row's own attributes, such as `get`, `items`, or `node`.
 

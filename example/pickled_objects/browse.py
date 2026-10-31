@@ -20,12 +20,12 @@ def main():
         "trusted": {"path": "results.pkl", "reader": "trusted-pickle"},
         "naive": {"path": "results.pkl", "reader": "naive-pickle"},
     }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted, "naive-pickle": naive})
-    register_viewer(FIGURE)
-    register_viewer(SCATTER)
-    register_viewer(PLOT)
+    register_viewer(FIGURE)  # No category: shown directly in the context menu.
+    register_viewer(SCATTER, category="View/Plots")
+    register_viewer(PLOT, category="View/Plots")
     # specific: a reconstructed DataFrame still reports its pickle internals too, so it also matches
     # Browser's deliberately loose "any group" catch-all - Table should win that tie, not lose it.
-    register_viewer(replace(TABLE, specific=True))
+    register_viewer(replace(TABLE, specific=True), category="View/Tables")
     browse_filesystem(fs)
 
 

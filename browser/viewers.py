@@ -15,6 +15,7 @@ from ..readers import NodeInfo, value_info
 from .arguments import ask_arguments
 
 _viewers = {}
+_viewer_categories: dict[str, str] = {}
 _filled: dict[Callable, dict[str, str]] = {}
 
 
@@ -44,17 +45,28 @@ class Viewer:
     specific: bool = False
 
 
-def register_viewer(viewer: Viewer | str, accepts=None, view=None, *, specific=False) -> Viewer:
+def register_viewer(viewer: Viewer | str, accepts=None, view=None, *, specific=False,
+                    category: str | None = None) -> Viewer:
     """Register a Viewer, building one first if given (name, accepts, view) instead.
 
     Re-registering a name replaces it; specific only applies when building a new Viewer here, not
-    to one already constructed with its own.
+    to one already constructed with its own. category groups it in a filesystem menu without
+    becoming part of the Viewer itself.
     """
     if not isinstance(viewer, Viewer):
         viewer = Viewer(viewer, accepts, view, specific)
     _viewers.pop(viewer.name, None)
     _viewers[viewer.name] = viewer
+    if category is None:
+        _viewer_categories.pop(viewer.name, None)
+    else:
+        _viewer_categories[viewer.name] = category
     return viewer
+
+
+def _viewer_category(viewer: Viewer) -> str | None:
+    """Return menu metadata supplied when this viewer was registered."""
+    return _viewer_categories.get(viewer.name)
 
 
 def suitable_viewers(node):
