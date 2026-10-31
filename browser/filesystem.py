@@ -102,8 +102,8 @@ def bind_context_menu(widget, callback):
         widget.bind(shortcut, keyboard_menu)
 
 
-def _add_menu_command(menu, submenus, category=None, **options):
-    """Add a command below an optional slash-separated submenu path."""
+def _add_menu_command(menu, submenus, category=None, *, kind="command", **options):
+    """Add a menu entry - a command by default - below an optional slash-separated submenu path."""
     target = menu
     if category is not None:
         path = ()
@@ -113,7 +113,29 @@ def _add_menu_command(menu, submenus, category=None, **options):
                 submenus[path] = type(menu)(target, tearoff=False)
                 target.add_cascade(label=name, menu=submenus[path])
             target = submenus[path]
-    target.add_command(**options)
+    getattr(target, f"add_{kind}")(**options)
+
+
+def build_method_menu(menu, methods, invoke, *, bold_call=None, bold_font=None, selected=None):
+    """Add one entry per method, grouped into submenus by category; invoke(method) runs on choosing it.
+
+    Shared by the tree's right-click menu and a value window's View/Action menus, so a value offers the
+    same methods wherever it appears. bold_call bolds a default (the tree's double-click target);
+    selected (a method name) instead radio-marks the current one, returning the variable to keep alive.
+    """
+    import tkinter as tk
+
+    submenus = {}
+    chosen = tk.StringVar(master=menu, value=selected) if selected is not None else None
+    for method in methods:
+        entry = dict(label=method.name, command=lambda method=method: invoke(method))
+        if chosen is not None:
+            _add_menu_command(menu, submenus, _method_category(method), kind="radiobutton",
+                              variable=chosen, value=method.name, **entry)
+        else:
+            _add_menu_command(menu, submenus, _method_category(method),
+                              font=bold_font if method.call is bold_call else None, **entry)
+    return chosen
 
 
 def _clear_menu(menu):
@@ -313,13 +335,8 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
                 double_click_call = methods[0].call
             else:
                 double_click_call = _browse if _collapsed(infos[item], collapse) else None
-            submenus = {}
-            for method in methods:
-                _add_menu_command(
-                    menu, submenus, _method_category(method), label=method.name,
-                    font=double_click_font if method.call is double_click_call else None,
-                    command=lambda method=method: open_node(item, method.call),
-                )
+            build_method_menu(menu, methods, lambda method: open_node(item, method.call),
+                              bold_call=double_click_call, bold_font=double_click_font)
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
                          command=lambda: copy(item or widget.set(selected, "value")))
@@ -350,7 +367,10 @@ register_method("Browser", lambda node: node.kind == "group" or bool(node.childr
 
 
 def main(argv=None) -> None:
+    from .extra_methods import register_extras
+
     parser = argparse.ArgumentParser(
         prog="lf-browse-fs", description="Browse a filesystem specification read-only.")
     add_spec_arguments(parser)
+    register_extras()  # Make the built-in viewers and actions available in the CLI browser.
     browse_filesystem(filesystem_from_arguments(parser.parse_args(argv)))

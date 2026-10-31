@@ -107,66 +107,83 @@ def suitable_methods(node):
 
 
 def open_value(master, title, value, call=None, attrs=None):
-    """Show a value using the chosen or preferred method's call(), with a text toggle.
+    """Show a value, with a menu bar to re-show it any other way it accepts.
 
-    A call may take extra keyword-only parameters after (value, attrs); their defaults are then
-    offered in a form before showing, same as a registered store method's arguments.
+    Two menus list the same methods the tree offers on a node: View (the current one radio-marked)
+    re-renders the value in place; Action runs a transform, opening its result in a new window that
+    carries its own menu bar - so results chain. Either menu is dropped when it would be empty or
+    offer no choice. A call's extra keyword-only parameters after (value, attrs) are offered in a form
+    first, same as a registered store method's arguments.
     """
     import tkinter as tk
     from tkinter import ttk
 
-    node = replace(value_info(value), attrs=attrs or {})
+    from .filesystem import build_method_menu
+
+    # A browsed group arrives as its own lazy FileSystem; value_info would misread it as a dataset,
+    # so ask the source itself what it is, leaving value_info for actual in-memory values.
+    info = value.info() if isinstance(value, FileSystem) else value_info(value)
+    node = replace(info, attrs=attrs or {})
+    suitable = suitable_methods(node)
     if call is None:
-        method = suitable_methods(node)[0]
-        call, name = method.call, method.name
-    else:
-        name = next((method.name for method in _methods.values() if method.call is call), "Method")
-    parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
-                  if parameter.kind is Parameter.KEYWORD_ONLY]
+        call = suitable[0].call
+    state = {"window": None, "content": None, "name": None, "selected": None}
 
-    def show(args, kwargs, text):
-        try:
-            shown = call(value, node.attrs, *args, **kwargs)
-        except Exception as exc:
-            show_error(master, title, exc)
-            return
-        if shown is None:  # Shown in a window of its own.
-            return
-        is_figure = type(shown).__module__ == "matplotlib.figure"
-        if not is_figure and not callable(shown):
-            # Not a rendering: a plain result, handled by whichever method suits it instead. A group
-            # result browses first unless some method specifically claims it instead.
-            open_value(master, title, shown)
-            return
-        window = tk.Toplevel(master)
+    def build_window():
+        window = state["window"] = tk.Toplevel(master)
         window.title(title)
-        frame = ttk.Frame(window)
-        if is_figure:
-            _embed_figure(frame, shown)
+        menubar = tk.Menu(window, tearoff=False)
+        views = [method for method in suitable if method.view]
+        actions = [method for method in suitable if not method.view]
+        if len(views) > 1:  # A lone view (plain text, say) has nothing to switch to.
+            menu = tk.Menu(menubar, tearoff=False)
+            state["selected"] = build_method_menu(menu, views, lambda m: render(m.call), selected=state["name"])
+            menubar.add_cascade(label="View", menu=menu)
+        if actions:
+            menu = tk.Menu(menubar, tearoff=False)
+            build_method_menu(menu, actions, lambda m: render(m.call))
+            menubar.add_cascade(label="Action", menu=menu)
+        if menubar.index("end") is not None:
+            window.configure(menu=menubar)
+        state["content"] = ttk.Frame(window)
+        state["content"].pack(fill="both", expand=True)
+
+    def render(call):
+        state["name"] = next((method.name for method in _methods.values() if method.call is call), "Method")
+        parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
+                      if parameter.kind is Parameter.KEYWORD_ONLY]
+
+        def show(args, kwargs, text=""):
+            try:
+                shown = call(value, node.attrs, *args, **kwargs)
+            except Exception as exc:
+                show_error(state["window"] or master, title, exc)
+                return
+            if shown is None:  # The method opened a window of its own.
+                return
+            is_figure = type(shown).__module__ == "matplotlib.figure"
+            if not is_figure and not callable(shown):
+                # Plain data, not a rendering: a transform's result, shown by whichever method suits
+                # it in a new window so this one stays. A group result browses unless a method claims it.
+                open_value(master, title, shown)
+                return
+            if state["window"] is None:
+                build_window()
+            else:
+                state["window"].geometry(state["window"].geometry())  # Keep the size across a switch.
+            for child in state["content"].winfo_children():
+                child.destroy()
+            if is_figure:
+                _embed_figure(state["content"], shown)
+            else:
+                shown(state["content"])
+
+        if parameters:
+            ask_arguments(state["window"] or master, title, parameters, _filled.setdefault(call, {}), show)
         else:
-            shown(frame)
-        if call is not _TEXT:
-            text_frame = ttk.Frame(window)
+            show([], {})
 
-            def toggle():
-                if not text_frame.winfo_children():
-                    _show_text(text_frame, value)
-                current, other = (frame, text_frame) if frame.winfo_manager() else (text_frame, frame)
-                window.geometry(window.geometry())  # Preserve the window size while switching views.
-                current.pack_forget()
-                other.pack(fill="both", expand=True)
-                button.configure(text=name if other is text_frame else "Text")
-
-            bar = ttk.Frame(window)
-            button = ttk.Button(bar, text="Text", width=7, command=toggle)
-            button.pack(side="right")
-            bar.pack(side="top", fill="x")
-        frame.pack(fill="both", expand=True)
-
-    if parameters:
-        ask_arguments(master, title, parameters, _filled.setdefault(call, {}), show)
-    else:
-        show([], {}, "")
+    render(call)
 
 
 def _tk(fill):

@@ -246,11 +246,14 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
 
 def main(argv=None) -> None:
+    from .extra_methods import register_extras
+
     parser = argparse.ArgumentParser(
         prog="lf-browse-table", description="Browse a pickled reference table read-only.")
     parser.add_argument("table", type=Path, help="reference table pickle")
     parser.add_argument("--max-rows", type=int, default=5000, help="rows to show at once (default: 5000)")
     args = parser.parse_args(argv)
+    register_extras()  # Make the built-in viewers and actions available in the CLI browser.
     # Resolve modules used by saved store methods.
     for directory in (str(args.table.resolve().parent), str(Path.cwd())):
         if directory not in sys.path:
