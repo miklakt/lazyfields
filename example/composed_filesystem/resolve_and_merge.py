@@ -10,7 +10,7 @@ import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.browser import browse_table, register_method
+from lazyfields.browser import browse_table, register_viewer
 from lazyfields.browser.extra_methods import PLOT
 
 
@@ -90,7 +90,7 @@ def main() -> None:
     methods_changed = register_row_methods(reference_df)
     if save_reference or methods_changed:
         reference_df.to_pickle(reference_path)
-    register_method(PLOT, category="Display/Plots")
+    register_viewer(PLOT, category="Display/Plots")
     browse_table(reference_df)
 
 

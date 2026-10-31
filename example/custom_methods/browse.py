@@ -1,9 +1,10 @@
 """Inject volume, RGB image, molecule, channel-splitting and point-cloud methods, plus the built-in
-slices, plot and table methods, into one mounted filesystem browser, with NPZ and PDB readers.
+plot and table methods, into one mounted filesystem browser, with NPZ and PDB readers.
 
 Split Channels returns plain named arrays, no Tk or matplotlib of its own: open_value shows its
 result with whichever method fits, here XYZ Scatter, exactly as a registered store method's result
-would be shown.
+would be shown. It registers with register_action, so it is offered in the menu but never a
+value's default - the views register with register_viewer.
 """
 
 import json
@@ -11,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-from lazyfields.browser import browse_filesystem, register_method
-from lazyfields.browser.extra_methods import PLOT, SLICES, TABLE
+from lazyfields.browser import browse_filesystem, register_action, register_viewer
+from lazyfields.browser.extra_methods import PLOT, TABLE
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import register_reader
 from lazyfields.readers.npz import NUMPY_ARCHIVE
@@ -136,19 +137,18 @@ def main():
         raise FileNotFoundError("Run example/custom_methods/generate_dataset.py first.")
     register_reader(NUMPY_ARCHIVE)
     register_reader(PROTEIN_DATA_BANK)
-    register_method("Volume", is_volume, show_volume, category="Display/Volumes")
-    # Registered first: wins the default glance at a photo over Split Channels, which comes next.
-    register_method("Image", is_image, show_image, category="Display/Images")
-    register_method("Split Channels", is_image, split_channels, category="Transform/Images")
+    register_viewer("Volume", is_volume, show_volume, category="Display/Volumes")
+    register_viewer("Image", is_image, show_image, category="Display/Images")
+    # An action (Action menu), so it is offered but never the default glance at a photo.
+    register_action("Split Channels", is_image, split_channels, category="Images")
     # Marked specific: its exact x/y/z/element shape should win over Browser, which also matches
     # any group. Left uncategorized, it appears directly in the context menu.
-    register_method("Molecule", is_molecule, show_molecule, specific=True)
+    register_viewer("Molecule", is_molecule, show_molecule, specific=True)
     # Left unmarked: this loose "any group of three or more children" heuristic loses the tie against
     # Browser, which registered first, so a nested result browses before it scatters.
-    register_method("XYZ Scatter", is_xyz_group, show_xyz_group, category="Display/Plots")
-    register_method(SLICES, category="Display/Volumes")
-    register_method(PLOT, category="Display/Plots")
-    register_method(TABLE, category="Display/Tables")
+    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group, category="Display/Plots")
+    register_viewer(PLOT, category="Display/Plots")
+    register_viewer(TABLE, category="Display/Tables")
     filesystem = FileSystem.from_spec(json.loads((DATA_DIR / "mount.json").read_text()),
                                       relative_to=DATA_DIR)
     browse_filesystem(filesystem)

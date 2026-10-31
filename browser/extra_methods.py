@@ -1,14 +1,19 @@
-"""Extra methods: TABLE, PLOT, SLICES, SCATTER, FIGURE.
+"""Extra methods: viewers (TABLE, PLOT, SCATTER, FIGURE, IMAGE) and actions - array transforms
+(Split, Swap axes, Transpose, Flatten, Squeeze, in the ACTIONS tuple).
 
-Not loaded by lazyfields.browser. Each is a standalone Method (see Method in methods.py) —
-import only the ones you want and register them yourself:
+Not loaded by lazyfields.browser. The viewers are standalone Methods you import and register one by
+one if you like (see Method in methods.py):
 
-    from lazyfields.browser import register_method
+    from lazyfields.browser import register_viewer
     from lazyfields.browser.extra_methods import TABLE
-    register_method(TABLE, category="Display/Tables")
+    register_viewer(TABLE, category="Display/Tables")
 
-PLOT, SLICES, SCATTER and FIGURE need matplotlib (`pip install lazyfields[plot]`); it is only
-imported inside their call functions, so importing this module itself never requires it.
+or register whole bundles at once (all at the bottom of this module): register_viewers() for the
+viewers, register_actions() for the actions, or register_extras() for both.
+
+PLOT, SCATTER, FIGURE and IMAGE need matplotlib (`pip install lazyfields[plot]`); the actions
+need only numpy. Every heavy import happens inside a call function, so importing this module itself
+never requires either.
 """
 
 from ..readers import as_array
@@ -62,7 +67,8 @@ TABLE = Method("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.S
 
 
 # ----- Plot -----
-# Line plot for a 1D numeric array, heatmap with colorbar for 2D.
+# A numeric array as a line (1D) or a heatmap (2D). A 3D array is a heatmap of one 2D slice, swept
+# along a chosen axis with a slider; reorder axes first with a transform to sweep a different one.
 
 
 def _array_figure(value):
@@ -79,62 +85,40 @@ def _heatmap(axes, array, **kwargs):
     return axes.imshow(array, origin="lower", aspect="auto", interpolation="nearest", **kwargs)
 
 
-def _show_plot(value, attrs):
+def _fill_plot(window, value):
     array, figure, axes = _array_figure(value)
     if array.ndim == 1:
         axes.plot(array)
-    else:
+    elif array.ndim == 2:
         figure.colorbar(_heatmap(axes, array))
-    return figure
+    else:
+        return _fill_scrubber(window, array, figure, axes)
+    _embed_figure(window, figure)
 
 
-PLOT = Method("Plot", lambda node: numeric(node, (1, 2)), _show_plot)
-
-
-# ----- Slices -----
-# A 2D or 3D array's slice along a chosen axis, picked with a slider: a line for 2D, a heatmap
-# for 3D — whichever the remaining axes leave, since that count never changes as the chosen
-# axis does. Colors (3D) or the y-axis (2D) stay fixed across slices for comparable scale.
-
-
-def _fill_slices(window, value):
+def _fill_scrubber(window, array, figure, axes):
+    """A 3D array as a heatmap of one 2D slice, swept along a chosen axis. Colours stay fixed across
+    slices for a comparable scale."""
     import tkinter as tk
     from tkinter import ttk
 
     import numpy as np
 
-    array, figure, axes = _array_figure(value)
-    heatmap = array.ndim == 3
     axis = tk.IntVar(value=0)
-
-    if heatmap:
-        image = _heatmap(axes, np.take(array, 0, 0), vmin=array.min(), vmax=array.max())
-        figure.colorbar(image)
-    else:
-        line, = axes.plot(np.take(array, 0, 0))
-        axes.set_ylim(array.min(), array.max())
+    image = _heatmap(axes, np.take(array, 0, 0), vmin=array.min(), vmax=array.max())
+    figure.colorbar(image)
 
     def show(*_):
         index = round(scale.get())
-        data = np.take(array, index, axis.get())
-        if heatmap:
-            image.set_data(data)
-        else:
-            line.set_ydata(data)
+        image.set_data(np.take(array, index, axis.get()))
         axes.set_title(f"axis {axis.get()}: {index} / {array.shape[axis.get()] - 1}")
         figure.canvas.draw_idle()
 
     def cut():
-        """Slice along the chosen axis from its first index, showing the whole slice."""
-        shape = np.take(array, 0, axis.get()).shape
-        if heatmap:
-            height, width = shape
-            image.set_extent((-0.5, width - 0.5, -0.5, height - 0.5))
-            axes.set(xlim=(-0.5, width - 0.5), ylim=(-0.5, height - 0.5))
-        else:
-            (length,) = shape
-            line.set_xdata(np.arange(length))
-            axes.set_xlim(-0.5, length - 0.5)
+        """Sweep the chosen axis from its first index, fitting the view to the slice it leaves."""
+        height, width = np.take(array, 0, axis.get()).shape
+        image.set_extent((-0.5, width - 0.5, -0.5, height - 0.5))
+        axes.set(xlim=(-0.5, width - 0.5), ylim=(-0.5, height - 0.5))
         scale.configure(to=array.shape[axis.get()] - 1)
         scale.set(0)
         show()
@@ -144,14 +128,14 @@ def _fill_slices(window, value):
     for number, size in enumerate(array.shape):
         ttk.Radiobutton(bar, text=f"{number} ({size})", value=number, variable=axis,
                         command=cut).pack(side="left")
-    scale = ttk.Scale(bar, from_=0, to=len(array) - 1, command=show)
+    scale = ttk.Scale(bar, from_=0, to=array.shape[0] - 1, command=show)
     scale.pack(side="left", fill="x", expand=True, padx=(8, 0))
     bar.pack(side="top", fill="x")
     _embed_figure(window, figure)
     show()
 
 
-SLICES = Method("Slices", lambda node: numeric(node, (2, 3)), _tk(_fill_slices))
+PLOT = Method("Plot", lambda node: numeric(node, (1, 2, 3)), _tk(_fill_plot))
 
 
 # ----- Scatter -----
@@ -185,3 +169,129 @@ SCATTER = Method("Scatter", _accepts_scatter, _show_scatter)
 
 FIGURE = Method("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
                 _tk(_embed_figure))
+
+
+# ----- RGB Image -----
+# An (H, W, 3) or (H, W, 4) numeric array shown as pixels, not plotted: row 0 at the top, square
+# pixels, no axes. Takes uint8 (0-255) or float (0-1) channels, as matplotlib's imshow expects.
+
+
+def _accepts_rgb(node):
+    import numpy as np
+
+    return (node.kind == "dataset" and len(node.shape) == 3 and node.shape[2] in (3, 4)
+            and np.dtype(node.dtype).kind in "biuf")
+
+
+def _show_rgb(value, attrs):
+    from matplotlib.figure import Figure
+
+    figure = Figure(layout="constrained")
+    axes = figure.add_subplot()
+    axes.imshow(as_array(value))  # origin="upper" by default, so row 0 sits at the top like an image.
+    axes.set_axis_off()
+    return figure
+
+
+IMAGE = Method("RGB Image", _accepts_rgb, _show_rgb)
+
+
+# ----- Register all -----
+
+VIEWERS = (TABLE, PLOT, SCATTER, FIGURE, IMAGE)
+
+# Default menu placement: Table, Figure and RGB Image stay top-level (each just displays its value
+# as-is); the methods that compute a chart from numbers group under "Charts".
+_VIEWER_CATEGORIES = {"Table": None, "Plot": "Charts",
+                      "Scatter": "Charts", "Figure": None, "RGB Image": None}
+
+# RGB Image wins over Plot for an (H, W, 3/4) array, which both accept; pick Plot from the menu when
+# such an array is really a scalar field to scroll through rather than a picture.
+_VIEWER_SPECIFIC = {"RGB Image"}
+
+
+def register_viewers(**options):
+    """Register every built-in viewer in one call, after importing lazyfields.browser.
+
+    Each lands in its default menu category (Table/Figure/RGB Image top-level, the chart methods
+    under "Charts") and RGB Image registers as specific so it beats Plot on an image-shaped array.
+    Pass category=/specific= to override for all of them, or register individually for per-method
+    control. Registering only stores each Method, so this stays cheap and needs no matplotlib; the
+    plotting ones import it only when actually used. Other options pass through unchanged.
+
+    The actions are a separate bundle: call register_actions() for those.
+    """
+    from .methods import register_method
+    for method in VIEWERS:
+        per = dict(options)
+        per.setdefault("category", _VIEWER_CATEGORIES.get(method.name))
+        per.setdefault("specific", method.name in _VIEWER_SPECIFIC)
+        register_method(method, **per)
+    return VIEWERS
+
+
+# ----- Actions -----
+# Reshape or re-slice an array and hand the result straight back to the browser: each returns plain
+# data, not a rendering, so open_value re-dispatches it to whatever method suits the new shape (a
+# reshaped array to Plot/Table, Split's dict of slices to Browser), raw Text still a click
+# away. numpy only, imported when the action runs; axis arguments are offered in a form first.
+
+
+def _dims(node):
+    """How many axes an array-like dataset node has, 0 for anything that is not one."""
+    return len(node.shape) if node.kind == "dataset" and node.shape else 0
+
+
+def _numpy(name):
+    """A no-argument action calling np.<name> on the value's array, numpy imported on use."""
+    def call(value, attrs):
+        import numpy as np
+        return getattr(np, name)(as_array(value))
+    return call
+
+
+# The two that take axis arguments keep real keyword-only parameters, so open_value offers them in a
+# form; the rest are one-liners built from _numpy. Each returns plain data for the browser to re-open.
+def _split(value, attrs, *, axis: int = 0):
+    """An n-D array as a group of its (n-1)-D slices along axis, keyed by index along that axis."""
+    import numpy as np
+    array = as_array(value)
+    return {str(index): np.take(array, index, axis) for index in range(array.shape[axis])}
+
+
+def _swap_axes(value, attrs, *, axis1: int = 0, axis2: int = 1):
+    import numpy as np
+    return np.swapaxes(as_array(value), axis1, axis2)
+
+
+# view=False: each is offered in the menu but is never a value's default - opening a value shows it.
+ACTIONS = (
+    Method("Split", lambda node: _dims(node) >= 1, _split, view=False),
+    Method("Swap axes", lambda node: _dims(node) >= 2, _swap_axes, view=False),
+    Method("Transpose", lambda node: _dims(node) >= 2, _numpy("transpose"), view=False),
+    Method("Flatten", lambda node: _dims(node) >= 2, _numpy("ravel"), view=False),
+    Method("Squeeze", lambda node: node.kind == "dataset" and 1 in (node.shape or ()),
+           _numpy("squeeze"), view=False),
+)
+
+
+def register_actions(*, category=None, **options):
+    """Register the built-in actions (Split, Swap axes, Transpose, Flatten, Squeeze) as a bundle.
+
+    Each is view=False (see Method), so it lands in a value window's Action menu - which groups them
+    already, hence no category by default - and is never a value's default. Each returns a new array
+    (Split a group of slices) that the browser then displays with whatever method suits it. numpy only.
+    """
+    from .methods import register_method
+    for method in ACTIONS:
+        register_method(method, category=category, **options)
+    return ACTIONS
+
+
+def register_extras():
+    """Register every extra method - viewers and actions - in their default categories.
+
+    The one call the CLI browsers use; prefer register_viewers()/register_actions(), or register
+    individual Methods, when you want only some of them or different categories.
+    """
+    return (*register_viewers(), *register_actions())

@@ -1,7 +1,7 @@
 """Method registration, selection, and display.
 
 Only Text registers here, plus the registry machinery itself; Browser (browser/filesystem.py)
-registers alongside it. Everything shape-specific (Table, Plot, Slices, Scatter, Figure) lives
+registers alongside it. Everything shape-specific (Table, Plot, Scatter, Figure, RGB Image) lives
 in browser/extra_methods.py as plain Method instances you import and register yourself.
 """
 
@@ -35,22 +35,30 @@ class Method:
     store method's result. A plain computation needs no Tk or matplotlib: return its data and let
     another method display it.
 
+    view is whether the method shows the value as it is (the default). A method that instead derives
+    a new value - a transform - sets view=False, so it is offered in the menu but never picked as a
+    value's default: opening a value shows it, it never silently runs a transform.
     """
 
     name: str
     accepts: Callable[[NodeInfo], bool]
     call: Callable[..., Any]
+    view: bool = True
 
 
 def register_method(method: Method | str, accepts=None, call=None, *, specific=False,
-                    category: str | None = None) -> Method:
+                    category: str | None = None, view: bool | None = None) -> Method:
     """Register a Method, building one first if given (name, accepts, call) instead.
 
-    Re-registering a name replaces it. category groups it in a filesystem menu; specific makes it
-    win over a looser matching method. Neither option becomes part of the Method itself.
+    Re-registering a name replaces it. category groups it in a filesystem menu; specific makes it win
+    over a looser matching method; neither becomes part of the Method. view is intrinsic to the Method
+    (see Method.view) so it travels when a Method is reused; pass view=False here to register a custom
+    transform that returns a new value - it is then offered in the menu but never a default.
     """
     if not isinstance(method, Method):
-        method = Method(method, accepts, call)
+        method = Method(method, accepts, call, view=True if view is None else view)
+    elif view is not None:
+        method = replace(method, view=view)
     _methods.pop(method.name, None)
     _methods[method.name] = method
     if category is None:
@@ -64,13 +72,28 @@ def register_method(method: Method | str, accepts=None, call=None, *, specific=F
     return method
 
 
+def register_viewer(method: Method | str, accepts=None, call=None, *, specific=False,
+                    category: str | None = None) -> Method:
+    """Register a view: a method that shows a value as it is. The common case, named for intent -
+    sugar for register_method(..., view=True). Use register_action for one that derives a value."""
+    return register_method(method, accepts, call, specific=specific, category=category, view=True)
+
+
+def register_action(method: Method | str, accepts=None, call=None, *, specific=False,
+                    category: str | None = None) -> Method:
+    """Register an action: a method that returns a new value from the old (a transform). It lands in a
+    value window's Action menu, never chosen as a default. Sugar for register_method(..., view=False)."""
+    return register_method(method, accepts, call, specific=specific, category=category, view=False)
+
+
 def _method_category(method: Method) -> str | None:
     """Return menu metadata supplied when this method was registered."""
     return _method_categories.get(method.name)
 
 
 def suitable_methods(node):
-    """Return accepted methods: an explicit per-node preference, then specific ones, Text last."""
+    """Return accepted methods in default-first order: an explicit per-node preference, then specific
+    views, other views, Text, and finally non-views (transforms) - which are never a default view."""
     suitable = []
     for method in _methods.values():
         try:
@@ -79,8 +102,8 @@ def suitable_methods(node):
         except Exception:
             pass
     preferred = node.attrs.get("method")
-    return sorted(suitable, key=lambda method: (method.name != preferred, method.call is _TEXT,
-                                                method.name not in _specific_methods))
+    return sorted(suitable, key=lambda method: (method.name != preferred, not method.view,
+                                                method.call is _TEXT, method.name not in _specific_methods))
 
 
 def open_value(master, title, value, call=None, attrs=None):
