@@ -1,8 +1,8 @@
-"""Inject volume, RGB image, molecule, channel-splitting and point-cloud viewers, plus the built-in
-slices, plot and table viewers, into one mounted filesystem browser, with NPZ and PDB readers.
+"""Inject volume, RGB image, molecule, channel-splitting and point-cloud methods, plus the built-in
+slices, plot and table methods, into one mounted filesystem browser, with NPZ and PDB readers.
 
 Split Channels returns plain named arrays, no Tk or matplotlib of its own: open_value shows its
-result with whichever viewer fits, here XYZ Scatter, exactly as a registered store method's result
+result with whichever method fits, here XYZ Scatter, exactly as a registered store method's result
 would be shown.
 """
 
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from lazyfields.browser import browse_filesystem, register_viewer
-from lazyfields.browser.extra_viewers import PLOT, SLICES, TABLE
+from lazyfields.browser import browse_filesystem, register_method
+from lazyfields.browser.extra_methods import PLOT, SLICES, TABLE
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import register_reader
 from lazyfields.readers.npz import NUMPY_ARCHIVE
@@ -42,7 +42,7 @@ def split_channels(value, attrs, *, order="rgb"):
     """Each channel-first array's channel flattened to its own named array.
 
     order maps each array position to a channel letter, for images stored in another channel order.
-    The result is shown by whichever viewer fits it, here XYZ Scatter — no Tk or matplotlib here.
+    The result is shown by whichever method fits it, here XYZ Scatter — no Tk or matplotlib here.
     """
     names = {"r": "red", "g": "green", "b": "blue"}
     return {names[letter]: channel.ravel() for letter, channel in zip(order, np.asarray(value))}
@@ -114,7 +114,7 @@ def is_xyz_group(node):
     """Any group with at least three children, offered as a point cloud with axes chosen in a popup.
 
     accepts only sees child names here, not their shapes, so this is a loose heuristic: groups meant
-    for this viewer should hold only 1D arrays of the same length, such as Split Channels' result or
+    for this method should hold only 1D arrays of the same length, such as Split Channels' result or
     a molecule's x/y/z/element columns, which also happens to qualify.
     """
     return node.kind == "group" and len(node.children) >= 3
@@ -133,22 +133,22 @@ def show_xyz_group(value, attrs, *, x="red", y="green", z="blue"):
 
 def main():
     if not (DATA_DIR / "mount.json").exists():  # Written last.
-        raise FileNotFoundError("Run example/custom_viewers/generate_dataset.py first.")
+        raise FileNotFoundError("Run example/custom_methods/generate_dataset.py first.")
     register_reader(NUMPY_ARCHIVE)
     register_reader(PROTEIN_DATA_BANK)
-    register_viewer("Volume", is_volume, show_volume, category="View/Volumes")
+    register_method("Volume", is_volume, show_volume, category="Display/Volumes")
     # Registered first: wins the default glance at a photo over Split Channels, which comes next.
-    register_viewer("Image", is_image, show_image, category="View/Images")
-    register_viewer("Split Channels", is_image, split_channels, category="Transform/Images")
+    register_method("Image", is_image, show_image, category="Display/Images")
+    register_method("Split Channels", is_image, split_channels, category="Transform/Images")
     # Marked specific: its exact x/y/z/element shape should win over Browser, which also matches
     # any group. Left uncategorized, it appears directly in the context menu.
-    register_viewer("Molecule", is_molecule, show_molecule, specific=True)
+    register_method("Molecule", is_molecule, show_molecule, specific=True)
     # Left unmarked: this loose "any group of three or more children" heuristic loses the tie against
     # Browser, which registered first, so a nested result browses before it scatters.
-    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group, category="View/Plots")
-    register_viewer(SLICES, category="View/Volumes")
-    register_viewer(PLOT, category="View/Plots")
-    register_viewer(TABLE, category="View/Tables")
+    register_method("XYZ Scatter", is_xyz_group, show_xyz_group, category="Display/Plots")
+    register_method(SLICES, category="Display/Volumes")
+    register_method(PLOT, category="Display/Plots")
+    register_method(TABLE, category="Display/Tables")
     filesystem = FileSystem.from_spec(json.loads((DATA_DIR / "mount.json").read_text()),
                                       relative_to=DATA_DIR)
     browse_filesystem(filesystem)

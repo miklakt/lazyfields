@@ -1,14 +1,14 @@
-# Custom viewers
+# Custom methods
 
-A viewer shows any node it suits, wherever it appears: in the filesystem
-browser, below a table, or as a method's result. Unlike a store method, it
-knows nothing of rows or parents. Register one with
-`register_viewer(name, accepts, view)`:
+A method handles any node it suits, wherever it appears: in the filesystem
+browser, below a table, or as another method's result. Unlike a store row method,
+it knows nothing of rows or parents. Register one with
+`register_method(name, accepts, call)`:
 
 - `accepts(node)` decides without reading the node's value, from `node.kind`,
   a dataset's `node.shape`, `node.dtype`, or loaded `node.type`, its
   `node.attrs`, and `node.children`, the names of its immediate children.
-- `view(value, attrs)` gets the value and the same attrs. It either shows the
+- `call(value, attrs)` gets the value and the same attrs. It either shows the
   value itself and returns `None`, as `grid.plot()` does in PyVista's window,
   or returns a matplotlib `Figure` to embed in the browser's window. A function
   that fills a Tk frame is also accepted.
@@ -16,20 +16,20 @@ knows nothing of rows or parents. Register one with
 The browser opens and titles its window, reports errors, and adds a button that
 toggles to the value as text.
 
-Pass `category="View/Plots"` to `register_viewer(...)` to place that registration
-in nested View and Plots submenus, omit it to leave the viewer at the context-menu root.
+Pass `category="Display/Plots"` to `register_method(...)` to place that registration
+in nested Display and Plots submenus; omit it to leave the method at the context-menu root.
 
 From the repository root, with Tk available:
 
 ```bash
 pip install -e '.[plot]' pyvista
-python3 example/custom_viewers/generate_dataset.py
-python3 example/custom_viewers/browse.py
+python3 example/custom_methods/generate_dataset.py
+python3 example/custom_methods/browse.py
 ```
 
 The generated files are mounted together in one filesystem:
 
-| Dataset path | Shape | Dtype | Default viewer |
+| Dataset path | Shape | Dtype | Default method |
 | --- | --- | --- | --- |
 | `volume.npz/voxels` | `(76, 507, 512)` | int32 | PyVista volume |
 | `image.npz/rgb` | `(3, 400, 600)` | uint8 | Matplotlib RGB image |
@@ -40,14 +40,14 @@ group of header fields, such as `title`, one dataset per atom column, such as
 `x`, `y`, `z`, and `element`, and `bonds`, the pairs of atom serials its
 `CONECT` records list; 1UBQ has none, 4HHB those of its four haem groups.
 
-Double-click a dataset to open its viewer; right-click any node for every
-viewer that suits it, built-in ones such as Slices and Text included. The
+Double-click a dataset to run its method; right-click any node for every
+method that suits it, built-in ones such as Slices and Text included. The
 browser waits while PyVista's window is open.
 
 `browse.py` registers Image for numeric arrays with shape `(3, height, width)`
 and Volume for other numeric 3D arrays. A three-slice volume therefore matches
-the image convention in this example. The image viewer moves the channel axis
-for `imshow`; the volume viewer interprets axes and `attrs["spacing"]` as
+the image convention in this example. The image method moves the channel axis
+for `imshow`; the volume method interprets axes and `attrs["spacing"]` as
 `(z, y, x)`, converting both to PyVista's `(x, y, z)` order. Arrays without
 spacing use unit voxels. Values up to the median, typically background such as
 air, render transparent.
@@ -56,7 +56,7 @@ It registers Molecule for any group with `x`, `y`, `z`, and `element` children,
 so it also recognizes those columns pickled or stored in HDF5: right-click a PDB
 file, choose Molecule, and drag to rotate. Atoms are drawn as balls
 and sticks in CPK colours, sized by their van der Waals radii. Bonds join atoms
-closer than their covalent radii and 0.4 Å together, as most molecular viewers
+closer than their covalent radii and 0.4 Å together, as most molecular software
 infer them, together with those a `bonds` dataset gives by atom serial, such as
 a PDB file's `CONECT` records. None of the predicates use filenames or
 dataset-specific checks.
@@ -64,8 +64,8 @@ dataset-specific checks.
 The generator writes `data/mount.json`, which mounts all four files and attaches
 the original CT spacing to `volume.npz/voxels`: approximately
 `(2.528, 0.429688, 0.429688)` millimetres in `(z, y, x)` order. This preserves the
-head's proportions without resampling or changing the generic viewer. These
-attributes are also visible in the browser and reach viewers opened through
+head's proportions without resampling or changing the generic method. These
+attributes are also visible in the browser and reach methods invoked through
 either double-click or the context menu.
 
 `generate_dataset.py` keeps data preparation separate. The RGB image is the

@@ -323,8 +323,8 @@ names, `dtype` and `shape`, so it reads nothing. Relocation is not saved: `info`
 reports it where a subtree's source position first differs from its namespace
 position, not below a relocated or merged node.
 
-Viewers in the browsers decide whether they fit from a node's `info`, including
-its `attrs` and children's names; its `viewer` attribute names the one opened by
+Methods in the browsers decide whether they fit from a node's `info`, including
+its `attrs` and children's names; its `method` attribute names the one run by
 default, and listed first, when it fits.
 
 Custom readers need explicit names on both sides:

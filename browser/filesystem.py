@@ -7,7 +7,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from .viewers import _viewer_category, open_value, register_viewer, show_error, suitable_viewers
+from .methods import _method_category, open_value, register_method, show_error, suitable_methods
 
 
 def one_line_repr(value, width=160):
@@ -136,7 +136,7 @@ def browse_filesystem(filesystem):
 def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
     """Pack tree and details panes; return a function that selects their root.
 
-    Double-click opens a node; right-click offers viewers and copying.
+    Double-click opens a node; right-click offers methods and copying.
     Backspace selects the parent. navigation_widgets share that shortcut.
     Tab cycles through navigation_widgets, tree, and details.
     collapse keeps reconstructed objects collapsed by default; a child browser turns it off, already a deliberate look.
@@ -146,7 +146,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
     from tkinter import ttk
 
     style = ttk.Style(master)
-    for option, colour in (("background", "#c8c8c8"), ("foreground", "black")):  # Selection of an unfocused view.
+    for option, colour in (("background", "#c8c8c8"), ("foreground", "black")):  # Unfocused selection.
         inherited = [entry for entry in style.map("Treeview", query_opt=option)
                      if entry[:2] != ("!disabled", "!selected")]
         style.map("Treeview", **{option: [("selected", "!focus", colour), *inherited]})
@@ -250,7 +250,8 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
     def cycle_focus(event):
         position = focus_order.index(event.widget)
         following = (focus_order[(position + offset) % len(focus_order)] for offset in range(1, len(focus_order) + 1))
-        target = next((view for view in following if view.get_children()), event.widget)  # Empty views take no focus.
+        target = next((widget for widget in following if widget.get_children()),
+                      event.widget)  # Empty widgets take no focus.
         target.focus_set()
         if not target.selection() and target.get_children():  # Else nothing shows where focus went.
             row = target.focus() or target.get_children()[0]
@@ -258,14 +259,14 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
             target.selection_set(row)
         return "break"
 
-    def open_node(path, view=None):
+    def open_node(path, call=None):
         # Browsing stays lazy: a clone of its own source, not the value loaded.
         try:
-            value = filesystem.clone(path) if view is _browse else filesystem.read(path)
+            value = filesystem.clone(path) if call is _browse else filesystem.read(path)
         except Exception as exc:
             show_error(master, path, exc)
             return
-        open_value(master, path, value, view, filesystem.attrs(path))
+        open_value(master, path, value, call, filesystem.attrs(path))
 
     def enter(event):
         item = event.widget.identify_row(event.y)
@@ -295,7 +296,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         details.clipboard_append(path)
 
     def open_menu(widget, selected, x, y):
-        """Offer viewers and copying for the selected row."""
+        """Offer methods and copying for the selected row."""
         item = selected if selected in infos else ""
         if (widget is tree and not item) or "separator" in widget.item(selected, "tags"):
             return
@@ -304,20 +305,20 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         if item:
             try:
                 names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
-                viewers = suitable_viewers(replace(described(item), children=names))
+                methods = suitable_methods(replace(described(item), children=names))
             except Exception as exc:
                 show_error(master, item, exc)
                 return
             if infos[item].kind in ("dataset", "scalar"):
-                double_click_view = viewers[0].view
+                double_click_call = methods[0].call
             else:
-                double_click_view = _browse if _collapsed(infos[item], collapse) else None
+                double_click_call = _browse if _collapsed(infos[item], collapse) else None
             submenus = {}
-            for viewer in viewers:
+            for method in methods:
                 _add_menu_command(
-                    menu, submenus, _viewer_category(viewer), label=viewer.name,
-                    font=double_click_font if viewer.view is double_click_view else None,
-                    command=lambda viewer=viewer: open_node(item, viewer.view),
+                    menu, submenus, _method_category(method), label=method.name,
+                    font=double_click_font if method.call is double_click_call else None,
+                    command=lambda method=method: open_node(item, method.call),
                 )
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
@@ -343,9 +344,9 @@ def _browse(value, attrs):
 
 
 # Matches any group, and any dataset still reporting the children of what it's really built from
-# underneath (a reconstructed DataFrame, say) - a viewer specific to one's actual shape (Molecule,
-# say) marks itself specific to win over this, same as over any other unmarked, equally loose viewer.
-register_viewer("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
+# underneath (a reconstructed DataFrame, say) - a method specific to one's actual shape (Molecule,
+# say) marks itself specific to win over this, same as over any other unmarked, equally loose method.
+register_method("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
 
 
 def main(argv=None) -> None:

@@ -1,7 +1,7 @@
 """A Tk form for a callable's parameters: prefilled with defaults, parsed back as literals.
 
-Shared by registered store methods (browser/table.py) and viewer keyword arguments
-(browser/viewers.py).
+Shared by registered store methods (browser/table.py) and filesystem method keyword arguments
+(browser/methods.py).
 """
 
 import ast

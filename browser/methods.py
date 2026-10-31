@@ -1,8 +1,8 @@
-"""Viewer registration, selection, and display.
+"""Method registration, selection, and display.
 
 Only Text registers here, plus the registry machinery itself; Browser (browser/filesystem.py)
 registers alongside it. Everything shape-specific (Table, Plot, Slices, Scatter, Figure) lives
-in browser/extra_viewers.py as plain Viewer instances you import and register yourself.
+in browser/extra_methods.py as plain Method instances you import and register yourself.
 """
 
 from dataclasses import dataclass, replace
@@ -14,8 +14,8 @@ from ..filesystem import FileSystem
 from ..readers import NodeInfo, value_info
 from .arguments import ask_arguments
 
-_viewers = {}
-_viewer_categories: dict[str, str] = {}
+_methods = {}
+_method_categories: dict[str, str] = {}
 _filled: dict[Callable, dict[str, str]] = {}
 
 
@@ -26,79 +26,80 @@ def show_error(parent, title, exc):
 
 
 @dataclass(frozen=True)
-class Viewer:
-    """Shows nodes accepted by accepts(node: NodeInfo) using view(value, attrs, **kwargs).
+class Method:
+    """Handles nodes accepted by accepts(node: NodeInfo) using call(value, attrs, **kwargs).
 
-    view returns a matplotlib Figure, a function filling a Tk frame, None when it opens its own
-    window, or any other value — shown in turn by whichever viewer suits it, same as a registered
-    store method's result. This is what lets a plain computation (no Tk, no matplotlib) register as
-    a viewer: return the data and let an existing viewer display it.
+    call returns a matplotlib Figure, a function filling a Tk frame, None when it opens its own
+    window, or any other value — handled in turn by whichever method suits it, same as a registered
+    store method's result. A plain computation needs no Tk or matplotlib: return its data and let
+    another method display it.
 
-    specific marks a viewer that should win over a looser one also accepting the same node (Browser
+    specific marks a method that should win over a looser one also accepting the same node (Browser
     matches any group, say); everything else settles such ties by registration order — Browser itself
     needs no marking since nothing generic is registered ahead of it.
     """
 
     name: str
     accepts: Callable[[NodeInfo], bool]
-    view: Callable[..., Any]
+    call: Callable[..., Any]
     specific: bool = False
 
 
-def register_viewer(viewer: Viewer | str, accepts=None, view=None, *, specific=False,
-                    category: str | None = None) -> Viewer:
-    """Register a Viewer, building one first if given (name, accepts, view) instead.
+def register_method(method: Method | str, accepts=None, call=None, *, specific=False,
+                    category: str | None = None) -> Method:
+    """Register a Method, building one first if given (name, accepts, call) instead.
 
-    Re-registering a name replaces it; specific only applies when building a new Viewer here, not
+    Re-registering a name replaces it; specific only applies when building a new Method here, not
     to one already constructed with its own. category groups it in a filesystem menu without
-    becoming part of the Viewer itself.
+    becoming part of the Method itself.
     """
-    if not isinstance(viewer, Viewer):
-        viewer = Viewer(viewer, accepts, view, specific)
-    _viewers.pop(viewer.name, None)
-    _viewers[viewer.name] = viewer
+    if not isinstance(method, Method):
+        method = Method(method, accepts, call, specific)
+    _methods.pop(method.name, None)
+    _methods[method.name] = method
     if category is None:
-        _viewer_categories.pop(viewer.name, None)
+        _method_categories.pop(method.name, None)
     else:
-        _viewer_categories[viewer.name] = category
-    return viewer
+        _method_categories[method.name] = category
+    return method
 
 
-def _viewer_category(viewer: Viewer) -> str | None:
-    """Return menu metadata supplied when this viewer was registered."""
-    return _viewer_categories.get(viewer.name)
+def _method_category(method: Method) -> str | None:
+    """Return menu metadata supplied when this method was registered."""
+    return _method_categories.get(method.name)
 
 
-def suitable_viewers(node):
-    """Return accepted viewers: an explicit per-node preference, then specific ones, Text last."""
+def suitable_methods(node):
+    """Return accepted methods: an explicit per-node preference, then specific ones, Text last."""
     suitable = []
-    for viewer in _viewers.values():
+    for method in _methods.values():
         try:
-            if viewer.accepts(node):
-                suitable.append(viewer)
+            if method.accepts(node):
+                suitable.append(method)
         except Exception:
             pass
-    preferred = node.attrs.get("viewer")
-    return sorted(suitable, key=lambda viewer: (viewer.name != preferred, viewer.view is _TEXT, not viewer.specific))
+    preferred = node.attrs.get("method")
+    return sorted(suitable, key=lambda method: (method.name != preferred, method.call is _TEXT,
+                                                not method.specific))
 
 
-def open_value(master, title, value, view=None, attrs=None):
-    """Show a value using the chosen or preferred viewer's view(), with a text toggle.
+def open_value(master, title, value, call=None, attrs=None):
+    """Show a value using the chosen or preferred method's call(), with a text toggle.
 
-    A view may take extra keyword-only parameters after (value, attrs); their defaults are then
+    A call may take extra keyword-only parameters after (value, attrs); their defaults are then
     offered in a form before showing, same as a registered store method's arguments.
     """
     import tkinter as tk
     from tkinter import ttk
 
     node = replace(value_info(value), attrs=attrs or {})
-    view = view or suitable_viewers(node)[0].view
-    parameters = [parameter for parameter in list(signature(view).parameters.values())[2:]
+    call = call or suitable_methods(node)[0].call
+    parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
                   if parameter.kind is Parameter.KEYWORD_ONLY]
 
     def show(args, kwargs, text):
         try:
-            shown = view(value, node.attrs, *args, **kwargs)
+            shown = call(value, node.attrs, *args, **kwargs)
         except Exception as exc:
             show_error(master, title, exc)
             return
@@ -106,8 +107,8 @@ def open_value(master, title, value, view=None, attrs=None):
             return
         is_figure = type(shown).__module__ == "matplotlib.figure"
         if not is_figure and not callable(shown):
-            # Not a rendering: a plain result, shown by whichever viewer suits it instead. A group
-            # result browses first unless some viewer specifically claims it instead.
+            # Not a rendering: a plain result, handled by whichever method suits it instead. A group
+            # result browses first unless some method specifically claims it instead.
             open_value(master, title, shown)
             return
         window = tk.Toplevel(master)
@@ -117,7 +118,7 @@ def open_value(master, title, value, view=None, attrs=None):
             _embed_figure(frame, shown)
         else:
             shown(frame)
-        if view is not _TEXT:
+        if call is not _TEXT:
             text_frame = ttk.Frame(window)
 
             def toggle():
@@ -127,7 +128,7 @@ def open_value(master, title, value, view=None, attrs=None):
                 window.geometry(window.geometry())  # Preserve the window size while switching views.
                 current.pack_forget()
                 other.pack(fill="both", expand=True)
-                button.configure(text="Viewer" if other is text_frame else "Text")
+                button.configure(text="Method" if other is text_frame else "Text")
 
             bar = ttk.Frame(window)
             button = ttk.Button(bar, text="Text", width=7, command=toggle)
@@ -136,13 +137,13 @@ def open_value(master, title, value, view=None, attrs=None):
         frame.pack(fill="both", expand=True)
 
     if parameters:
-        ask_arguments(master, title, parameters, _filled.setdefault(view, {}), show)
+        ask_arguments(master, title, parameters, _filled.setdefault(call, {}), show)
     else:
         show([], {}, "")
 
 
 def _tk(fill):
-    """A viewer filling the browser's window with Tk widgets through fill(frame, value)."""
+    """A method filling the browser's window with Tk widgets through fill(frame, value)."""
     return lambda value, attrs: lambda frame: fill(frame, value)
 
 
@@ -175,4 +176,4 @@ def numeric(node, ndims):
 
 
 _TEXT = _tk(_show_text)
-register_viewer("Text", lambda node: True, _TEXT)
+register_method("Text", lambda node: True, _TEXT)

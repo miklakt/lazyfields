@@ -10,11 +10,11 @@ import pandas as pd
 from .. import store  # noqa: F401  Registers the store accessor.
 from .arguments import ask_arguments
 from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
-from .viewers import open_value, show_error
+from .methods import open_value, show_error
 
 
 def _run_and_show(master, title, call):
-    """Show a call's result with its preferred viewer; None opens no window.
+    """Show a call's result with its preferred method; None opens no window.
 
     A Series, one value per selected row, shows as a group of them named by row label.
     """
@@ -158,15 +158,15 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    view = {"df": reference_df, "sort": None}
+    state = {"df": reference_df, "sort": None}
 
     def render():
-        df = view["df"]
-        if view["sort"] is not None:
-            df = _sorted(df, *view["sort"])
-        view["shown"] = df.head(max_rows)
+        df = state["df"]
+        if state["sort"] is not None:
+            df = _sorted(df, *state["sort"])
+        state["shown"] = df.head(max_rows)
         table.delete(*table.get_children())
-        for position, (_, row) in enumerate(view["shown"].iterrows()):
+        for position, (_, row) in enumerate(state["shown"].iterrows()):
             table.insert("", "end", iid=str(position), text=row["lf_path"],
                          values=[_cell(column, row[column]) for column in columns])
         shown = f" (showing {max_rows})" if len(df) > max_rows else ""
@@ -175,15 +175,15 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     def apply_filter(event=None):
         expression = query.get().strip()
         try:
-            view["df"] = reference_df.query(expression) if expression else reference_df
+            state["df"] = reference_df.query(expression) if expression else reference_df
         except Exception as exc:
             status.configure(text=f"Error: {exc}")
             return
         render()
 
     def sort_by(column):
-        ascending = view["sort"] != (column, True)
-        view["sort"] = (column, ascending)
+        ascending = state["sort"] != (column, True)
+        state["sort"] = (column, ascending)
         for heading, name in headings:
             arrow = (" ▲" if ascending else " ▼") if name == column else ""
             table.heading(heading, text=name + arrow)
@@ -192,14 +192,14 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     def open_row(event=None):
         item = table.focus()
         if item:
-            set_root("/" + view["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
+            set_root("/" + state["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
 
     menu = tk.Menu(table, tearoff=False)
     arguments = {}
 
     def run(name):
         positions = sorted(int(item) for item in table.selection())
-        rows = view["shown"].iloc[positions[0] if len(positions) == 1 else positions]
+        rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
         rows.__dict__["_filesystem"] = filesystem  # The store accessor's cache; spares rebuilding it.
         method = getattr(rows.store, name)
         parameters = list(inspect.signature(method).parameters.values())[1:]  # Without the row.

@@ -58,7 +58,7 @@ FileSystem.from_spec({"children": {
 Under `trusted`, pandas and matplotlib are trusted, so `table` is the exact
 DataFrame pandas itself would unpickle, rather than `untrusted`'s rebuilt
 approximation, and `plot` is a real Figure, handled by the existing Figure
-viewer - `untrusted` has no equivalent for `plot`, since nothing rebuilds a
+method - `untrusted` has no equivalent for `plot`, since nothing rebuilds a
 matplotlib Figure safely yet. `run` stays an inert record under both mounts:
 trusting pandas and matplotlib doesn't trust this example's own `Run` class.
 

@@ -1,18 +1,18 @@
-"""Extra viewers: TABLE, PLOT, SLICES, SCATTER, FIGURE.
+"""Extra methods: TABLE, PLOT, SLICES, SCATTER, FIGURE.
 
-Not loaded by lazyfields.browser. Each is a standalone Viewer (see Viewer in viewers.py) —
+Not loaded by lazyfields.browser. Each is a standalone Method (see Method in methods.py) —
 import only the ones you want and register them yourself:
 
-    from lazyfields.browser import register_viewer
-    from lazyfields.browser.extra_viewers import TABLE
-    register_viewer(TABLE, category="View/Tables")
+    from lazyfields.browser import register_method
+    from lazyfields.browser.extra_methods import TABLE
+    register_method(TABLE, category="Display/Tables")
 
 PLOT, SLICES, SCATTER and FIGURE need matplotlib (`pip install lazyfields[plot]`); it is only
-imported inside their view functions, so importing this module itself never requires it.
+imported inside their call functions, so importing this module itself never requires it.
 """
 
 from ..readers import as_array
-from .viewers import Viewer, _embed_figure, _tk, numeric
+from .methods import Method, _embed_figure, _tk, numeric
 
 # ----- Table -----
 # A pandas DataFrame/Series, or a plain 2D/1D array (columns unnamed), as a scrollable table.
@@ -57,7 +57,7 @@ def _fill_table(window, value, limit=5000):
     table.pack(fill="both", expand=True)
 
 
-TABLE = Viewer("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series") or numeric(node, (1, 2)),
+TABLE = Method("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series") or numeric(node, (1, 2)),
                _tk(_fill_table))
 
 
@@ -88,7 +88,7 @@ def _show_plot(value, attrs):
     return figure
 
 
-PLOT = Viewer("Plot", lambda node: numeric(node, (1, 2)), _show_plot)
+PLOT = Method("Plot", lambda node: numeric(node, (1, 2)), _show_plot)
 
 
 # ----- Slices -----
@@ -151,7 +151,7 @@ def _fill_slices(window, value):
     show()
 
 
-SLICES = Viewer("Slices", lambda node: numeric(node, (2, 3)), _tk(_fill_slices))
+SLICES = Method("Slices", lambda node: numeric(node, (2, 3)), _tk(_fill_slices))
 
 
 # ----- Scatter -----
@@ -176,12 +176,12 @@ def _show_scatter(value, attrs):
     return figure
 
 
-SCATTER = Viewer("Scatter", _accepts_scatter, _show_scatter)
+SCATTER = Method("Scatter", _accepts_scatter, _show_scatter)
 
 
 # ----- Figure -----
 # Embed an already-built matplotlib Figure as-is; nothing to compute, only to display.
 
 
-FIGURE = Viewer("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
+FIGURE = Method("Figure", lambda node: node.kind == "dataset" and node.type == "matplotlib.figure.Figure",
                 _tk(_embed_figure))

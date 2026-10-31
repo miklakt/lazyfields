@@ -1,4 +1,4 @@
-"""Prepare a native CT volume, a channel-first RGB image and two protein structures for custom viewers.
+"""Prepare a native CT volume, a channel-first RGB image and two protein structures for custom methods.
 
 CT source: https://github.com/Slicer/Slicer/blob/main/Modules/Scripted/SampleData/SampleData.py
 The CT-MR Brain sample was donated for use without restrictions.
