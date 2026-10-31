@@ -1,7 +1,7 @@
 #%%
 from pathlib import Path
 import pandas as pd
-import lazyfields
+import lazyfields  # noqa: F401  Registers the pandas .store accessor.
 
 try:
     from IPython import get_ipython
