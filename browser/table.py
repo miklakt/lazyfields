@@ -135,8 +135,16 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
                 choices.see(position + step)
             return "break"  # Not also the plain arrow's focus move.
 
+        def hide_constant():
+            """Hide columns holding one value in every filtered row; a missing value counts as another."""
+            df = state["df"]
+            # As text, since lists such as lf_store_keys cannot be counted directly.
+            visible.difference_update(key for key in ids if df[names[key]].astype(str).nunique(dropna=False) <= 1)
+            refresh()
+
         ttk.Button(buttons, text="Show all", command=lambda: refresh(True)).pack(side="left")
         ttk.Button(buttons, text="Hide all", command=lambda: refresh(False)).pack(side="left")
+        ttk.Button(buttons, text="Hide constant", command=hide_constant).pack(side="left")
         ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
         choices.bind("<<ListboxSelect>>", apply_selection)
         choices.bind("<Alt-Up>", lambda event: move(-1))
