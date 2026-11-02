@@ -10,8 +10,8 @@ import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.browser import browse_table, register_viewer
-from lazyfields.browser.extra_methods import PLOT
+from lazyfields.browser import browse_table
+from lazyfields.browser.extra_methods import register_extras
 
 
 def compose(root: Path) -> FileSystem:
@@ -44,13 +44,19 @@ def add_to_index(path):
 
 
 def weighted_vector(row, factor=1.0):
-    """Scale the partition vector by its indexed metadata weight and an optional factor."""
+    """Scale the partition vector by its indexed metadata weight and an optional factor.
+
+    :param factor: Multiplier applied on top of the weight.
+    """
     import numpy as np
     return np.asarray(row["vector"]) * row["weight"] * factor
 
 
 def block_values(row, block=0):
-    """Select one 2D block from the lazily stacked block values."""
+    """Select one 2D block from the lazily stacked block values.
+
+    :param block: Position of the block along the stacked axis.
+    """
     return row["file_refs/values", block]
 
 
@@ -69,6 +75,7 @@ def register_row_methods(reference_df):
 
 
 def main() -> None:
+    register_extras()
     debug_readers()
     root = Path(__file__).resolve().parent / "data"
     spec_path = Path(__file__).with_suffix(".json")
@@ -90,7 +97,6 @@ def main() -> None:
     methods_changed = register_row_methods(reference_df)
     if save_reference or methods_changed:
         reference_df.to_pickle(reference_path)
-    register_viewer(PLOT, category="Display/Plots")
     browse_table(reference_df)
 
 

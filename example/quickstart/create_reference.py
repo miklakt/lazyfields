@@ -42,7 +42,11 @@ reference_df = lf.create_reference_table(data_dir, pipe=pipe)
 # %%
 @reference_df.store.register_method(category="Analysis/Arrays")
 def length(row, key):
-    """Finds the length of the array provided by the key"""
+    """Finds the length of the array provided by the key.
+
+    :param key: Path of the array, such as "some_1darray_key" or "some_nested_object_key/a".
+    :returns: The length, or None when the row has no such array.
+    """
     try:
         return len(row[key])
     except (KeyError, TypeError):

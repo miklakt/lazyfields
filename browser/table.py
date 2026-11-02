@@ -216,7 +216,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
                 window.configure(cursor="")
 
         if parameters:
-            ask_arguments(window, name, parameters, arguments.setdefault(name, {}), call)
+            ask_arguments(window, name, parameters, arguments.setdefault(name, {}), call,
+                          doc=inspect.getdoc(method))
         else:
             call([], {}, "")
 

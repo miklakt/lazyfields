@@ -42,8 +42,10 @@ def is_volume(node):
 def split_channels(value, attrs, *, order="rgb"):
     """Each channel-first array's channel flattened to its own named array.
 
-    order maps each array position to a channel letter, for images stored in another channel order.
     The result is shown by whichever method fits it, here XYZ Scatter — no Tk or matplotlib here.
+
+    :param order: Channel letter for each array position, such as "bgr" for images stored in
+        another channel order.
     """
     names = {"r": "red", "g": "green", "b": "blue"}
     return {names[letter]: channel.ravel() for letter, channel in zip(order, np.asarray(value))}
@@ -122,7 +124,12 @@ def is_xyz_group(node):
 
 
 def show_xyz_group(value, attrs, *, x="red", y="green", z="blue"):
-    """Point cloud from three named 1D arrays in the group; axes are picked in the popup above."""
+    """Point cloud from three named 1D arrays in the group; axes are picked in the popup above.
+
+    :param x: Name of the array plotted along x.
+    :param y: Name of the array plotted along y.
+    :param z: Name of the array plotted along z.
+    """
     from matplotlib.figure import Figure
 
     figure = Figure(layout="constrained")

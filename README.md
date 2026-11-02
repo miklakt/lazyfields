@@ -142,6 +142,10 @@ On a DataFrame, its result is a Series with the same index.
 ```python
 @reference_df.store.register_method
 def length(row, key):
+    """Length of the array at key.
+
+    :param key: Path of the array, such as "some_2darray_key".
+    """
     try:
         return len(row[key])
     except (KeyError, TypeError):

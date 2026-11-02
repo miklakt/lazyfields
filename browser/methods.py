@@ -6,7 +6,8 @@ in browser/extra_methods.py as plain Method instances you import and register yo
 """
 
 from dataclasses import dataclass, replace
-from inspect import Parameter, signature
+from functools import partial
+from inspect import Parameter, getdoc, isroutine, signature
 from pprint import pformat
 from typing import Any, Callable
 
@@ -167,7 +168,8 @@ def open_value(master, title, value, call=None, attrs=None):
             if shown is None:  # The method opened a window of its own.
                 return
             is_figure = type(shown).__module__ == "matplotlib.figure"
-            if not is_figure and not callable(shown):
+            # Only a function fills a frame: a safe pickle's proxy is callable too, but it is data.
+            if not is_figure and not (isroutine(shown) or isinstance(shown, partial)):
                 # Plain data, not a rendering: a transform's result, shown by whichever method suits
                 # it in a new window so this one stays. A group result browses unless a method claims it.
                 open_value(master, title, shown)
@@ -184,7 +186,8 @@ def open_value(master, title, value, call=None, attrs=None):
                 shown(state["content"])
 
         if parameters:
-            ask_arguments(state["window"] or master, title, parameters, _filled.setdefault(call, {}), show)
+            ask_arguments(state["window"] or master, title, parameters, _filled.setdefault(call, {}), show,
+                          doc=getdoc(call.func if isinstance(call, partial) else call))  # Not partial's own doc.
         else:
             show([], {})
 
