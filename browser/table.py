@@ -180,6 +180,18 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         shown = f" (showing {max_rows})" if len(df) > max_rows else ""
         status.configure(text=f"{len(df)} / {len(reference_df)} rows{shown}")
 
+    def fit_columns(limit=300):
+        """Size each column to its heading and longest shown cell, up to limit pixels."""
+        from tkinter import font
+
+        cell, heading_font = font.nametofont("TkDefaultFont"), font.nametofont("TkHeadingFont")
+        for heading, name in headings:
+            values = state["shown"][name]
+            texts = values.astype(str) if heading == "#0" else (_cell(name, value) for value in values)
+            longest = max(texts, key=len, default="")  # Measuring every cell is slow; the longest text suffices.
+            width = max(heading_font.measure(f"{name} ▼"), cell.measure(longest)) + 24  # Padding, tree indent.
+            table.column(heading, width=min(width, limit))
+
     def apply_filter(event=None):
         expression = query.get().strip()
         try:
@@ -188,6 +200,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             status.configure(text=f"Error: {exc}")
             return
         render()
+        fit_columns()
 
     def sort_by(column):
         ascending = state["sort"] != (column, True)
@@ -250,6 +263,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     table.bind("<<TreeviewSelect>>", open_row)
     bind_context_menu(table, open_menu)
     render()
+    fit_columns()
     entry.focus_set()
     window.mainloop()
 
