@@ -73,14 +73,6 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
             "lf_mtime": _modification_time(node), "lf_digest": node.digest()}
 
 
-def _mount_index(filesystem: FileSystem, rows) -> None:
-    """Mount each row's scalar fields as an lf_index group in its node."""
-    for row in rows:
-        fields = {key: value for key, value in row.items() if key != "lf_store_keys"
-                  and not (pd.api.types.is_scalar(value) and pd.isna(value))}
-        filesystem.mount(f"{row['lf_path']}/lf_index", FileSystem.from_value(fields).node())
-
-
 def create_reference_table(
     source: str | Path | Mapping,
     columns: list[str] | None = None,
@@ -143,7 +135,6 @@ def update_reference_table(
     pool = ThreadPoolExecutor(max_workers=workers) if workers not in (None, 1) else nullcontext()
     with pool as executor:
         rows = [row for row in (executor.map if executor else map)(make_row, paths) if row is not None]
-    _mount_index(filesystem, rows)  # After every digest, which the mount changes.
     df = pd.DataFrame(rows)
     df.attrs = attrs
     df.__dict__["_filesystem"] = filesystem
@@ -243,7 +234,7 @@ class StoreAccessor:
 
     @property
     def filesystem(self) -> FileSystem:
-        """The table's filesystem, restored from its saved specification."""
+        """Restore the data namespace lazily; indexed fields remain in the table."""
         cache = self._obj.__dict__
         if "_filesystem" not in cache:
             try:
@@ -251,8 +242,6 @@ class StoreAccessor:
             except KeyError:
                 raise RuntimeError("This table has no filesystem specification.") from None
             filesystem = FileSystem.from_spec(spec, relative_to=self._obj.attrs["filesystem_relative_to"])
-            series = isinstance(self._obj, pd.Series)
-            _mount_index(filesystem, [self._obj.to_dict()] if series else self._obj.to_dict("records"))
             cache["_filesystem"] = filesystem
         return cache["_filesystem"]
 
