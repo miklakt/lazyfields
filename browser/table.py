@@ -83,10 +83,12 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
-    visible, order, names = set(ids), list(ids), dict(zip(ids, columns))
+    column_ids = [key for key, _ in headings]
+    visible, order, names = set(column_ids), list(column_ids), dict(headings)
 
     def show_columns():
-        table.configure(displaycolumns=[key for key in order if key in visible])
+        table.configure(displaycolumns=[key for key in order if key != "#0" and key in visible],
+                        show="tree headings" if "#0" in visible else "headings")
 
     def choose_columns():
         dialog = tk.Toplevel(window)
@@ -109,7 +111,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
         def refresh(all_columns=None):
             if all_columns is not None:
                 visible.clear()
-                visible.update(ids if all_columns else ())
+                visible.update(column_ids if all_columns else ())
             shown[:] = [key for key in order if search.get().casefold() in str(names[key]).casefold()]
             choices.delete(0, "end")
             for position, key in enumerate(shown):
@@ -139,7 +141,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             """Hide columns holding one value in every filtered row; a missing value counts as another."""
             df = state["df"]
             # As text, since lists such as lf_store_keys cannot be counted directly.
-            visible.difference_update(key for key in ids if df[names[key]].astype(str).nunique(dropna=False) <= 1)
+            visible.difference_update(key for key in column_ids if df[names[key]].astype(str).nunique(dropna=False) <= 1)
             refresh()
 
         ttk.Button(buttons, text="Show all", command=lambda: refresh(True)).pack(side="left")
@@ -216,7 +218,21 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             set_root("/" + state["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
 
     menu = tk.Menu(table, tearoff=False)
+    header_menu = tk.Menu(table, tearoff=False)
     arguments = {}
+
+    def open_header_menu(column, x, y):
+        # Treeview identifies display positions; resolve them after hiding or reordering.
+        displayed = [key for key in order if key != "#0" and key in visible]
+        key = "#0" if column == "#0" else displayed[int(column[1:]) - 1]
+
+        def hide():
+            visible.discard(key)
+            show_columns()
+
+        _clear_menu(header_menu)
+        header_menu.add_command(label="Hide", command=hide)
+        header_menu.tk_popup(x, y)
 
     def run(name):
         positions = sorted(int(item) for item in table.selection())
@@ -261,7 +277,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
-    bind_context_menu(table, open_menu)
+    bind_context_menu(table, open_menu, on_heading=open_header_menu)
     render()
     fit_columns()
     entry.focus_set()

@@ -79,9 +79,12 @@ def _label(info, name):
     return f"{flags}{marker} {name}"
 
 
-def bind_context_menu(widget, callback):
+def bind_context_menu(widget, callback, *, on_heading=None):
     """Open a row's context menu with right-click, Ctrl+Enter, Shift+F10, or Menu."""
     def mouse_menu(event):
+        if on_heading is not None and widget.identify_region(event.x, event.y) == "heading":
+            on_heading(widget.identify_column(event.x), event.x_root, event.y_root)
+            return "break"
         item = widget.identify_row(event.y)
         if item:
             widget.focus_set()
