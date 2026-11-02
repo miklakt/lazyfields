@@ -4,7 +4,6 @@ import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from copy import deepcopy
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -32,13 +31,11 @@ def _validate_keys(value):
         if not isinstance(current, (Mapping, list, tuple)) or id(current) in seen:
             continue
         seen.add(id(current))
-        if isinstance(current, Mapping):
-            for key, item in current.items():
-                if isinstance(key, str) and "/" in key:
-                    raise ValueError(f"Key {key!r} contains '/', which is reserved for nested paths.")
-                pending.append(item)
-        else:
-            pending.extend(current)
+        mapping = isinstance(current, Mapping)
+        invalid = next((key for key in current if isinstance(key, str) and "/" in key), None) if mapping else None
+        if invalid is not None:
+            raise ValueError(f"Key {invalid!r} contains '/', which is reserved for nested paths.")
+        pending.extend(current.values() if mapping else current)
 
 
 def _modification_time(node):
@@ -117,13 +114,11 @@ def update_reference_table(
     relative_to = str(relative_to) if relative_to is not None else None
     if not isinstance(source, Mapping):
         raise TypeError("source must be a directory or a filesystem specification mapping.")
-    filesystem_spec = deepcopy(dict(source))
-    filesystem = FileSystem.from_spec(filesystem_spec, relative_to=relative_to)
-    relative_to = str(filesystem.relative_to)
+    filesystem = FileSystem.from_spec(source, relative_to=relative_to)
     paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
     old_rows = {row["lf_path"]: row for row in reference_df.to_dict("records")}
-    attrs = {**reference_df.attrs, "filesystem_spec": filesystem_spec,
-             "filesystem_relative_to": relative_to}
+    attrs = {**reference_df.attrs, "filesystem_spec": source,
+             "filesystem_relative_to": str(filesystem.relative_to)}
 
     def make_row(path):
         node = filesystem.node(path)
@@ -134,8 +129,8 @@ def update_reference_table(
 
     pool = ThreadPoolExecutor(max_workers=workers) if workers not in (None, 1) else nullcontext()
     with pool as executor:
-        rows = [row for row in (executor.map if executor else map)(make_row, paths) if row is not None]
-    df = pd.DataFrame(rows)
+        df = pd.DataFrame(row for row in (executor.map if executor else map)(make_row, paths)
+                          if row is not None)
     df.attrs = attrs
     df.__dict__["_filesystem"] = filesystem
     return df
@@ -215,7 +210,7 @@ class StoreAccessor:
             def apply(row: pd.Series) -> Any:
                 fields = {key: value for key, value in row.items()
                           if not (pd.api.types.is_scalar(value) and pd.isna(value))}
-                node = self.filesystem.node(row["lf_path"])
+                node = self._filesystem.node(row["lf_path"])
                 return method(_NodeRow(node, fields, self._method), *args, **kwargs)
 
             if isinstance(self._obj, pd.Series):
@@ -233,7 +228,7 @@ class StoreAccessor:
         return self._method_categories.get(name)
 
     @property
-    def filesystem(self) -> FileSystem:
+    def _filesystem(self) -> FileSystem:
         """Restore the data namespace lazily; indexed fields remain in the table."""
         cache = self._obj.__dict__
         if "_filesystem" not in cache:
@@ -241,13 +236,14 @@ class StoreAccessor:
                 spec = self._obj.attrs["filesystem_spec"]
             except KeyError:
                 raise RuntimeError("This table has no filesystem specification.") from None
-            filesystem = FileSystem.from_spec(spec, relative_to=self._obj.attrs["filesystem_relative_to"])
-            cache["_filesystem"] = filesystem
+            cache["_filesystem"] = FileSystem.from_spec(
+                spec, relative_to=self._obj.attrs["filesystem_relative_to"],
+            )
         return cache["_filesystem"]
 
     def __getitem__(self, keys):
         series = isinstance(self._obj, pd.Series)
-        filesystem = self.filesystem
+        filesystem = self._filesystem
         paths = self._obj["lf_path"]
         if keys == slice(None):
             return filesystem.read(paths) if series else [filesystem.read(path) for path in paths]

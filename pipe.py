@@ -10,7 +10,7 @@ class _NodeRow(dict):
 
     def __init__(self, node, fields=(), methods=None):
         super().__init__(fields)
-        self.node, self._methods = node, methods
+        self._node, self._methods = node, methods
 
     def __getattr__(self, name):
         methods = self.__dict__.get("_methods")
@@ -23,8 +23,8 @@ class _NodeRow(dict):
     def __getitem__(self, key):
         if isinstance(key, tuple):
             name, selection = key[0], key[1] if len(key) == 2 else key[1:]
-            return self[name][selection] if name in self else self.node.node(name).read(selection)
-        return super().__getitem__(key) if key in self else self.node.node(key).read()
+            return self[name][selection] if name in self else self._node.node(name).read(selection)
+        return super().__getitem__(key) if key in self else self._node.node(key).read()
 
     def get(self, key, default=None):
         try:
@@ -37,10 +37,10 @@ def _apply_pipe(row: _NodeRow, pipe: list, *, scoped: bool = False):
     """Apply callbacks to a row, isolating scoped row values."""
     last_was_filter = False
     for step in pipe:
-        result = (_apply_pipe(_NodeRow(row.node, deepcopy(dict(row))), step, scoped=True)
+        result = (_apply_pipe(_NodeRow(row._node, deepcopy(dict(row))), step, scoped=True)
                   if isinstance(step, list) else step(row))
         if result is None: last_was_filter = False
-        elif isinstance(result, Mapping): row, last_was_filter = _NodeRow(row.node, result), False
+        elif isinstance(result, Mapping): row, last_was_filter = _NodeRow(row._node, result), False
         elif pd.api.types.is_bool(result):
             if not result: return False
             last_was_filter = True
