@@ -1,7 +1,9 @@
+import __future__
 import ast
 import inspect
 import sys
 import textwrap
+import typing
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime
@@ -194,8 +196,12 @@ class StoreAccessor:
     def _method(self, name: str) -> Callable[..., Any]:
         """Compile a registered method once; raise KeyError if it is missing."""
         if name not in self._compiled_methods:
-            namespace: dict[str, Any] = {}
-            exec(self._methods[name], namespace)
+            # Annotations stay strings, so a missing name never breaks compiling; the typing names
+            # let the browser resolve common ones such as Literal for its argument suggestions.
+            namespace: dict[str, Any] = {key: getattr(typing, key) for key in typing.__all__}
+            code = compile(self._methods[name], f"<store method {name}>", "exec",
+                           flags=__future__.annotations.compiler_flag, dont_inherit=True)
+            exec(code, namespace)
             self._compiled_methods[name] = namespace[name]
         return self._compiled_methods[name]
 

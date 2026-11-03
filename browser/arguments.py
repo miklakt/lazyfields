@@ -6,7 +6,9 @@ Shared by registered store methods (browser/table.py) and filesystem method keyw
 
 import ast
 import re
-from inspect import Parameter, cleandoc
+import types
+from inspect import Parameter, cleandoc, signature, unwrap
+from typing import Literal, Union, get_args, get_origin
 
 _POSITIONAL = (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
 _PARAMETERS_SECTION = re.compile(r"(Args|Arguments|Parameters|Params|Keyword Args|Keyword Arguments):?")
@@ -85,6 +87,130 @@ def _tooltip(widget, text):
     widget.bind("<Leave>", hide)
     widget.bind("<Destroy>", hide)
     return widget
+
+
+def method_signature(call):
+    """call's signature with string annotations evaluated where possible, each kept as text if it fails."""
+    sig = signature(call)
+    scope = getattr(unwrap(call), "__globals__", {})
+
+    def resolve(annotation):
+        try:
+            return eval(annotation, scope) if isinstance(annotation, str) else annotation
+        except Exception:  # An unresolvable annotation only loses its suggestions.
+            return annotation
+
+    return sig.replace(parameters=[parameter.replace(annotation=resolve(parameter.annotation))
+                                   for parameter in sig.parameters.values()])
+
+
+def literal_suggestions(annotation):
+    """Literal choices, including those in unions, as editable Python expressions."""
+    if get_origin(annotation) is Literal:
+        return tuple(map(repr, get_args(annotation)))
+    if get_origin(annotation) in (Union, types.UnionType):
+        return tuple(dict.fromkeys(value for member in get_args(annotation)
+                                   for value in literal_suggestions(member)))
+    return ()
+
+
+def _matches(suggestions, text):
+    """Suggestions starting with text, quotes aside; failing that, those containing it."""
+    query = text.strip().strip("\"'").casefold()
+    plain = [(item, item.strip("\"'").casefold()) for item in suggestions]
+    return ([item for item, key in plain if key.startswith(query)]
+            or [item for item, key in plain if query in key])
+
+
+def _suggestion_box(master, value, suggestions):
+    """An entry listing matching suggestions below it as you type; any other text is accepted too.
+
+    Down/Up move through the list, Return or a click accepts, Escape closes it. Clicking the entry or
+    pressing Down in it shows the list.
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    entry = ttk.Entry(master, width=40, textvariable=value)
+    popup = tk.Toplevel(entry)
+    popup.withdraw()
+    popup.wm_overrideredirect(True)
+    listbox = tk.Listbox(popup, exportselection=False, activestyle="none", borderwidth=1, relief="solid",
+                         highlightthickness=0)
+    listbox.pack(fill="both", expand=True)
+
+    def show(items):
+        if not items:
+            return popup.withdraw()
+        listbox.delete(0, "end")
+        listbox.insert("end", *items)
+        listbox.configure(height=min(len(items), 8))
+        popup.geometry(f"{entry.winfo_width()}x{listbox.winfo_reqheight()}"
+                       f"+{entry.winfo_rootx()}+{entry.winfo_rooty() + entry.winfo_height()}")
+        popup.deiconify()
+        popup.lift()
+
+    def show_all(event=None):
+        text = value.get().strip()
+        show(list(suggestions) if text in suggestions else _matches(suggestions, text) or list(suggestions))
+
+    def select(index):
+        index %= listbox.size()
+        listbox.selection_clear(0, "end")
+        listbox.selection_set(index)
+        listbox.see(index)
+
+    def accept(event=None):
+        if not (popup.winfo_ismapped() and listbox.curselection()):
+            return None
+        value.set(listbox.get(listbox.curselection()[0]))
+        entry.icursor("end")
+        entry.focus_set()
+        popup.withdraw()
+        return "break"
+
+    def move(step):
+        if not popup.winfo_ismapped():
+            show_all()
+        elif selected := listbox.curselection():
+            select(selected[0] + step)
+        else:
+            select(0 if step > 0 else -1)
+        return "break"
+
+    def escape(event):
+        if popup.winfo_ismapped():
+            popup.withdraw()
+            return "break"
+
+    def typed(*_):
+        if entry.focus_get() is entry:
+            items = _matches(suggestions, value.get())
+            show([] if items == [value.get().strip()] else items)  # Nothing more to offer once chosen.
+
+    def focus_out(event):
+        def hide():  # A click on the list moves focus briefly; let its release accept first.
+            if entry.winfo_exists() and entry.focus_get() is not entry:
+                popup.withdraw()
+        entry.after(150, hide)
+
+    def moved(event):  # The list would not follow the form.
+        if event.widget is form:
+            popup.withdraw()
+
+    trace = value.trace_add("write", typed)
+    form = master.winfo_toplevel()
+    listbox.bind("<Motion>", lambda event: select(listbox.nearest(event.y)))
+    listbox.bind("<ButtonRelease-1>", accept)
+    entry.bind("<Down>", lambda event: move(1))
+    entry.bind("<Up>", lambda event: move(-1))
+    entry.bind("<Return>", accept)
+    entry.bind("<Escape>", escape)
+    entry.bind("<Button-1>", show_all)
+    entry.bind("<FocusOut>", focus_out)
+    entry.bind("<Destroy>", lambda event: value.trace_remove("write", trace))
+    form.bind("<Configure>", moved, add="+")
+    return entry
 
 
 def _default_text(parameter):
@@ -168,7 +294,10 @@ def ask_arguments(master, name, parameters, filled, submit, doc=None):
                 _tooltip(label, hints[parameter.name])
             label.grid(row=line, column=0, sticky="w", padx=4, pady=2)
         value = tk.StringVar(form, filled.get(parameter.name, _default_text(parameter)))
-        if isinstance(parameter.default, bool):  # Reads True or False, like the literal typed in a box.
+        suggestions = literal_suggestions(parameter.annotation)
+        if suggestions:
+            widget = _suggestion_box(form, value, suggestions)
+        elif isinstance(parameter.default, bool):  # Reads True or False, like the literal typed in a box.
             widget = ttk.Checkbutton(form, variable=value, onvalue="True", offvalue="False")
         else:
             widget = ttk.Entry(form, width=40, textvariable=value)

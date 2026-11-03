@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-from inspect import Parameter, getdoc, isroutine, signature
+from inspect import Parameter, getdoc, isroutine
 from pprint import pformat
 from typing import Any, Callable, Literal
 
 from ..filesystem import FileSystem
 from ..readers import NodeInfo, value_info
-from .arguments import ask_arguments
+from .arguments import ask_arguments, method_signature
 
 _filled: dict[Callable, dict[str, str]] = {}
 
@@ -163,7 +163,7 @@ def open_value(master, title, value, call=None, attrs=None, methods=DEFAULT_METH
 
     def render(call):
         state["name"] = next((method.name for method in methods if method.call is call), "Method")
-        parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
+        parameters = [parameter for parameter in list(method_signature(call).parameters.values())[2:]
                       if parameter.kind is Parameter.KEYWORD_ONLY]
 
         def show(args, kwargs, text=""):

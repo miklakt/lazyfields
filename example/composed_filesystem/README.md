@@ -38,6 +38,15 @@ for a heatmap of one selected block from the lazily stacked values. Both are
 stored row methods: their source is saved in the reference-table pickle, and
 their plain array results are handed to the standard Plot method.
 
+**block_statistic** reduces the stacked values with a numpy function. Its
+`statistic` parameter is annotated `Literal["mean", "median", "max", "min", ...]`,
+so its box lists the choices below it as you type: `m` leaves `mean`, `median`,
+`max` and `min`, and `me` narrows to `mean` and `median`. Use Down/Up and Return,
+or click, to pick one; Escape closes the list. Clicking the box or pressing Down
+shows every choice. Suggestions do not restrict the input: `axis` suggests
+`0, 1, 2, None`, and `-1` works too. `block_values` likewise suggests blocks `0`
+and `1` while accepting `-1`.
+
 ## Fixtures
 
 All paths are relative to `example/composed_filesystem/data/`:

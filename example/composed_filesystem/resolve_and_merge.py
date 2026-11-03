@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 
@@ -51,12 +52,24 @@ def weighted_vector(row, factor=1.0):
     return np.asarray(row["vector"]) * row["weight"] * factor
 
 
-def block_values(row, block=0):
+def block_values(row, block: Literal[0, 1] = 0):
     """Select one 2D block from the lazily stacked block values.
 
-    :param block: Position of the block along the stacked axis.
+    :param block: Block position; choose a suggestion or enter another index, such as -1.
     """
     return row["file_refs/values", block]
+
+
+def block_statistic(row,
+                    statistic: Literal["mean", "median", "max", "min", "sum", "std", "var", "ptp", "size"] = "mean",
+                    axis: Literal[0, 1, 2, None] = 0):
+    """Reduce the stacked block values with a numpy statistic.
+
+    :param statistic: Name of the numpy function; type to filter, e.g. m for mean, median, max, min.
+    :param axis: Axis to reduce; 0 combines the blocks into one heatmap, None gives a single number.
+    """
+    import numpy as np
+    return getattr(np, statistic)(np.asarray(row["file_refs/values"]), axis=axis)
 
 
 def register_row_methods(reference_df):
@@ -64,7 +77,7 @@ def register_row_methods(reference_df):
     before = (reference_df.attrs.get("store_methods", {}).copy(),
               reference_df.attrs.get("store_method_categories", {}).copy())
     registered = set(reference_df.store.get_registered_methods())
-    for method in (weighted_vector, block_values):
+    for method in (weighted_vector, block_values, block_statistic):
         if method.__name__ in registered:
             reference_df.store.unregister_method(method.__name__)
         reference_df.store.register_method(method, category="Analysis/Plots")

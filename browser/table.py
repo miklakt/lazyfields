@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
-from .arguments import ask_arguments
+from .arguments import ask_arguments, method_signature
 from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
 from .methods import DEFAULT_METHODS, open_value, show_error
 
@@ -240,7 +240,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
         rows.__dict__["_filesystem"] = filesystem  # The store accessor's cache; spares rebuilding it.
         method = getattr(rows.store, name)
-        parameters = list(inspect.signature(method).parameters.values())[1:]  # Without the row.
+        parameters = list(method_signature(method).parameters.values())[1:]  # Without the row.
         target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
 
         def call(args, kwargs, text):
