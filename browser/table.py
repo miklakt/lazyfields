@@ -10,10 +10,10 @@ import pandas as pd
 from .. import store  # noqa: F401  Registers the store accessor.
 from .arguments import ask_arguments
 from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
-from .methods import open_value, show_error
+from .methods import DEFAULT_METHODS, open_value, show_error
 
 
-def _run_and_show(master, title, call):
+def _run_and_show(master, title, call, methods):
     """Show a call's result with its preferred method; None opens no window.
 
     A Series, one value per selected row, shows as a group of them named by row label.
@@ -23,7 +23,7 @@ def _run_and_show(master, title, call):
         result = None if all(value is None for value in result) else {
             str(label): value for label, value in result.items()}
     if result is not None:
-        open_value(master, title, result)
+        open_value(master, title, result, methods=methods)
 
 
 def _cell(column, value):
@@ -41,7 +41,8 @@ def _sorted(df, column, ascending):
         return df.sort_values(column, ascending=ascending, kind="stable", key=lambda s: s.astype(str))
 
 
-def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
+def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
+                 methods=DEFAULT_METHODS):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
 
     Right-clicking runs a registered method on the selected rows and shows its result.
@@ -164,7 +165,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
     bottom = ttk.Frame(split)
     filesystem = reference_df.store._filesystem
-    set_root = panes(bottom, filesystem, navigation_widgets=(table,))
+    set_root = panes(bottom, filesystem, navigation_widgets=(table,), methods=methods)
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
@@ -246,7 +247,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
             window.configure(cursor="watch")
             window.update_idletasks()
             try:
-                _run_and_show(window, f"{target} · {name}({text})", lambda: method(*args, **kwargs))
+                _run_and_show(window, f"{target} · {name}({text})",
+                              lambda: method(*args, **kwargs), methods)
             except Exception as exc:
                 show_error(window, name, exc)
             finally:
@@ -285,16 +287,16 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000):
 
 
 def main(argv=None) -> None:
-    from .extra_methods import register_extras
+    from .extra_methods import ARRAY_ACTIONS, EXTRA_VIEWERS
 
     parser = argparse.ArgumentParser(
         prog="lf-browse-table", description="Browse a pickled reference table read-only.")
     parser.add_argument("table", type=Path, help="reference table pickle")
     parser.add_argument("--max-rows", type=int, default=5000, help="rows to show at once (default: 5000)")
     args = parser.parse_args(argv)
-    register_extras()  # Make the built-in viewers and actions available in the CLI browser.
+    methods = DEFAULT_METHODS | EXTRA_VIEWERS | ARRAY_ACTIONS
     # Resolve modules used by saved store methods.
     for directory in (str(args.table.resolve().parent), str(Path.cwd())):
         if directory not in sys.path:
             sys.path.insert(0, directory)
-    browse_table(args.table, max_rows=args.max_rows)
+    browse_table(args.table, max_rows=args.max_rows, methods=methods)

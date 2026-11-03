@@ -2,8 +2,7 @@
 
 A method handles any node it suits, wherever it appears: in the filesystem
 browser, below a table, or as another method's result. Unlike a store row method,
-it knows nothing of rows or parents. Register one with
-`register_method(name, accepts, call)`:
+it knows nothing of rows or parents. Build one with `Method(name, accepts, call)`:
 
 - `accepts(node)` decides without reading the node's value, from `node.kind`,
   a dataset's `node.shape`, `node.dtype`, or loaded `node.type`, its
@@ -13,11 +12,31 @@ it knows nothing of rows or parents. Register one with
   or returns a matplotlib `Figure` to embed in the browser's window. A function
   that fills a Tk frame is also accepted.
 
-The browser opens and titles its window, reports errors, and adds a button that
-toggles to the value as text.
+Start with the default Text and Browser methods (`DEFAULT_METHODS`) and union in your
+own and the built-ins you want with `|`, placing each with `Method.set(category=...,
+priority=...)`, then pass the collection to the browser:
 
-Pass `category="Display/Plots"` to `register_method(...)` to place that registration
-in nested Display and Plots submenus; omit it to leave the method at the context-menu root.
+```python
+from lazyfields.browser import DEFAULT_METHODS, IMAGE, PLOT, TABLE, Method, browse_filesystem
+
+methods = (DEFAULT_METHODS
+           | TABLE
+           | PLOT.set(category="Charts")
+           | IMAGE.set(priority=3)
+           | Method("Molecule", is_molecule, show_molecule, priority=3))
+browse_filesystem(filesystem, methods=methods)
+```
+
+Each `Method` carries its own `category` and `priority` (defaulting to `None` and `0`);
+`.set(...)` returns a copy with either changed, leaving the original free to be placed
+differently elsewhere. Categories such as `"Display/Plots"` create nested submenus.
+`priority` breaks ties between methods that both accept a node, higher winning; it may be a
+plain int or a `priority(node)` callable when the rank depends on what matched - as the
+built-in Table's does, outranking Browser for a DataFrame but not for a plain array. Built-ins
+keep priorities between -3 and 3 for readability, but user priorities are not restricted to that range.
+
+The browser opens and titles its window, reports errors, and lets the user
+switch between every matching view.
 
 From the repository root, with Tk available:
 
@@ -41,7 +60,7 @@ group of header fields, such as `title`, one dataset per atom column, such as
 `CONECT` records list; 1UBQ has none, 4HHB those of its four haem groups.
 
 Double-click a dataset to run its method; right-click any node for every
-method that suits it, built-in ones such as Slices and Text included. The
+method that suits it, including Split Channels and Text. The
 browser waits while PyVista's window is open.
 
 `browse.py` registers Image for numeric arrays with shape `(3, height, width)`

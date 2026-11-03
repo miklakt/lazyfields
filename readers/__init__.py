@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib, logging, shutil, sys, tarfile, warnings, zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -53,7 +55,7 @@ def as_array(value: Any) -> Any:
     return array
 
 
-def value_info(value: Any) -> "NodeInfo":
+def value_info(value: Any) -> NodeInfo:
     """Classify a value and describe its children, or a dataset's dtype, shape and type."""
     kind = value_kind(value)
     if kind == "group":

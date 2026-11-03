@@ -1,15 +1,16 @@
-"""Extra methods: viewers (TABLE, PLOT, SCATTER, FIGURE, IMAGE) and actions - array transforms
-(Split, Swap axes, Transpose, Flatten, Squeeze, in the ACTIONS tuple).
+"""Extra methods: viewers (TABLE, PLOT, SCATTER, FIGURE, IMAGE) and array transforms.
 
-Not loaded by lazyfields.browser. The viewers are standalone Methods you import and register one by
-one if you like (see Method in methods.py):
+Exported by lazyfields.browser. Combine the standalone methods or bundles you need, placing each with
+Method.set(category=..., priority=...) as you go:
 
-    from lazyfields.browser import register_viewer
-    from lazyfields.browser.extra_methods import TABLE
-    register_viewer(TABLE, category="Display/Tables")
+    from lazyfields.browser import DEFAULT_METHODS, TABLE, browse_filesystem
+    methods = DEFAULT_METHODS | TABLE.set(category="Display/Tables")
+    browse_filesystem(filesystem, methods=methods)
 
-or register whole bundles at once (all at the bottom of this module): register_viewers() for the
-viewers, register_actions() for the actions, or register_extras() for both.
+or include every viewer and array action:
+
+    from lazyfields.browser import ARRAY_ACTIONS, EXTRA_VIEWERS
+    methods = DEFAULT_METHODS | EXTRA_VIEWERS | ARRAY_ACTIONS
 
 PLOT, SCATTER, FIGURE and IMAGE need matplotlib (`pip install lazyfields[plot]`); the actions
 need only numpy. Every heavy import happens inside a call function, so importing this module itself
@@ -17,7 +18,7 @@ never requires either.
 """
 
 from ..readers import as_array
-from .methods import Method, _embed_figure, _tk, numeric
+from .methods import Method, Methods, _embed_figure, _tk, numeric
 
 # ----- Table -----
 # A pandas DataFrame/Series, or a plain 2D/1D array (columns unnamed), as a scrollable table.
@@ -62,8 +63,15 @@ def _fill_table(window, value, limit=5000):
     table.pack(fill="both", expand=True)
 
 
-TABLE = Method("Table", lambda node: node.type in ("pandas.DataFrame", "pandas.Series") or numeric(node, (1, 2)),
-               _tk(_fill_table))
+def _is_dataframe(node):
+    return node.type in ("pandas.DataFrame", "pandas.Series")
+
+
+# A reconstructed DataFrame still reports its pickle internals too, so it also matches Browser's
+# deliberately loose "any group" catch-all; priority 3 makes Table win that tie. A plain numeric array
+# is just one option among Plot and the rest, so Table stays at the default rank there.
+TABLE = Method("Table", lambda node: _is_dataframe(node) or numeric(node, (1, 2)), _tk(_fill_table),
+               priority=lambda node: 3 if _is_dataframe(node) else 0)
 
 
 # ----- Plot -----
@@ -193,41 +201,21 @@ def _show_rgb(value, attrs):
     return figure
 
 
-IMAGE = Method("RGB Image", _accepts_rgb, _show_rgb)
+# priority 3: RGB Image wins over Plot for an (H, W, 3/4) array, which both accept - a picture by
+# default. Pick Plot from the menu when such an array is really a scalar field to scroll through.
+IMAGE = Method("RGB Image", _accepts_rgb, _show_rgb, priority=3)
 
 
-# ----- Register all -----
+# ----- Viewer bundle -----
 
-VIEWERS = (TABLE, PLOT, SCATTER, FIGURE, IMAGE)
-
-# Default menu placement: Table, Figure and RGB Image stay top-level (each just displays its value
-# as-is); the methods that compute a chart from numbers group under "Charts".
-_VIEWER_CATEGORIES = {"Table": None, "Plot": "Charts",
-                      "Scatter": "Charts", "Figure": None, "RGB Image": None}
-
-# RGB Image wins over Plot for an (H, W, 3/4) array, which both accept; pick Plot from the menu when
-# such an array is really a scalar field to scroll through rather than a picture.
-_VIEWER_SPECIFIC = {"RGB Image"}
-
-
-def register_viewers(**options):
-    """Register every built-in viewer in one call, after importing lazyfields.browser.
-
-    Each lands in its default menu category (Table/Figure/RGB Image top-level, the chart methods
-    under "Charts") and RGB Image registers as specific so it beats Plot on an image-shaped array.
-    Pass category=/specific= to override for all of them, or register individually for per-method
-    control. Registering only stores each Method, so this stays cheap and needs no matplotlib; the
-    plotting ones import it only when actually used. Other options pass through unchanged.
-
-    The actions are a separate bundle: call register_actions() for those.
-    """
-    from .methods import register_method
-    for method in VIEWERS:
-        per = dict(options)
-        per.setdefault("category", _VIEWER_CATEGORIES.get(method.name))
-        per.setdefault("specific", method.name in _VIEWER_SPECIFIC)
-        register_method(method, **per)
-    return VIEWERS
+# Categories are this bundle's menu layout, not the methods' own - another browser places them
+# differently. Table, Figure and RGB Image stay at the menu root; the chart methods group under Charts.
+EXTRA_VIEWERS = (Methods()
+                 | TABLE
+                 | PLOT.set(category="Charts")
+                 | SCATTER.set(category="Charts")
+                 | FIGURE
+                 | IMAGE)
 
 
 # ----- Actions -----
@@ -264,34 +252,12 @@ def _swap_axes(value, attrs, *, axis1: int = 0, axis2: int = 1):
     return np.swapaxes(as_array(value), axis1, axis2)
 
 
-# view=False: each is offered in the menu but is never a value's default - opening a value shows it.
-ACTIONS = (
-    Method("Split", lambda node: _dims(node) >= 1, _split, view=False),
-    Method("Swap axes", lambda node: _dims(node) >= 2, _swap_axes, view=False),
-    Method("Transpose", lambda node: _dims(node) >= 2, _numpy("transpose"), view=False),
-    Method("Flatten", lambda node: _dims(node) >= 2, _numpy("ravel"), view=False),
+# Actions are offered in the menu but never become a value's default.
+ARRAY_ACTIONS = Methods((
+    Method("Split", lambda node: _dims(node) >= 1, _split, kind="action"),
+    Method("Swap axes", lambda node: _dims(node) >= 2, _swap_axes, kind="action"),
+    Method("Transpose", lambda node: _dims(node) >= 2, _numpy("transpose"), kind="action"),
+    Method("Flatten", lambda node: _dims(node) >= 2, _numpy("ravel"), kind="action"),
     Method("Squeeze", lambda node: node.kind == "dataset" and 1 in (node.shape or ()),
-           _numpy("squeeze"), view=False),
-)
-
-
-def register_actions(*, category=None, **options):
-    """Register the built-in actions (Split, Swap axes, Transpose, Flatten, Squeeze) as a bundle.
-
-    Each is view=False (see Method), so it lands in a value window's Action menu - which groups them
-    already, hence no category by default - and is never a value's default. Each returns a new array
-    (Split a group of slices) that the browser then displays with whatever method suits it. numpy only.
-    """
-    from .methods import register_method
-    for method in ACTIONS:
-        register_method(method, category=category, **options)
-    return ACTIONS
-
-
-def register_extras():
-    """Register every extra method - viewers and actions - in their default categories.
-
-    The one call the CLI browsers use; prefer register_viewers()/register_actions(), or register
-    individual Methods, when you want only some of them or different categories.
-    """
-    return (*register_viewers(), *register_actions())
+           _numpy("squeeze"), kind="action"),
+))

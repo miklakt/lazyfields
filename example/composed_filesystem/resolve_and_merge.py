@@ -10,8 +10,7 @@ import lazyfields as lf
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
 from lazyfields.filesystem.merge import collect, prefer, prefix, stack
-from lazyfields.browser import browse_table
-from lazyfields.browser.extra_methods import register_extras
+from lazyfields.browser import ARRAY_ACTIONS, DEFAULT_METHODS, EXTRA_VIEWERS, browse_table
 
 
 def compose(root: Path) -> FileSystem:
@@ -75,7 +74,7 @@ def register_row_methods(reference_df):
 
 
 def main() -> None:
-    register_extras()
+    methods = DEFAULT_METHODS | EXTRA_VIEWERS | ARRAY_ACTIONS
     debug_readers()
     root = Path(__file__).resolve().parent / "data"
     spec_path = Path(__file__).with_suffix(".json")
@@ -97,7 +96,7 @@ def main() -> None:
     methods_changed = register_row_methods(reference_df)
     if save_reference or methods_changed:
         reference_df.to_pickle(reference_path)
-    browse_table(reference_df)
+    browse_table(reference_df, methods=methods)
 
 
 if __name__ == "__main__":

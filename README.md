@@ -329,9 +329,9 @@ Open a reference table in the graphical browser to inspect its indexed fields an
 explore the source data for a selected row:
 
 ```python
-from lazyfields.browser import browse_table
+from lazyfields.browser import ARRAY_ACTIONS, DEFAULT_METHODS, EXTRA_VIEWERS, browse_table
 
-browse_table(reference_df)
+browse_table(reference_df, methods=DEFAULT_METHODS | EXTRA_VIEWERS | ARRAY_ACTIONS)
 ```
 
 You can also open a saved table from the command line:

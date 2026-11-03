@@ -3,8 +3,7 @@ plot and table methods, into one mounted filesystem browser, with NPZ and PDB re
 
 Split Channels returns plain named arrays, no Tk or matplotlib of its own: open_value shows its
 result with whichever method fits, here XYZ Scatter, exactly as a registered store method's result
-would be shown. It registers with register_action, so it is offered in the menu but never a
-value's default - the views register with register_viewer.
+would be shown. It registers as an action, so it is offered in the menu but never a value's default.
 """
 
 import json
@@ -12,8 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lazyfields.browser import browse_filesystem, register_action, register_viewer
-from lazyfields.browser.extra_methods import PLOT, TABLE
+from lazyfields.browser import DEFAULT_METHODS, PLOT, TABLE, Method, browse_filesystem
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import register_reader
 from lazyfields.readers.npz import NUMPY_ARCHIVE
@@ -144,21 +142,24 @@ def main():
         raise FileNotFoundError("Run example/custom_methods/generate_dataset.py first.")
     register_reader(NUMPY_ARCHIVE)
     register_reader(PROTEIN_DATA_BANK)
-    register_viewer("Volume", is_volume, show_volume, category="Display/Volumes")
-    register_viewer("Image", is_image, show_image, category="Display/Images")
-    # An action (Action menu), so it is offered but never the default glance at a photo.
-    register_action("Split Channels", is_image, split_channels, category="Images")
-    # Marked specific: its exact x/y/z/element shape should win over Browser, which also matches
-    # any group. Left uncategorized, it appears directly in the context menu.
-    register_viewer("Molecule", is_molecule, show_molecule, specific=True)
-    # Left unmarked: this loose "any group of three or more children" heuristic loses the tie against
-    # Browser, which registered first, so a nested result browses before it scatters.
-    register_viewer("XYZ Scatter", is_xyz_group, show_xyz_group, category="Display/Plots")
-    register_viewer(PLOT, category="Display/Plots")
-    register_viewer(TABLE, category="Display/Tables")
+    methods = (
+        DEFAULT_METHODS
+        | PLOT.set(category="Display/Plots")
+        | TABLE.set(category="Display/Tables")
+        | Method("Volume", is_volume, show_volume, category="Display/Volumes")
+        | Method("Image", is_image, show_image, category="Display/Images")
+        # An action (Action menu), so it is offered but never the default glance at a photo.
+        | Method("Split Channels", is_image, split_channels, category="Images", kind="action")
+        # Its exact x/y/z/element shape should win over Browser, which also matches any group. Left
+        # uncategorized, it appears directly in the context menu.
+        | Method("Molecule", is_molecule, show_molecule, priority=3)
+        # Priority left at 0: this loose "any group of three or more children" heuristic ties with
+        # Browser and loses, Browser being added first, so a nested result browses before it scatters.
+        | Method("XYZ Scatter", is_xyz_group, show_xyz_group, category="Display/Plots")
+    )
     filesystem = FileSystem.from_spec(json.loads((DATA_DIR / "mount.json").read_text()),
                                       relative_to=DATA_DIR)
-    browse_filesystem(filesystem)
+    browse_filesystem(filesystem, methods=methods)
 
 
 if __name__ == "__main__":

@@ -1,23 +1,22 @@
 """Method registration, selection, and display.
 
-Only Text registers here, plus the registry machinery itself; Browser (browser/filesystem.py)
-registers alongside it. Everything shape-specific (Table, Plot, Scatter, Figure, RGB Image) lives
-in browser/extra_methods.py as plain Method instances you import and register yourself.
+Only Text is defined here, plus the Method/Methods machinery itself; Browser (browser/filesystem.py)
+is added alongside it. Everything shape-specific (Table, Plot, Scatter, Figure, RGB Image) lives
+in browser/extra_methods.py and is re-exported by lazyfields.browser.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
 from inspect import Parameter, getdoc, isroutine, signature
 from pprint import pformat
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from ..filesystem import FileSystem
 from ..readers import NodeInfo, value_info
 from .arguments import ask_arguments
 
-_methods = {}
-_method_categories: dict[str, str] = {}
-_specific_methods: set[str] = set()
 _filled: dict[Callable, dict[str, str]] = {}
 
 
@@ -36,78 +35,89 @@ class Method:
     store method's result. A plain computation needs no Tk or matplotlib: return its data and let
     another method display it.
 
-    view is whether the method shows the value as it is (the default). A method that instead derives
-    a new value - a transform - sets view=False, so it is offered in the menu but never picked as a
-    value's default: opening a value shows it, it never silently runs a transform.
+    kind is "view" when the method shows the value as it is, or "action" when it derives a new value;
+    actions are offered in the menu but never picked as a value's default. category nests it in menu
+    submenus ("Display/Plots"); omit it to stay at the menu root. priority breaks ties between methods
+    that both accept a node - higher wins, order of addition settling the rest - and is a plain int, or
+    a callable priority(node) when the rank depends on what matched (Table outranks Browser for a
+    DataFrame but not for a plain array). Built-ins stay within -3..3 for readability; custom ones need not.
     """
 
     name: str
     accepts: Callable[[NodeInfo], bool]
     call: Callable[..., Any]
-    view: bool = True
+    kind: Literal["view", "action"] = "view"
+    category: str | None = None
+    priority: int | Callable[[NodeInfo], int] = 0
+
+    def __post_init__(self):
+        if self.kind not in ("view", "action"):
+            raise ValueError("Method kind must be 'view' or 'action'.")
+
+    def set(self, **changes) -> Method:
+        """A copy with fields replaced - usually category, priority, or kind. The original is untouched,
+        so one Method can be placed differently in different browsers."""
+        return replace(self, **changes)
+
+    def rank(self, node) -> int:
+        """This method's tie-break priority for node: priority itself, or priority(node) when it varies."""
+        return self.priority(node) if callable(self.priority) else self.priority
 
 
-def register_method(method: Method | str, accepts=None, call=None, *, specific=False,
-                    category: str | None = None, view: bool | None = None) -> Method:
-    """Register a Method, building one first if given (name, accepts, call) instead.
+class Methods:
+    """An ordered collection of Methods, combined with a Method or another Methods using ``|``.
 
-    Re-registering a name replaces it. category groups it in a filesystem menu; specific makes it win
-    over a looser matching method; neither becomes part of the Method. view is intrinsic to the Method
-    (see Method.view) so it travels when a Method is reused; pass view=False here to register a custom
-    transform that returns a new value - it is then offered in the menu but never a default.
+    Each Method carries its own category and priority (see Method), so building a set is just unioning:
+    ``DEFAULT_METHODS | TABLE.set(category="Tables") | Method("Volume", is_volume, show_volume)``. Adding
+    a name already present replaces it, keeping it ordered last.
     """
-    if not isinstance(method, Method):
-        method = Method(method, accepts, call, view=True if view is None else view)
-    elif view is not None:
-        method = replace(method, view=view)
-    _methods.pop(method.name, None)
-    _methods[method.name] = method
-    if category is None:
-        _method_categories.pop(method.name, None)
-    else:
-        _method_categories[method.name] = category
-    if specific:
-        _specific_methods.add(method.name)
-    else:
-        _specific_methods.discard(method.name)
-    return method
+
+    def __init__(self, methods=()):
+        self._entries: dict[str, Method] = {}
+        self |= methods
+
+    def matching(self, node):
+        """Accepted methods, default first: views before actions, the node's preferred method, then by
+        priority (highest first), with order of addition settling any remaining tie."""
+        accepted = []
+        for method in self:
+            try:
+                if method.accepts(node):
+                    accepted.append(method)
+            except Exception:
+                pass
+        preferred = node.attrs.get("method")
+        return sorted(accepted, key=lambda method: (
+            method.kind != "view", method.name != preferred, -method.rank(node),
+        ))
+
+    def __iter__(self):
+        return iter(self._entries.values())
+
+    def __len__(self):
+        return len(self._entries)
+
+    def __or__(self, other):
+        combined = Methods(self)
+        combined |= other
+        return combined
+
+    def __ior__(self, other):
+        if other is self:
+            return self
+        for method in (other,) if isinstance(other, Method) else other:
+            if not isinstance(method, Method):
+                raise TypeError(f"Cannot combine {method!r} into Methods; expected a Method - place "
+                                "one with Method.set(category=..., priority=...).")
+            self._entries.pop(method.name, None)  # Drop any earlier one of the same name...
+            self._entries[method.name] = method   # ...so the latest wins and orders last.
+        return self
 
 
-def register_viewer(method: Method | str, accepts=None, call=None, *, specific=False,
-                    category: str | None = None) -> Method:
-    """Register a view: a method that shows a value as it is. The common case, named for intent -
-    sugar for register_method(..., view=True). Use register_action for one that derives a value."""
-    return register_method(method, accepts, call, specific=specific, category=category, view=True)
+DEFAULT_METHODS = Methods()
 
 
-def register_action(method: Method | str, accepts=None, call=None, *, specific=False,
-                    category: str | None = None) -> Method:
-    """Register an action: a method that returns a new value from the old (a transform). It lands in a
-    value window's Action menu, never chosen as a default. Sugar for register_method(..., view=False)."""
-    return register_method(method, accepts, call, specific=specific, category=category, view=False)
-
-
-def _method_category(method: Method) -> str | None:
-    """Return menu metadata supplied when this method was registered."""
-    return _method_categories.get(method.name)
-
-
-def suitable_methods(node):
-    """Return accepted methods in default-first order: an explicit per-node preference, then specific
-    views, other views, Text, and finally non-views (transforms) - which are never a default view."""
-    suitable = []
-    for method in _methods.values():
-        try:
-            if method.accepts(node):
-                suitable.append(method)
-        except Exception:
-            pass
-    preferred = node.attrs.get("method")
-    return sorted(suitable, key=lambda method: (method.name != preferred, not method.view,
-                                                method.call is _TEXT, method.name not in _specific_methods))
-
-
-def open_value(master, title, value, call=None, attrs=None):
+def open_value(master, title, value, call=None, attrs=None, methods=DEFAULT_METHODS):
     """Show a value, with a menu bar to re-show it any other way it accepts.
 
     Two menus list the same methods the tree offers on a node: View (the current one radio-marked)
@@ -125,7 +135,7 @@ def open_value(master, title, value, call=None, attrs=None):
     # so ask the source itself what it is, leaving value_info for actual in-memory values.
     info = value.info() if isinstance(value, FileSystem) else value_info(value)
     node = replace(info, attrs=attrs or {})
-    suitable = suitable_methods(node)
+    suitable = methods.matching(node)
     if call is None:
         call = suitable[0].call
     state = {"window": None, "content": None, "name": None, "selected": None}
@@ -134,11 +144,13 @@ def open_value(master, title, value, call=None, attrs=None):
         window = state["window"] = tk.Toplevel(master)
         window.title(title)
         menubar = tk.Menu(window, tearoff=False)
-        views = [method for method in suitable if method.view]
-        actions = [method for method in suitable if not method.view]
+        views = [method for method in suitable if method.kind == "view"]
+        actions = [method for method in suitable if method.kind == "action"]
         if len(views) > 1:  # A lone view (plain text, say) has nothing to switch to.
             menu = tk.Menu(menubar, tearoff=False)
-            state["selected"] = build_method_menu(menu, views, lambda m: render(m.call), selected=state["name"])
+            state["selected"] = build_method_menu(
+                menu, views, lambda m: render(m.call), selected=state["name"],
+            )
             menubar.add_cascade(label="View", menu=menu)
         if actions:
             menu = tk.Menu(menubar, tearoff=False)
@@ -150,7 +162,7 @@ def open_value(master, title, value, call=None, attrs=None):
         state["content"].pack(fill="both", expand=True)
 
     def render(call):
-        state["name"] = next((method.name for method in _methods.values() if method.call is call), "Method")
+        state["name"] = next((method.name for method in methods if method.call is call), "Method")
         parameters = [parameter for parameter in list(signature(call).parameters.values())[2:]
                       if parameter.kind is Parameter.KEYWORD_ONLY]
 
@@ -161,7 +173,8 @@ def open_value(master, title, value, call=None, attrs=None):
                 state["read"] = value.read()
             source = state.get("read", value) if call is not _browse else value
             try:
-                shown = call(source, node.attrs, *args, **kwargs)
+                shown = (call(source, node.attrs, methods) if call is _browse
+                         else call(source, node.attrs, *args, **kwargs))
             except Exception as exc:
                 show_error(state["window"] or master, title, exc)
                 return
@@ -172,7 +185,7 @@ def open_value(master, title, value, call=None, attrs=None):
             if not is_figure and not (isroutine(shown) or isinstance(shown, partial)):
                 # Plain data, not a rendering: a transform's result, shown by whichever method suits
                 # it in a new window so this one stays. A group result browses unless a method claims it.
-                open_value(master, title, shown)
+                open_value(master, title, shown, methods=methods)
                 return
             if state["window"] is None:
                 build_window()
@@ -228,4 +241,4 @@ def numeric(node, ndims):
 
 
 _TEXT = _tk(_show_text)
-register_method("Text", lambda node: True, _TEXT)
+DEFAULT_METHODS |= Method("Text", lambda node: True, _TEXT, priority=-3)

@@ -2,8 +2,7 @@
 
 from pathlib import Path
 
-from lazyfields.browser import browse_filesystem, register_viewer
-from lazyfields.browser.extra_methods import FIGURE, PLOT, SCATTER, TABLE
+from lazyfields.browser import DEFAULT_METHODS, FIGURE, PLOT, SCATTER, TABLE, browse_filesystem
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import pickle_reader
 
@@ -19,13 +18,14 @@ def main():
         "trusted": {"path": "results.pkl", "reader": "trusted-pickle"},
         "naive": {"path": "results.pkl", "reader": "naive-pickle"},
     }}, relative_to=DATA_DIR, readers={"trusted-pickle": trusted, "naive-pickle": naive})
-    register_viewer(FIGURE)  # No category: shown directly in the context menu.
-    register_viewer(SCATTER, category="Display/Plots")
-    register_viewer(PLOT, category="Display/Plots")
-    # specific: a reconstructed DataFrame still reports its pickle internals too, so it also matches
-    # Browser's deliberately loose "any group" catch-all - Table should win that tie, not lose it.
-    register_viewer(TABLE, specific=True, category="Display/Tables")
-    browse_filesystem(fs)
+    # Table carries its own priority (it must win over Browser for a reconstructed DataFrame, see
+    # extra_methods.py), so placing it is only a matter of its menu category here.
+    methods = (DEFAULT_METHODS
+               | FIGURE
+               | SCATTER.set(category="Display/Plots")
+               | PLOT.set(category="Display/Plots")
+               | TABLE.set(category="Display/Tables"))
+    browse_filesystem(fs, methods=methods)
 
 
 if __name__ == "__main__":

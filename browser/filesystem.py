@@ -7,7 +7,7 @@ from reprlib import repr as short_repr
 
 from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
-from .methods import _method_category, open_value, register_method, show_error, suitable_methods
+from .methods import DEFAULT_METHODS, Method, open_value, show_error
 
 
 def one_line_repr(value, width=160):
@@ -119,8 +119,8 @@ def _add_menu_command(menu, submenus, category=None, *, kind="command", **option
     getattr(target, f"add_{kind}")(**options)
 
 
-def build_method_menu(menu, methods, invoke, *, bold_call=None, bold_font=None, selected=None):
-    """Add one entry per method, grouped into submenus by category; invoke(method) runs on choosing it.
+def build_method_menu(menu, offered, invoke, *, bold_call=None, bold_font=None, selected=None):
+    """Add one entry per method, grouped into submenus by its category; invoke(method) runs on choosing it.
 
     Shared by the tree's right-click menu and a value window's View/Action menus, so a value offers the
     same methods wherever it appears. bold_call bolds a default (the tree's double-click target);
@@ -130,13 +130,13 @@ def build_method_menu(menu, methods, invoke, *, bold_call=None, bold_font=None, 
 
     submenus = {}
     chosen = tk.StringVar(master=menu, value=selected) if selected is not None else None
-    for method in methods:
+    for method in offered:
         entry = dict(label=method.name, command=lambda method=method: invoke(method))
         if chosen is not None:
-            _add_menu_command(menu, submenus, _method_category(method), kind="radiobutton",
+            _add_menu_command(menu, submenus, method.category, kind="radiobutton",
                               variable=chosen, value=method.name, **entry)
         else:
-            _add_menu_command(menu, submenus, _method_category(method),
+            _add_menu_command(menu, submenus, method.category,
                               font=bold_font if method.call is bold_call else None, **entry)
     return chosen
 
@@ -148,17 +148,17 @@ def _clear_menu(menu):
     menu.delete(0, "end")
 
 
-def browse_filesystem(filesystem):
+def browse_filesystem(filesystem, methods=DEFAULT_METHODS):
     """Preview visible leaves; discover group children only when visited."""
     import tkinter as tk
 
     window = tk.Tk()
     window.title("lazyfields")
-    panes(window, filesystem)("/")
+    panes(window, filesystem, methods=methods)("/")
     window.mainloop()
 
 
-def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
+def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=DEFAULT_METHODS):
     """Pack tree and details panes; return a function that selects their root.
 
     Double-click opens a node; right-click offers methods and copying.
@@ -291,7 +291,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         except Exception as exc:
             show_error(master, path, exc)
             return
-        open_value(master, path, value, call, filesystem.attrs(path))
+        open_value(master, path, value, call, filesystem.attrs(path), methods=methods)
 
     def enter(event):
         item = event.widget.identify_row(event.y)
@@ -330,15 +330,15 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
         if item:
             try:
                 names = tuple(path.rsplit("/", 1)[-1] for path in populate(item) or ())  # Listed once, as the tree's.
-                methods = suitable_methods(replace(described(item), children=names))
+                offered = methods.matching(replace(described(item), children=names))
             except Exception as exc:
                 show_error(master, item, exc)
                 return
             if infos[item].kind in ("dataset", "scalar"):
-                double_click_call = methods[0].call
+                double_click_call = offered[0].call
             else:
                 double_click_call = _browse if _collapsed(infos[item], collapse) else None
-            build_method_menu(menu, methods, lambda method: open_node(item, method.call),
+            build_method_menu(menu, offered, lambda method: open_node(item, method.call),
                               bold_call=double_click_call, bold_font=double_click_font)
             menu.add_separator()
         menu.add_command(label=f"Copy path  {item}" if item else "Copy value",
@@ -357,23 +357,23 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True):
     return set_root
 
 
-def _browse(value, attrs):
+def _browse(value, attrs, methods=DEFAULT_METHODS):
     """Browse a lazy source as it stands, or an in-memory group with root attributes."""
     source = value if isinstance(value, FileSystem) else FileSystem.from_value(value, attrs=attrs)
-    return lambda window: panes(window, source, collapse=False)("/")
+    return lambda window: panes(window, source, collapse=False, methods=methods)("/")
 
 
 # Matches any group, and any dataset still reporting the children of what it's really built from
-# underneath (a reconstructed DataFrame, say) - a method specific to one's actual shape (Molecule,
-# say) can be registered as specific to win over this and other unmarked, equally loose methods.
-register_method("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
+# underneath (a reconstructed DataFrame, say) - a method for its actual shape (Molecule, say) can
+# take a higher priority to win over this and other equally loose methods.
+DEFAULT_METHODS |= Method("Browser", lambda node: node.kind == "group" or bool(node.children), _browse)
 
 
 def main(argv=None) -> None:
-    from .extra_methods import register_extras
+    from .extra_methods import ARRAY_ACTIONS, EXTRA_VIEWERS
 
     parser = argparse.ArgumentParser(
         prog="lf-browse-fs", description="Browse a filesystem specification read-only.")
     add_spec_arguments(parser)
-    register_extras()  # Make the built-in viewers and actions available in the CLI browser.
-    browse_filesystem(filesystem_from_arguments(parser.parse_args(argv)))
+    methods = DEFAULT_METHODS | EXTRA_VIEWERS | ARRAY_ACTIONS
+    browse_filesystem(filesystem_from_arguments(parser.parse_args(argv)), methods=methods)
