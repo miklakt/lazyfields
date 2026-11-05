@@ -8,6 +8,7 @@ from decimal import Decimal
 from numbers import Number
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 from typing import Any, Callable, Iterable, Iterator, Literal, Mapping
 
 try:
@@ -116,10 +117,29 @@ def _dataset_value(node: Any, selection: Any = ()) -> Any:
     return _normalize(node[selection])
 
 
+HDF5_LOCK_TIMEOUT = 5.0  # seconds to wait for a writer to release a growing file
+
+
+def _open_hdf5(path: str | Path) -> Any:
+    """Open read-only, waiting while another process holds the file for writing.
+
+    HDF5 locks a file while a writer has it open; a writer that opens the file only to
+    append (such as a running simulation) releases it within moments.
+    """
+    deadline = monotonic() + HDF5_LOCK_TIMEOUT
+    while True:
+        try:
+            return _h5().File(path, "r")
+        except BlockingIOError:
+            if monotonic() >= deadline:
+                raise
+            sleep(0.05)
+
+
 @contextmanager
 def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
     """Open an HDF5 file and yield the selected node."""
-    with _h5().File(path, "r") as file:
+    with _open_hdf5(path) as file:
         node = file
         for part in filter(None, (key or "").split("/")):
             node = node[part]
