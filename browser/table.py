@@ -10,6 +10,7 @@ import pandas as pd
 from .. import store  # noqa: F401  Registers the store accessor.
 from .arguments import ask_arguments, method_signature
 from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
+from . import view_settings
 from .methods import DEFAULT_METHODS, open_value, show_error
 
 
@@ -42,16 +43,25 @@ def _sorted(df, column, ascending):
 
 
 def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
-                 methods=DEFAULT_METHODS):
+                 methods=DEFAULT_METHODS, view: dict | None = None):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
 
     Right-clicking runs a registered method on the selected rows and shows its result.
+
+    :param view: Initial view settings, any of ``filter`` (query expression), ``sort``
+        (``[column, ascending]``), ``column_order`` and ``hidden`` (column names). Names
+        missing from the table are ignored; columns missing from ``column_order`` follow
+        in table order. None restores the view this table was last closed with; the view
+        at closing is remembered either way.
     """
     import tkinter as tk
     from tkinter import ttk
 
+    view_key = view_settings.table_key(reference_df)
     if isinstance(reference_df, (str, Path)):
         reference_df = pd.read_pickle(reference_df)
+    if view is None:
+        view = view_settings.load(view_key)
 
     window = tk.Tk()
     window.title("lazyfields: reference table")
@@ -169,7 +179,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    state = {"df": reference_df, "sort": None}
+    state = {"df": reference_df, "sort": None, "filter": ""}
 
     def render():
         df = state["df"]
@@ -196,7 +206,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             table.column(heading, width=min(width, limit))
 
     def apply_filter(event=None):
-        expression = query.get().strip()
+        expression = state["filter"] = query.get().strip()
         try:
             state["df"] = reference_df.query(expression) if expression else reference_df
         except Exception as exc:
@@ -205,12 +215,14 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         render()
         fit_columns()
 
-    def sort_by(column):
-        ascending = state["sort"] != (column, True)
+    def set_sort(column, ascending):
         state["sort"] = (column, ascending)
         for heading, name in headings:
             arrow = (" ▲" if ascending else " ▼") if name == column else ""
             table.heading(heading, text=name + arrow)
+
+    def sort_by(column):
+        set_sort(column, state["sort"] != (column, True))
         render()
 
     def open_row(event=None):
@@ -277,13 +289,34 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             menu.add_command(label="No registered methods", state="disabled")
         menu.tk_popup(x, y)
 
+    def apply_view(view):
+        """Restore columns, sort and filter from view, skipping what the table no longer has."""
+        key_of = {name: key for key, name in headings}
+        saved = [key_of[name] for name in view.get("column_order", ()) if name in key_of]
+        order[:] = saved + [key for key in column_ids if key not in saved]
+        visible.difference_update(key_of[name] for name in view.get("hidden", ()) if name in key_of)
+        show_columns()
+        sort = view.get("sort")
+        if sort and sort[0] in key_of:
+            set_sort(sort[0], bool(sort[1]))
+        query.set(view.get("filter") or "")
+        state["filter"] = query.get().strip()
+
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
     bind_context_menu(table, open_menu, on_heading=open_header_menu)
+    apply_view(view)
     render()
     fit_columns()
+    if query.get().strip():
+        apply_filter()  # On error the unfiltered rows stay, with the error in the status.
     entry.focus_set()
     window.mainloop()
+    # The window is gone, but the view lives on in these plain objects.
+    view_settings.save(view_key, {
+        "filter": state["filter"], "sort": state["sort"],
+        "column_order": [names[key] for key in order],
+        "hidden": [names[key] for key in column_ids if key not in visible]})
 
 
 def main(argv=None) -> None:
