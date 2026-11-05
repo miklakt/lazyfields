@@ -51,8 +51,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     :param view: Initial view settings, any of ``filter`` (query expression), ``sort``
         (``[column, ascending]``), ``column_order`` and ``hidden`` (column names). Names
         missing from the table are ignored; columns missing from ``column_order`` follow
-        in table order. None restores the view this table was last closed with; the view
-        at closing is remembered either way.
+        in table order. None restores the view this table was last shown with.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -100,6 +99,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     def show_columns():
         table.configure(displaycolumns=[key for key in order if key != "#0" and key in visible],
                         show="tree headings" if "#0" in visible else "headings")
+        save_view()
 
     def choose_columns():
         dialog = tk.Toplevel(window)
@@ -179,7 +179,15 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    state = {"df": reference_df, "sort": None, "filter": ""}
+    state = {"df": reference_df, "sort": None, "filter": "", "restored": False}
+
+    def save_view():
+        """Save the view at every change, so a killed or suspended browser loses nothing."""
+        if state["restored"]:  # Not while apply_view is still restoring the saved one.
+            view_settings.save(view_key, {
+                "filter": state["filter"], "sort": state["sort"],
+                "column_order": [names[key] for key in order],
+                "hidden": [names[key] for key in column_ids if key not in visible]})
 
     def render():
         df = state["df"]
@@ -214,6 +222,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             return
         render()
         fit_columns()
+        save_view()
 
     def set_sort(column, ascending):
         state["sort"] = (column, ascending)
@@ -224,6 +233,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     def sort_by(column):
         set_sort(column, state["sort"] != (column, True))
         render()
+        save_view()
 
     def open_row(event=None):
         item = table.focus()
@@ -306,17 +316,14 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     table.bind("<<TreeviewSelect>>", open_row)
     bind_context_menu(table, open_menu, on_heading=open_header_menu)
     apply_view(view)
+    state["restored"] = True
     render()
     fit_columns()
     if query.get().strip():
         apply_filter()  # On error the unfiltered rows stay, with the error in the status.
     entry.focus_set()
+    save_view()  # A view passed in replaces the saved one even if nothing changes.
     window.mainloop()
-    # The window is gone, but the view lives on in these plain objects.
-    view_settings.save(view_key, {
-        "filter": state["filter"], "sort": state["sort"],
-        "column_order": [names[key] for key in order],
-        "hidden": [names[key] for key in column_ids if key not in visible]})
 
 
 def main(argv=None) -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_KEEP = 100  # Most recently closed tables to remember.
+_KEEP = 100  # Most recently saved table views to keep.
 
 
 def _file() -> Path:
