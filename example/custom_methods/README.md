@@ -7,7 +7,8 @@ it knows nothing of rows or parents. Build one with `Method(name, accepts, call)
 - `accepts(node)` decides without reading the node's value, from `node.kind`,
   a dataset's `node.shape`, `node.dtype`, or loaded `node.type`, its
   `node.attrs`, and `node.children`, the names of its immediate children.
-- `call(value, attrs)` gets the value and the same attrs. It either shows the
+- `call(node)` reads the node by indexing: `node[:]` for everything, `node["a/b"]`
+  for a child, `node["a/b", :10]` for a selection. It either shows the
   value itself and returns `None`, as `grid.plot()` does in PyVista's window,
   or returns a matplotlib `Figure` to embed in the browser's window. A function
   that fills a Tk frame is also accepted.
@@ -66,7 +67,7 @@ browser waits while PyVista's window is open.
 `browse.py` registers Image for numeric arrays with shape `(3, height, width)`
 and Volume for other numeric 3D arrays. A three-slice volume therefore matches
 the image convention in this example. The image method moves the channel axis
-for `imshow`; the volume method interprets axes and `attrs["spacing"]` as
+for `imshow`; the volume method interprets axes and `node.attrs["spacing"]` as
 `(z, y, x)`, converting both to PyVista's `(x, y, z)` order. Arrays without
 spacing use unit voxels. Values up to the median, typically background such as
 air, render transparent.

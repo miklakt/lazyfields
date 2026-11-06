@@ -157,10 +157,10 @@ def _accepts_scatter(node):
             and np.dtype(node.dtype).kind in "biuf")
 
 
-def _show_scatter(value, attrs):
+def _show_scatter(node):
     from matplotlib.figure import Figure
 
-    array = as_array(value)
+    array = as_array(node[:])
     figure = Figure(layout="constrained")
     axes = figure.add_subplot(projection="3d" if array.shape[1] == 3 else None)
     axes.scatter(*array.T)
@@ -191,12 +191,12 @@ def _accepts_rgb(node):
             and np.dtype(node.dtype).kind in "biuf")
 
 
-def _show_rgb(value, attrs):
+def _show_rgb(node):
     from matplotlib.figure import Figure
 
     figure = Figure(layout="constrained")
     axes = figure.add_subplot()
-    axes.imshow(as_array(value))  # origin="upper" by default, so row 0 sits at the top like an image.
+    axes.imshow(as_array(node[:]))  # origin="upper" by default, so row 0 sits at the top like an image.
     axes.set_axis_off()
     return figure
 
@@ -231,25 +231,25 @@ def _dims(node):
 
 
 def _numpy(name):
-    """A no-argument action calling np.<name> on the value's array, numpy imported on use."""
-    def call(value, attrs):
+    """A no-argument action calling np.<name> on the node's array, numpy imported on use."""
+    def call(node):
         import numpy as np
-        return getattr(np, name)(as_array(value))
+        return getattr(np, name)(as_array(node[:]))
     return call
 
 
 # The two that take axis arguments keep real keyword-only parameters, so open_value offers them in a
 # form; the rest are one-liners built from _numpy. Each returns plain data for the browser to re-open.
-def _split(value, attrs, *, axis: int = 0):
+def _split(node, *, axis: int = 0):
     """An n-D array as a group of its (n-1)-D slices along axis, keyed by index along that axis."""
     import numpy as np
-    array = as_array(value)
+    array = as_array(node[:])
     return {str(index): np.take(array, index, axis) for index in range(array.shape[axis])}
 
 
-def _swap_axes(value, attrs, *, axis1: int = 0, axis2: int = 1):
+def _swap_axes(node, *, axis1: int = 0, axis2: int = 1):
     import numpy as np
-    return np.swapaxes(as_array(value), axis1, axis2)
+    return np.swapaxes(as_array(node[:]), axis1, axis2)
 
 
 # Actions are offered in the menu but never become a value's default.

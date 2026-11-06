@@ -19,7 +19,7 @@ def compose(root: Path) -> FileSystem:
     fs = FileSystem(source, relative_to=root)
     view = fs.clone(f"{source}/partitions")
     # Resolve stored references to source nodes.
-    for name, partition in fs.read(f"{source}/partitions").items():
+    for name, partition in fs[f"{source}/partitions"].items():
         target = FileSystem.from_file(root / source.parent / partition["file_ref"])
         view.replace(f"{name}/file_ref", target.node())
         sources = {

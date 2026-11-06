@@ -93,15 +93,15 @@ class _MergedDataset:
             # with the rest of the selection, so no other source is loaded.
             pick, inner = key[at], key[:at] + key[at + 1:] or None
             if type(pick) is int:
-                return sources[pick].read("", inner)
-            parts = [source.read("", inner) for source in sources[pick]]
+                return sources[pick][inner]
+            parts = [source[inner] for source in sources[pick]]
             if operation == "collect":
                 return parts
             if parts:
                 import numpy as np
                 # Integer indices before the merge axis remove dimensions, shifting it left.
                 return np.stack(parts, axis=at - sum(type(part) is int for part in key[:at]))
-        result = self._combine([source.read() for source in sources])
+        result = self._combine([source[:] for source in sources])
         return result if selection is None else result[selection]
 
     def _combine(self, values):

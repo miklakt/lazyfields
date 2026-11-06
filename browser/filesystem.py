@@ -5,7 +5,6 @@ from dataclasses import replace
 from datetime import datetime
 from reprlib import repr as short_repr
 
-from ..filesystem import FileSystem
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
 from .methods import DEFAULT_METHODS, Method, open_value, show_error
 
@@ -224,11 +223,9 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
         if path not in previews:
             try:
                 info = described(path)
-                corner = tuple(slice(0, preview) for _ in info.shape)
-                if len(corner) == 1:
-                    corner = corner[0]
+                corner = (slice(0, preview),) * len(info.shape)
                 previews[path] = (_array_name(info.dtype, info.shape),
-                                  one_line_repr(filesystem.read(path, corner or None)))
+                                  one_line_repr(filesystem[(path, *corner)]))
             except Exception as exc:
                 return "", f"Error: {exc}"
         return previews[path]
@@ -285,13 +282,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
         return "break"
 
     def open_node(path, call=None):
-        # Browsing stays lazy: a clone of its own source, not the value loaded.
-        try:
-            value = filesystem.clone(path) if call is _browse else filesystem.read(path)
-        except Exception as exc:
-            show_error(master, path, exc)
-            return
-        open_value(master, path, value, call, filesystem.attrs(path), methods=methods)
+        open_value(master, path, filesystem.node(path), call, methods=methods)
 
     def enter(event):
         item = event.widget.identify_row(event.y)
@@ -357,9 +348,9 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
     return set_root
 
 
-def _browse(value, attrs, methods=DEFAULT_METHODS):
-    """Browse a lazy source as it stands, or an in-memory group with root attributes."""
-    source = value if isinstance(value, FileSystem) else FileSystem.from_value(value, attrs=attrs)
+def _browse(node, methods=DEFAULT_METHODS):
+    """Browse a clone of the node's subtree, so later edits leave this window as it was."""
+    source = node._filesystem.clone(node.path)
     return lambda window: panes(window, source, collapse=False, methods=methods)("/")
 
 

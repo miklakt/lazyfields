@@ -35,6 +35,15 @@ def _is_name(name: Any) -> bool:
     return isinstance(name, str) and name not in ("", ".", "..") and "/" not in name
 
 
+def _split_key(key: Any) -> tuple[str, Any]:
+    """[:], [sel], ["a/b"] and ["a/b", sel] as a relative path and a selection, None for everything."""
+    if isinstance(key, tuple) and key and isinstance(key[0], str):
+        return key[0], key[1] if len(key) == 2 else key[1:] or None
+    if isinstance(key, str):
+        return key, None
+    return "", None if isinstance(key, slice) and key == slice(None) else key
+
+
 def _digest(state: Any) -> str:
     return hashlib.blake2b(repr(state).encode(), digest_size=16).hexdigest()
 
@@ -84,7 +93,7 @@ class _Source:
     @property
     def _object(self):
         """What the view interprets; an interpreted node's value is read for each request."""
-        return self.obj.read() if isinstance(self.obj, FileSystem) else self.obj
+        return self.obj[:] if isinstance(self.obj, FileSystem) else self.obj
 
     def read(self, selection=None):
         return self.view.get(self._object, self.key, selection)
@@ -133,7 +142,7 @@ class _ChildrenSource:
     def read(self, selection=None):
         if selection is not None:
             raise ValueError("selection requires a dataset path.")
-        return {name: child.read() for name, child in self.children.items()}
+        return {name: child[:] for name, child in self.children.items()}
 
     def info(self, *, full=True):
         return NodeInfo("group", tuple(self.children) if full else ())
@@ -141,7 +150,7 @@ class _ChildrenSource:
     def items(self):
         for name, child in self.children.items():
             kind = child._backing.info(full=False).kind
-            yield name, kind, child.read() if kind == "scalar" else None
+            yield name, kind, child[:] if kind == "scalar" else None
 
     def locate(self, selection=None):
         if selection is not None:
@@ -179,7 +188,11 @@ class _Directory(_Composed):
 
 @dataclass(frozen=True)
 class Node:
-    """Lazy namespace handle; subsequent edits are visible through its path."""
+    """Lazy namespace handle; subsequent edits are visible through its path.
+
+    Read by indexing: node[:] everything, node[sel] a selection, node["a/b"] a child path,
+    node["a/b", sel] a selection at a child path.
+    """
 
     _filesystem: FileSystem = field(repr=False)
     path: str
@@ -188,8 +201,9 @@ class Node:
         """Bind a descendant using a path relative to this node."""
         return self._filesystem.node(f"{self.path}/{_normalize_path(path)}")
 
-    def read(self, selection: Any | None = None) -> Any:
-        return self._filesystem.read(self.path, selection)
+    def __getitem__(self, key: Any) -> Any:
+        path, selection = _split_key(key)
+        return self._filesystem[f"{self.path}/{path}", selection]
 
     def listdir(self) -> tuple[str, ...]:
         return self._filesystem.listdir(self.path)
@@ -294,16 +308,11 @@ class FileSystem:
         return cls._from_source(_Source(reader or require_reader(path), path))
 
     @classmethod
-    def from_value(cls, value: Any, *, view: View = MAPPING, attrs: Mapping[str, Any] | None = None) -> FileSystem:
-        """Root a filesystem at an in-memory object, interpreted by view; by default a mapping of results.
-
-        attrs, if given, become its root's attributes.
-        """
+    def from_value(cls, value: Any, *, view: View = MAPPING) -> FileSystem:
+        """Root a filesystem at an in-memory object, interpreted by view; by default a mapping of results."""
         if not isinstance(view, View):
             raise TypeError("view must be a View instance.")
-        result = cls._from_source(_Source(view, value))
-        result._attrs = dict(attrs or {})
-        return result
+        return cls._from_source(_Source(view, value))
 
     @classmethod
     def from_directory(cls, path: str | Path, *patterns: str) -> FileSystem:
@@ -419,7 +428,9 @@ class FileSystem:
         self._lookup(path)
         return Node(self, path)
 
-    def read(self, path: str | Path = "", selection: Any | None = None) -> Any:
+    def __getitem__(self, key: Any) -> Any:
+        """Read as Node does, with paths from the root."""
+        path, selection = _split_key(key)
         return self._backing_at(path).read(selection)
 
     def attrs(self, path: str | Path = "") -> dict[str, Any]:

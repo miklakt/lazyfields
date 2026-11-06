@@ -48,7 +48,7 @@ def preview(filesystem: FileSystem, path: str, kind: str):
             total = sum(file.stat().st_size for file in filesystem.node(path).files())
             if total > PREVIEW_LOAD_LIMIT:
                 return f"{path}: preview skipped, it would load {total / 2**20:.0f} MiB\n"
-        value = filesystem.read(path, slice(0, PREVIEW_ROWS))
+        value = filesystem[path, :PREVIEW_ROWS]
         try:
             import numpy as np
             text = np.array2string(np.asarray(value), threshold=50, edgeitems=3, max_line_width=100)
@@ -92,7 +92,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
                         entries[name] = (child, kind, None)
                         continue
                     entries[name] = (child, kind, (lambda value=value: f"{value}\n") if kind == "scalar"
-                                     else (lambda child=child: raw(filesystem.read(child))))
+                                     else (lambda child=child: raw(filesystem[child])))
                     for presenter in presenters:
                         presented = presenter(filesystem, child, kind)
                         if presented is not None:

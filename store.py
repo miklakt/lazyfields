@@ -19,9 +19,9 @@ from .filesystem import FileSystem, Node
 # Columns added to every row; indexed fields cannot use these names.
 _RESERVED = ("lf_path", "lf_store_keys", "lf_mtime", "lf_digest")
 
-def _row_value(filesystem: FileSystem, path: str, key: str, selection: Any | None = None) -> Any:
+def _row_value(node: Node, key: Any) -> Any:
     try:
-        return filesystem.read(f"{path}/{key}", selection)
+        return node[key]
     except (KeyError, TypeError, IndexError):
         return pd.NA
 
@@ -247,31 +247,16 @@ class StoreAccessor:
             )
         return cache["_filesystem"]
 
-    def __getitem__(self, keys):
+    def __getitem__(self, key):
+        """Read each row's node as Node indexing does; a list of field names gives one column each."""
         series = isinstance(self._obj, pd.Series)
-        filesystem = self._filesystem
-        paths = self._obj["lf_path"]
-        if keys == slice(None):
-            return filesystem.read(paths) if series else [filesystem.read(path) for path in paths]
-
-        selection = None
-        if isinstance(keys, tuple):
-            if len(keys) < 2 or not isinstance(keys[0], str):
-                raise TypeError("Tuple access must start with a field name and a selection.")
-            keys, selection = keys[0], keys[1] if len(keys) == 2 else keys[1:]
-
-        if isinstance(keys, str):
-            if series:
-                return filesystem.read(f"{paths}/{keys}", selection)
-            values = pd.Series(
-                (_row_value(filesystem, path, keys, selection=selection) for path in paths),
-                index=self._obj.index,
-                dtype="object",
-            )
-            if values.isna().all():
-                raise KeyError(keys)
-            return values
-        if isinstance(keys, list):
-            values = {k: self[k] for k in keys}
+        if isinstance(key, list):
+            values = {k: self[k] for k in key}
             return values if series else pd.DataFrame(values, index=self._obj.index)
-        raise TypeError("Keys must be str, tuple[str, selection], list[str], or [:]")
+        if series:
+            return self._filesystem.node(self._obj["lf_path"])[key]
+        values = pd.Series((_row_value(self._filesystem.node(path), key) for path in self._obj["lf_path"]),
+                           index=self._obj.index, dtype="object")
+        if values.isna().all():
+            raise KeyError(key)
+        return values

@@ -72,11 +72,11 @@ values help verify source order and selection.
 from lazyfields.filesystem import FileSystem
 
 contents = FileSystem.from_file("example/composed_filesystem/data/metadata/alpha.json")
-contents.read("coefficients", 0)  # 1.01
+contents["coefficients", 0]  # 1.01
 
 fs = FileSystem()
 fs.mount("metadata/alpha.json", contents.node())
-fs.read("metadata/alpha.json/coefficients", 0)  # 1.01
+fs["metadata/alpha.json/coefficients", 0]  # 1.01
 ```
 
 The reader is inferred from the filename unless supplied explicitly. Neither
@@ -107,7 +107,7 @@ fs = FileSystem.from_spec(
     {"path": "payloads.json", "children": {"frames": {"attrs": {"view": "npz-base64"}}}},
     relative_to=root,
 )
-fs.read("frames/positions", (0, slice(2)))
+fs["frames/positions", 0, :2]
 ```
 
 The node's value is read and decoded on each request below it. Its locations
@@ -139,11 +139,11 @@ fs = FileSystem(
 view = fs.clone()
 
 path = "partitions.json/partitions/alpha/file_ref"
-reference = view.read(path)  # 'metadata/alpha.json'
+reference = view[path]  # 'metadata/alpha.json'
 view.replace(path, fs.node(reference))
 
-view.read(f"{path}/coefficients", 0)  # 1.01
-fs.read(path)  # 'metadata/alpha.json'
+view[f"{path}/coefficients", 0]  # 1.01
+fs[path]  # 'metadata/alpha.json'
 ```
 
 `mount` requires a vacant path. Mounting over an existing node raises
@@ -244,7 +244,7 @@ input's attribute, such as a length, holds for the result, sums, or no longer ap
 depends on its meaning. The merged group itself has none. A specification's `attrs` can
 add any of them.
 
-`read(path, selection=None)` materializes the current logical subtree. Edited
+`fs[path]` and `fs[path, selection]` materialize the current logical subtree. Edited
 groups traverse their recorded children, so whole-group reads agree with individual
 paths and unmounted nodes stay absent. Numeric values keep their reader's native
 types and selection behavior: JSON supports list slicing; HDF5 supports direct
@@ -275,7 +275,7 @@ restored = FileSystem.from_spec(
     json.loads(Path("composed.json").read_text()),
     relative_to=root,
 )
-restored.read("alpha/file_refs/values")
+restored["alpha/file_refs/values"]
 ```
 
 `to_spec()` uses the filesystem's `relative_to` directory as the base by default;

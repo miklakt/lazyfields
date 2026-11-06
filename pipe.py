@@ -4,6 +4,8 @@ from functools import partial
 
 import pandas as pd
 
+from .filesystem.filesystem import _split_key
+
 
 class _NodeRow(dict):
     """Row fields over lazy reads from the row's node, for pipes and store methods."""
@@ -21,10 +23,11 @@ class _NodeRow(dict):
             raise AttributeError(f"Row has no registered method {name!r}.") from None
 
     def __getitem__(self, key):
-        if isinstance(key, tuple):
-            name, selection = key[0], key[1] if len(key) == 2 else key[1:]
-            return self[name][selection] if name in self else self._node.node(name).read(selection)
-        return super().__getitem__(key) if key in self else self._node.node(key).read()
+        path, selection = _split_key(key)
+        if path not in self:
+            return self._node[key]
+        value = super().__getitem__(path)
+        return value if selection is None else value[selection]
 
     def get(self, key, default=None):
         try:

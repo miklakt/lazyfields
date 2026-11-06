@@ -37,7 +37,7 @@ def is_volume(node):
     return is_numeric_3d(node) and not is_image(node)
 
 
-def split_channels(value, attrs, *, order="rgb"):
+def split_channels(node, *, order="rgb"):
     """Each channel-first array's channel flattened to its own named array.
 
     The result is shown by whichever method fits it, here XYZ Scatter — no Tk or matplotlib here.
@@ -46,27 +46,27 @@ def split_channels(value, attrs, *, order="rgb"):
         another channel order.
     """
     names = {"r": "red", "g": "green", "b": "blue"}
-    return {names[letter]: channel.ravel() for letter, channel in zip(order, np.asarray(value))}
+    return {names[letter]: channel.ravel() for letter, channel in zip(order, np.asarray(node[:]))}
 
 
-def show_image(value, attrs):
+def show_image(node):
     """Matplotlib expects RGB channels last; the stored array stays unchanged."""
     from matplotlib.figure import Figure
 
     figure = Figure(layout="constrained")
     axes = figure.add_subplot()
-    axes.imshow(np.moveaxis(np.asarray(value), 0, -1))
+    axes.imshow(np.moveaxis(np.asarray(node[:]), 0, -1))
     axes.set_axis_off()
     return figure
 
 
-def show_volume(value, attrs):
-    """Render the volume in PyVista's window, with voxel spacing from attrs; unit voxels without it."""
+def show_volume(node):
+    """Render the volume in PyVista's window, with voxel spacing from node.attrs; unit voxels without it."""
     import pyvista as pv
 
-    array = np.asarray(value)
+    array = np.asarray(node[:])
     # Interpret array axes as z, y, x; the grid's dimensions are x, y, z.
-    grid = pv.ImageData(dimensions=array.shape[::-1], spacing=attrs.get("spacing", (1, 1, 1))[::-1])
+    grid = pv.ImageData(dimensions=array.shape[::-1], spacing=node.attrs.get("spacing", (1, 1, 1))[::-1])
     grid.point_data["value"] = array.ravel()
     # Values up to the median, typically background such as air, stay clear.
     grid.plot(volume=True, cmap="viridis", opacity="sigmoid", clim=np.percentile(array, (50, 99.9)))
@@ -77,7 +77,7 @@ def is_molecule(node):
     return {"x", "y", "z", "element"} <= set(node.children)
 
 
-def show_molecule(value, attrs):
+def show_molecule(node):
     """Atoms in CPK colours and van der Waals sizes, with bonds from distances and any given; drag to rotate."""
     from matplotlib.figure import Figure
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
@@ -86,9 +86,9 @@ def show_molecule(value, attrs):
     elements = {"H": ("white", 0.31, 1.20), "C": ("dimgrey", 0.76, 1.70), "N": ("blue", 0.71, 1.55),
                 "O": ("red", 0.66, 1.52), "P": ("orange", 1.07, 1.80), "S": ("gold", 1.05, 1.80),
                 "FE": ("darkorange", 1.32, 2.00)}
-    xyz = np.column_stack([value["x"], value["y"], value["z"]]).astype(float)
+    xyz = np.column_stack([node["x"], node["y"], node["z"]]).astype(float)
     colours, covalent, van_der_waals = zip(*(elements.get((element or "").upper(), ("pink", 0.76, 1.70))
-                                             for element in value["element"]))
+                                             for element in node["element"]))
     covalent, blocks = np.array(covalent), []
     # Infer bonds within the summed covalent radii plus 0.4 Å, processing distances in blocks.
     for start in range(0, len(xyz), 512):
@@ -97,9 +97,9 @@ def show_molecule(value, attrs):
         close = (squared < (covalent[rows, None] + covalent + 0.4) ** 2) & (rows[:, None] < np.arange(len(xyz)))
         first, second = np.nonzero(close)
         blocks.append(np.column_stack([rows[first], second]))
-    if "bonds" in value and "atom_serial" in value:  # Given ones too, such as a PDB file's CONECT records.
-        position = {serial: index for index, serial in enumerate(value["atom_serial"])}
-        given = [(position[a], position[b]) for a, b in value["bonds"] if a in position and b in position]
+    if {"bonds", "atom_serial"} <= set(node.listdir()):  # Given ones too, such as a PDB file's CONECT records.
+        position = {serial: index for index, serial in enumerate(node["atom_serial"])}
+        given = [(position[a], position[b]) for a, b in node["bonds"] if a in position and b in position]
         blocks.append(np.array(given, dtype=int).reshape(-1, 2))
     pairs = np.unique(np.sort(np.vstack(blocks), axis=1), axis=0)
     figure = Figure(layout="constrained")
@@ -121,7 +121,7 @@ def is_xyz_group(node):
     return node.kind == "group" and len(node.children) >= 3
 
 
-def show_xyz_group(value, attrs, *, x="red", y="green", z="blue"):
+def show_xyz_group(node, *, x="red", y="green", z="blue"):
     """Point cloud from three named 1D arrays in the group; axes are picked in the popup above.
 
     :param x: Name of the array plotted along x.
@@ -132,7 +132,7 @@ def show_xyz_group(value, attrs, *, x="red", y="green", z="blue"):
 
     figure = Figure(layout="constrained")
     axes = figure.add_subplot(projection="3d")
-    axes.scatter(np.asarray(value[x]), np.asarray(value[y]), np.asarray(value[z]), s=2)
+    axes.scatter(np.asarray(node[x]), np.asarray(node[y]), np.asarray(node[z]), s=2)
     axes.set(xlabel=x, ylabel=y, zlabel=z)
     return figure
 

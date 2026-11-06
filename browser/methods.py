@@ -13,8 +13,8 @@ from inspect import Parameter, getdoc, isroutine
 from pprint import pformat
 from typing import Any, Callable, Literal
 
-from ..filesystem import FileSystem
-from ..readers import NodeInfo, value_info
+from ..filesystem import FileSystem, Node
+from ..readers import NodeInfo
 from .arguments import ask_arguments, method_signature
 
 _filled: dict[Callable, dict[str, str]] = {}
@@ -28,7 +28,7 @@ def show_error(parent, title, exc):
 
 @dataclass(frozen=True)
 class Method:
-    """Handles nodes accepted by accepts(node: NodeInfo) using call(value, attrs, **kwargs).
+    """Handles nodes accepted by accepts(info: NodeInfo) using call(node, **kwargs).
 
     call returns a matplotlib Figure, a function filling a Tk frame, None when it opens its own
     window, or any other value — handled in turn by whichever method suits it, same as a registered
@@ -117,25 +117,22 @@ class Methods:
 DEFAULT_METHODS = Methods()
 
 
-def open_value(master, title, value, call=None, attrs=None, methods=DEFAULT_METHODS):
+def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
     """Show a value, with a menu bar to re-show it any other way it accepts.
 
     Two menus list the same methods the tree offers on a node: View (the current one radio-marked)
     re-renders the value in place; Action runs a transform, opening its result in a new window that
     carries its own menu bar - so results chain. Either menu is dropped when it would be empty or
-    offer no choice. A call's extra keyword-only parameters after (value, attrs) are offered in a form
-    first, same as a registered store method's arguments.
+    offer no choice. A call's keyword-only parameters after node are offered in a form first, same
+    as a registered store method's arguments.
     """
     import tkinter as tk
     from tkinter import ttk
 
     from .filesystem import _browse, build_method_menu
 
-    # A browsed group arrives as its own lazy FileSystem; value_info would misread it as a dataset,
-    # so ask the source itself what it is, leaving value_info for actual in-memory values.
-    info = value.info() if isinstance(value, FileSystem) else value_info(value)
-    node = replace(info, attrs=attrs or {})
-    suitable = methods.matching(node)
+    node = value if isinstance(value, Node) else FileSystem.from_value(value).node()
+    suitable = methods.matching(node.info())
     if call is None:
         call = suitable[0].call
     state = {"window": None, "content": None, "name": None, "selected": None}
@@ -163,18 +160,12 @@ def open_value(master, title, value, call=None, attrs=None, methods=DEFAULT_METH
 
     def render(call):
         state["name"] = next((method.name for method in methods if method.call is call), "Method")
-        parameters = [parameter for parameter in list(method_signature(call).parameters.values())[2:]
+        parameters = [parameter for parameter in list(method_signature(call).parameters.values())[1:]
                       if parameter.kind is Parameter.KEYWORD_ONLY]
 
         def show(args, kwargs, text=""):
-            # Browser consumes the lazy FileSystem as-is; every other method wants the value read out,
-            # exactly as the tree does (filesystem.read for non-Browser calls). Read once, then reuse.
-            if isinstance(value, FileSystem) and call is not _browse and "read" not in state:
-                state["read"] = value.read()
-            source = state.get("read", value) if call is not _browse else value
             try:
-                shown = (call(source, node.attrs, methods) if call is _browse
-                         else call(source, node.attrs, *args, **kwargs))
+                shown = call(node, methods) if call is _browse else call(node, *args, **kwargs)
             except Exception as exc:
                 show_error(state["window"] or master, title, exc)
                 return
@@ -208,8 +199,8 @@ def open_value(master, title, value, call=None, attrs=None, methods=DEFAULT_METH
 
 
 def _tk(fill):
-    """A method filling the browser's window with Tk widgets through fill(frame, value)."""
-    return lambda value, attrs: lambda frame: fill(frame, value)
+    """A method filling the browser's window with Tk widgets through fill(frame, node[:])."""
+    return lambda node: partial(lambda value, frame: fill(frame, value), node[:])
 
 
 def _embed_figure(window, figure):
@@ -224,8 +215,6 @@ def _embed_figure(window, figure):
 def _show_text(window, value):
     from tkinter.scrolledtext import ScrolledText
 
-    if isinstance(value, FileSystem):  # A lazy source, read only once text is actually requested.
-        value = value.read()
     text = ScrolledText(window, width=100, height=30, wrap="word")
     text.pack(fill="both", expand=True)
     text.insert("1.0", value if isinstance(value, str) else pformat(value, width=100, sort_dicts=False))

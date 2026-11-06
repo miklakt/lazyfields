@@ -25,7 +25,7 @@ def main() -> None:
         {"path": "payloads.json", "children": {"frames": {"attrs": {"view": "npz-base64"}}}},
         relative_to=root,
     )
-    print("frames:", fs.listdir("frames"), "first positions:", fs.read("frames/positions", (0, slice(2))).tolist())
+    print("frames:", fs.listdir("frames"), "first positions:", fs["frames/positions", 0, :2].tolist())
     browse_filesystem(fs)
 
 

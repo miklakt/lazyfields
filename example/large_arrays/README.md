@@ -61,7 +61,7 @@ def npy(filesystem, path, kind):
         import io, numpy as np
         def render():
             buffer = io.BytesIO()
-            np.save(buffer, filesystem.read(path))
+            np.save(buffer, filesystem[path])
             return buffer.getvalue()
         return ".npy", render
 
