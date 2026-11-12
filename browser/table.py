@@ -51,16 +51,14 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     :param view: Initial view settings, any of ``filter`` (query expression), ``sort``
         (``[column, ascending]``), ``column_order`` and ``hidden`` (column names). Names
         missing from the table are ignored; columns missing from ``column_order`` follow
-        in table order. None restores the view this table was last shown with.
+        in table order. None restores the view last shown for a table over the same
+        filesystem specification, root and column names, pickled or not.
     """
     import tkinter as tk
     from tkinter import ttk
 
-    view_key = view_settings.table_key(reference_df)
     if isinstance(reference_df, (str, Path)):
         reference_df = pd.read_pickle(reference_df)
-    if view is None:
-        view = view_settings.load(view_key)
 
     window = tk.Tk()
     window.title("lazyfields: reference table")
@@ -174,20 +172,30 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     window.configure(menu=menubar)
 
     bottom = ttk.Frame(split)
-    filesystem = reference_df.store._filesystem
+    filesystem = reference_df.store._filesystem  # Fails first for a table without a specification.
+    view_key = view_settings.table_key(reference_df)
+    if view is None:
+        view = view_settings.load(view_key)
     set_root = panes(bottom, filesystem, navigation_widgets=(table,), methods=methods)
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    state = {"df": reference_df, "sort": None, "filter": "", "restored": False}
+    state = {"df": reference_df, "sort": None, "filter": "", "restored": False, "saved": None}
 
     def save_view():
-        """Save the view at every change, so a killed or suspended browser loses nothing."""
-        if state["restored"]:  # Not while apply_view is still restoring the saved one.
-            view_settings.save(view_key, {
-                "filter": state["filter"], "sort": state["sort"],
-                "column_order": [names[key] for key in order],
-                "hidden": [names[key] for key in column_ids if key not in visible]})
+        """Save the view at every change, so a killed or suspended browser loses nothing.
+
+        Calls that change nothing, such as typing in the column search, write nothing.
+        """
+        if not state["restored"]:  # Not while apply_view is still restoring the saved one.
+            return
+        current = {
+            "filter": state["filter"], "sort": state["sort"],
+            "column_order": [names[key] for key in order],
+            "hidden": [names[key] for key in column_ids if key not in visible]}
+        if current != state["saved"]:
+            view_settings.save(view_key, current)
+            state["saved"] = current
 
     def render():
         df = state["df"]
