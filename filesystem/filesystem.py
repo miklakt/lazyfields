@@ -6,6 +6,7 @@ import hashlib
 import os
 from copy import copy
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
@@ -73,6 +74,22 @@ class SourceLocator:
         return self.file_path / (self.infile_path or "")
 
 
+@lru_cache(maxsize=2)
+def _loaded(view: View, obj: Any, version: tuple) -> Any:
+    """A whole-file view's value, for metadata only; reads load their own."""
+    return view.load(obj)
+
+
+@lru_cache(maxsize=4096)
+def _metadata(view: View, obj: Any, key: str | None, version: tuple | None, what: str) -> Any:
+    """A node's info, info from its loaded value, or items; cached per file version by the caller."""
+    if version is not None and view.inspect is None and view.inspect_node is None:
+        view, obj = MAPPING, _loaded(view, obj, version)  # Whole-file views: every key from one load.
+    if what == "items":
+        return tuple((str(name), kind, value) for name, kind, value in view.items(obj, key))
+    return value_info(view.get(obj, key)) if what == "loaded" else view.info(obj, key)
+
+
 @dataclass(frozen=True, eq=False)
 class _Source:
     """An object interpreted by a view at a key: a file's path, an in-memory value, or a node to interpret."""
@@ -105,12 +122,19 @@ class _Source:
     def info(self, *, full=True):
         if self.key is None and not full and isinstance(self.obj, (Path, FileSystem)):
             return NodeInfo("group")  # A file's root, or an interpreted node, is a group; saying so reads nothing.
-        info = self.view.info(self._object, self.key)
+        info = self._metadata("info")
         # Views without metadata describe a dataset only by loading it.
-        return value_info(self.read()) if full and info.kind == "dataset" and info.dtype is None else info
+        return self._metadata("loaded") if full and info.kind == "dataset" and info.dtype is None else info
 
     def items(self):
-        return ((str(name), kind, value) for name, kind, value in self.view.items(self._object, self.key))
+        return iter(self._metadata("items"))
+
+    def _metadata(self, what):
+        """Cached while a file's size and mtime stay; in-memory and interpreted objects are asked each time."""
+        if isinstance(self.obj, Path):
+            stat = self.obj.stat()
+            return _metadata(self.view, self.obj, self.key, (stat.st_size, stat.st_mtime_ns), what)
+        return _metadata.__wrapped__(self.view, self._object, self.key, None, what)
 
     def locate(self, selection=None):
         if selection is not None and self.key is None:
