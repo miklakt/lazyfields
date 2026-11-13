@@ -23,8 +23,7 @@ def table_key(table: pd.DataFrame) -> str:
     survives rebuilding the table or moving its pickle; moving the data root or changing the
     columns loses it.
     """
-    text = json.dumps([table.attrs["filesystem_spec"], table.attrs["filesystem_relative_to"],
-                       sorted(map(str, table.columns))], sort_keys=True, default=str)
+    text = json.dumps([table.attrs["filesystem"], sorted(map(str, table.columns))], sort_keys=True, default=str)
     return hashlib.sha256(text.encode()).hexdigest()
 
 

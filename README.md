@@ -188,7 +188,7 @@ results = reference_df.store.abc(10)  # adds column a, value b from the original
 ```
 
 The example above stores this generated source in
-`reference_df.attrs["store_methods"]["abc"]`:
+`reference_df.attrs["store_methods"]["abc"]["source"]`:
 
 ```python
 def abc(__row, c):

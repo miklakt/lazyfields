@@ -15,7 +15,7 @@ reference_df = pd.read_pickle(reference_path)
 show(reference_df)
 # %%
 # Methods saved with the reference table are ready to use after loading.
-show(reference_df.store.get_registered_methods())
+show(list(reference_df.attrs["store_methods"]))
 # Run a saved method for one row.
 show(reference_df.iloc[0].store.length("some_1darray_key"))
 # Run the same method for every row. The result is a Series.

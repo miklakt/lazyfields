@@ -268,7 +268,6 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     def run(name):
         positions = sorted(int(item) for item in table.selection())
         rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
-        rows.__dict__["_filesystem"] = filesystem  # The store accessor's cache; spares rebuilding it.
         method = getattr(rows.store, name)
         parameters = list(method_signature(method).parameters.values())[1:]  # Without the row.
         target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
@@ -295,15 +294,12 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             table.focus(item)
             table.selection_set(item)
         _clear_menu(menu)
-        accessor = reference_df.store
-        names = accessor.get_registered_methods()
+        registered = reference_df.store._methods
         submenus = {}
-        for name in names:
-            _add_menu_command(
-                menu, submenus, accessor.get_registered_method_category(name),
-                label=f"Run {name}", command=lambda name=name: run(name),
-            )
-        if not names:
+        for name, method in registered.items():
+            _add_menu_command(menu, submenus, method["category"],
+                              label=f"Run {name}", command=lambda name=name: run(name))
+        if not registered:
             menu.add_command(label="No registered methods", state="disabled")
         menu.tk_popup(x, y)
 

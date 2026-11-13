@@ -74,16 +74,12 @@ def block_statistic(row,
 
 def register_row_methods(reference_df):
     """Install the persistent row methods; return whether their saved definitions changed."""
-    before = (reference_df.attrs.get("store_methods", {}).copy(),
-              reference_df.attrs.get("store_method_categories", {}).copy())
-    registered = set(reference_df.store.get_registered_methods())
+    before = reference_df.attrs.get("store_methods", {})
     for method in (weighted_vector, block_values, block_statistic):
-        if method.__name__ in registered:
+        if method.__name__ in before:
             reference_df.store.unregister_method(method.__name__)
         reference_df.store.register_method(method, category="Analysis/Plots")
-    after = (reference_df.attrs.get("store_methods", {}),
-             reference_df.attrs.get("store_method_categories", {}))
-    return before != after
+    return before != reference_df.attrs["store_methods"]
 
 
 def main() -> None:

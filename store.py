@@ -7,7 +7,7 @@ import typing
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime
-from functools import wraps
+from functools import cache, wraps
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -18,6 +18,78 @@ from .filesystem import FileSystem, Node
 
 # Columns added to every row; indexed fields cannot use these names.
 _RESERVED = ("lf_path", "lf_store_keys", "lf_mtime", "lf_digest")
+
+
+def _read_only(self, *args, **kwargs):
+    raise TypeError("A reference table's attrs value is read-only; assign a new one instead.")
+
+
+class _FrozenDict(dict):
+    """A dict that cannot change in place, so frames derived from a table share it instead of copying.
+
+    It compares, encodes to JSON and pickles as a plain dict.
+    """
+
+    __setitem__ = __delitem__ = __ior__ = clear = pop = popitem = setdefault = update = _read_only
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce__(self):
+        return dict, (dict(self),)
+
+
+class _FrozenList(list):
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _read_only
+    append = clear = extend = insert = pop = remove = reverse = sort = _read_only
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce__(self):
+        return list, (list(self),)
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, (_FrozenDict, _FrozenList)):
+        return value
+    if isinstance(value, Mapping):
+        return _FrozenDict({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return _FrozenList(_freeze(item) for item in value)
+    return value
+
+
+class _TableFileSystem(_FrozenDict):
+    """A table's {"spec", "relative_to"}; the FileSystem built from them is shared by its derived frames."""
+
+    _filesystem: FileSystem | None = None
+
+    @property
+    def filesystem(self) -> FileSystem:
+        if self._filesystem is None:
+            self._filesystem = FileSystem.from_spec(self["spec"], relative_to=self["relative_to"])
+        return self._filesystem
+
+
+def _freeze_attrs(attrs: dict) -> None:
+    """Freeze the attrs values lazyfields owns, which load from pickle or parquet as plain ones."""
+    if "store_methods" in attrs:
+        attrs["store_methods"] = _freeze(attrs["store_methods"])
+    if "filesystem" in attrs and not isinstance(attrs["filesystem"], _TableFileSystem):
+        attrs["filesystem"] = _TableFileSystem(_freeze(attrs["filesystem"]))
+
+
+@cache
+def _compile(name: str, source: str) -> Callable[..., Any]:
+    """A registered method's function, compiled from its source once."""
+    # Annotations stay strings, so a missing name never breaks compiling; the typing names
+    # let the browser resolve common ones such as Literal for its argument suggestions.
+    namespace: dict[str, Any] = {key: getattr(typing, key) for key in typing.__all__}
+    exec(compile(source, f"<store method {name}>", "exec",
+                 flags=__future__.annotations.compiler_flag, dont_inherit=True), namespace)
+    return namespace[name]
+
 
 def _row_value(node: Node, key: Any) -> Any:
     try:
@@ -101,10 +173,11 @@ def update_reference_table(
     """Refresh the index, reusing rows whose sources are unchanged."""
     if workers is not None and workers < 1:
         raise ValueError("workers must be None or a positive integer.")
+    previous = reference_df.attrs.get("filesystem", {})
     if source is None:
-        source = reference_df.attrs["filesystem_spec"]
+        source = previous["spec"]
         if relative_to is None:
-            relative_to = reference_df.attrs["filesystem_relative_to"]
+            relative_to = previous["relative_to"]
     elif isinstance(source, (str, Path)):
         if relative_to is not None:
             raise ValueError("relative_to is only supported for filesystem specifications; "
@@ -112,15 +185,17 @@ def update_reference_table(
         relative_to = str(Path(source).resolve())
         source = {"mount": [{"glob": "*"}]}
     elif relative_to is None:
-        relative_to = reference_df.attrs.get("filesystem_relative_to")
+        relative_to = previous.get("relative_to")
     relative_to = str(relative_to) if relative_to is not None else None
     if not isinstance(source, Mapping):
         raise TypeError("source must be a directory or a filesystem specification mapping.")
     filesystem = FileSystem.from_spec(source, relative_to=relative_to)
     paths = sorted(name for name, kind, _ in filesystem.items() if kind == "group")
     old_rows = {row["lf_path"]: row for row in reference_df.to_dict("records")}
-    attrs = {**reference_df.attrs, "filesystem_spec": source,
-             "filesystem_relative_to": str(filesystem.relative_to)}
+    handle = _TableFileSystem(_freeze({"spec": source, "relative_to": str(filesystem.relative_to)}))
+    handle._filesystem = filesystem  # Built for indexing already.
+    attrs = {**reference_df.attrs, "filesystem": handle}
+    _freeze_attrs(attrs)
 
     def make_row(path):
         node = filesystem.node(path)
@@ -134,7 +209,6 @@ def update_reference_table(
         df = pd.DataFrame(row for row in (executor.map if executor else map)(make_row, paths)
                           if row is not None)
     df.attrs = attrs
-    df.__dict__["_filesystem"] = filesystem
     return df
 
 
@@ -142,17 +216,13 @@ def update_reference_table(
 @pd.api.extensions.register_series_accessor("store")
 class StoreAccessor:
     def __init__(self, pandas_obj: pd.DataFrame | pd.Series):
+        _freeze_attrs(pandas_obj.attrs)
         self._obj = pandas_obj
-        self._methods: dict[str, str] = pandas_obj.attrs.get("store_methods", {})
-        self._method_categories: dict[str, str] = pandas_obj.attrs.get("store_method_categories", {})
-        self._compiled_methods: dict[str, Callable[..., Any]] = {}
 
-    def _set_method_categories(self, categories: dict[str, str]) -> None:
-        self._method_categories = categories
-        if categories:
-            self._obj.attrs["store_method_categories"] = categories
-        else:
-            self._obj.attrs.pop("store_method_categories", None)
+    @property
+    def _methods(self) -> Mapping[str, Mapping[str, str | None]]:
+        """Registered methods by name, each with its "source" and browser "category"."""
+        return self._obj.attrs.get("store_methods", {})
 
     def register_method(self, method: Callable[..., Any] | None = None, *,
                         category: str | None = None) -> Callable[..., Any]:
@@ -171,39 +241,19 @@ class StoreAccessor:
         if not isinstance(node, ast.FunctionDef) or node.name != name:
             raise ValueError("A registered method must be a named function.")
         node.decorator_list = []
-        self._methods = {**self._methods, name: ast.unparse(node)}
-        self._obj.attrs["store_methods"] = self._methods
-        categories = self._method_categories.copy()
-        if category is None:
-            categories.pop(name, None)
-        else:
-            categories[name] = category
-        self._set_method_categories(categories)
-        self._compiled_methods[name] = method
+        self._obj.attrs["store_methods"] = _freeze(
+            {**self._methods, name: {"source": ast.unparse(node), "category": category}})
         return method
 
     def unregister_method(self, name: str) -> None:
         """Remove a registered method by name; raise KeyError if it is missing."""
-        methods = self._methods.copy()
+        methods = dict(self._methods)
         del methods[name]
-        self._methods = methods
-        self._obj.attrs["store_methods"] = methods
-        categories = self._method_categories.copy()
-        categories.pop(name, None)
-        self._set_method_categories(categories)
-        self._compiled_methods.pop(name, None)
+        self._obj.attrs["store_methods"] = _freeze(methods)
 
     def _method(self, name: str) -> Callable[..., Any]:
-        """Compile a registered method once; raise KeyError if it is missing."""
-        if name not in self._compiled_methods:
-            # Annotations stay strings, so a missing name never breaks compiling; the typing names
-            # let the browser resolve common ones such as Literal for its argument suggestions.
-            namespace: dict[str, Any] = {key: getattr(typing, key) for key in typing.__all__}
-            code = compile(self._methods[name], f"<store method {name}>", "exec",
-                           flags=__future__.annotations.compiler_flag, dont_inherit=True)
-            exec(code, namespace)
-            self._compiled_methods[name] = namespace[name]
-        return self._compiled_methods[name]
+        """A registered method's function; raise KeyError if it is missing."""
+        return _compile(name, self._methods[name]["source"])
 
     def __getattr__(self, name: str) -> Any:
         try:
@@ -226,26 +276,12 @@ class StoreAccessor:
 
         return call
 
-    def get_registered_methods(self):
-        return list(self._methods.keys())
-
-    def get_registered_method_category(self, name: str) -> str | None:
-        """Return menu metadata supplied when this method was registered."""
-        return self._method_categories.get(name)
-
     @property
     def _filesystem(self) -> FileSystem:
-        """Restore the data namespace lazily; indexed fields remain in the table."""
-        cache = self._obj.__dict__
-        if "_filesystem" not in cache:
-            try:
-                spec = self._obj.attrs["filesystem_spec"]
-            except KeyError:
-                raise RuntimeError("This table has no filesystem specification.") from None
-            cache["_filesystem"] = FileSystem.from_spec(
-                spec, relative_to=self._obj.attrs["filesystem_relative_to"],
-            )
-        return cache["_filesystem"]
+        """The data namespace, built on first use and shared with every frame derived from this one."""
+        if "filesystem" not in self._obj.attrs:
+            raise RuntimeError("This table has no filesystem specification.")
+        return self._obj.attrs["filesystem"].filesystem
 
     def __getitem__(self, key):
         """Read each row's node as Node indexing does; a list of field names gives one column each."""
