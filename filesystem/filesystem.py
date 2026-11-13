@@ -7,7 +7,7 @@ import os
 from copy import copy
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from ..readers import MAPPING, NodeInfo, NodeKind, View, _reader_match, registered_view, require_reader, value_info
@@ -18,10 +18,11 @@ if TYPE_CHECKING:
 __all__ = ["FileSystem", "Node", "SourceLocator"]
 
 
-def _normalize_path(path: str | Path) -> str:
-    if not isinstance(path, (str, Path)):
+def _normalize_path(path: str | PurePath) -> str:
+    if not isinstance(path, (str, PurePath)):
         raise TypeError("Filesystem paths must be strings or Path objects.")
-    parts = [part for part in str(path).split("/") if part not in ("", ".")]
+    path = path.as_posix() if isinstance(path, PurePath) else path
+    parts = [part for part in path.split("/") if part not in ("", ".")]
     if ".." in parts:
         raise ValueError("Filesystem paths cannot contain '..'.")
     return "/".join(parts)
@@ -37,11 +38,14 @@ def _is_name(name: Any) -> bool:
 
 
 def _split_key(key: Any) -> tuple[str, Any]:
-    """[:], [sel], ["a/b"] and ["a/b", sel] as a relative path and a selection, None for everything."""
-    if isinstance(key, tuple) and key and isinstance(key[0], str):
-        return key[0], key[1] if len(key) == 2 else key[1:] or None
-    if isinstance(key, str):
-        return key, None
+    """[:], [sel], ["a/b"] and ["a/b", sel] as a normalized relative path and a selection, None for everything.
+
+    Paths are strings or PurePath objects, so x[PurePosixPath("a") / "b"] reads like x["a/b"].
+    """
+    if isinstance(key, tuple) and key and isinstance(key[0], (str, PurePath)):
+        return _normalize_path(key[0]), key[1] if len(key) == 2 else key[1:] or None
+    if isinstance(key, (str, PurePath)):
+        return _normalize_path(key), None
     return "", None if isinstance(key, slice) and key == slice(None) else key
 
 
@@ -210,16 +214,18 @@ class _Directory(_Composed):
 class Node:
     """Lazy namespace handle; subsequent edits are visible through its path.
 
-    Read by indexing: node[:] everything, node[sel] a selection, node["a/b"] a child path,
-    node["a/b", sel] a selection at a child path.
+    Indexing reads values: node[:] everything, node[sel] a selection, node["a/b"] a child path,
+    node["a/b", sel] a selection at a child path. Dividing navigates without reading: node / "a" / "b".
     """
 
     _filesystem: FileSystem = field(repr=False)
     path: str
 
-    def node(self, path: str | Path = "") -> Node:
+    def node(self, path: str | PurePath = "") -> Node:
         """Bind a descendant using a path relative to this node."""
         return self._filesystem.node(f"{self.path}/{_normalize_path(path)}")
+
+    __truediv__ = node  # node / "a" / "b": a handle, nothing read.
 
     def __getitem__(self, key: Any) -> Any:
         path, selection = _split_key(key)
@@ -434,10 +440,12 @@ class FileSystem:
         parent, name = self._parent(path)
         del parent._children[name]
 
-    def node(self, path: str | Path = "") -> Node:
+    def node(self, path: str | PurePath = "") -> Node:
         path = _normalize_path(path)
         self._lookup(path)
         return Node(self, path)
+
+    __truediv__ = node  # fs / "a" / "b": a handle, nothing read; fs["a/b"] reads.
 
     def __getitem__(self, key: Any) -> Any:
         """Read as Node does, with paths from the root."""

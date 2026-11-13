@@ -182,7 +182,7 @@ def from_spec(cls, spec, *, relative_to=None, readers=None):
 
     def merged(data, position):
         inputs = build(data["sources"], position)
-        nodes = {name: inputs.node(name) for name in inputs.listdir()}
+        nodes = {name: inputs / name for name in inputs.listdir()}
         if isinstance(data["merge"], Mapping):
             if "axis" in data:
                 raise ValueError("A key-by-key merge gives each rule its own axis.")

@@ -79,6 +79,19 @@ fs.mount("metadata/alpha.json", contents.node())
 fs["metadata/alpha.json/coefficients", 0]  # 1.01
 ```
 
+Indexing reads values; dividing navigates. `fs / "a" / "b"` (or `fs.node("a/b")`)
+returns a `Node` handle without reading anything, and a handle reads only when
+indexed:
+
+```python
+alpha = fs / "metadata" / "alpha.json"  # Node handle; nothing read
+alpha["coefficients", 0]                 # 1.01: reads only that element
+alpha.info()                             # metadata only
+```
+
+Paths in `[]` may also be `PurePath` objects, so
+`fs[PurePosixPath("metadata") / "alpha.json" / "coefficients", 0]` reads the same element.
+
 The reader is inferred from the filename unless supplied explicitly. Neither
 `from_file` nor mounting reads file contents. `FileSystem(paths, relative_to=root)`
 is shorthand for wrapping and mounting each relative filename this way. Repeated
