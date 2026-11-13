@@ -72,13 +72,28 @@ def block_statistic(row,
     return getattr(np, statistic)(np.asarray(row["file_refs/values"]), axis=axis)
 
 
-def register_row_methods(reference_df):
-    """Install the persistent row methods; return whether their saved definitions changed."""
+def weight_scatter(table, y: Literal["scalar_a", "scalar_b"] = "scalar_a"):
+    """Scatter a scalar against the indexed weight over the current view, one colour per label.
+
+    :param y: Column for the vertical axis.
+    """
+    from matplotlib.figure import Figure
+    figure = Figure(layout="constrained")
+    axes = figure.add_subplot(xlabel="weight", ylabel=y)
+    for label, rows in table.groupby("label"):
+        axes.scatter(rows["weight"], rows[y], label=label)
+    axes.legend()
+    return figure
+
+
+def register_methods(reference_df):
+    """Install the persistent methods; return whether their saved definitions changed."""
     before = reference_df.attrs.get("store_methods", {})
-    for method in (weighted_vector, block_values, block_statistic):
+    for method, scope in ((weighted_vector, "row"), (block_values, "row"), (block_statistic, "row"),
+                          (weight_scatter, "table")):
         if method.__name__ in before:
             reference_df.store.unregister_method(method.__name__)
-        reference_df.store.register_method(method, category="Analysis/Plots")
+        reference_df.store.register_method(method, category="Analysis/Plots", scope=scope)
     return before != reference_df.attrs["store_methods"]
 
 
@@ -102,7 +117,7 @@ def main() -> None:
         pipe = [add_to_index("file_ref/label"), add_to_index("file_ref/weight")]
         reference_df = lf.create_reference_table(view.to_spec(), relative_to=root, pipe=pipe)
     # Re-register after loading too, so this script always demonstrates its current method bodies.
-    methods_changed = register_row_methods(reference_df)
+    methods_changed = register_methods(reference_df)
     if save_reference or methods_changed:
         reference_df.to_pickle(reference_path)
     browse_table(reference_df, methods=methods)

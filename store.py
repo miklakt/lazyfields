@@ -221,14 +221,20 @@ class StoreAccessor:
 
     @property
     def _methods(self) -> Mapping[str, Mapping[str, str | None]]:
-        """Registered methods by name, each with its "source" and browser "category"."""
+        """Registered methods by name, each with its "source", browser "category" and "scope"."""
         return self._obj.attrs.get("store_methods", {})
 
-    def register_method(self, method: Callable[..., Any] | None = None, *,
-                        category: str | None = None) -> Callable[..., Any]:
-        """Register a row-wise method, optionally below a slash-separated browser category."""
+    def register_method(self, method: Callable[..., Any] | None = None, *, category: str | None = None,
+                        scope: str = "row") -> Callable[..., Any]:
+        """Register a method, optionally below a slash-separated browser category.
+
+        A "row" method gets one row first, a "table" method the whole frame (in the browser, the
+        current view); any further parameters are settings.
+        """
         if method is None:
-            return lambda method: self.register_method(method, category=category)
+            return lambda method: self.register_method(method, category=category, scope=scope)
+        if scope not in ("row", "table"):
+            raise ValueError(f"scope must be 'row' or 'table', not {scope!r}.")
         name = getattr(method, "__name__", None)
         if not callable(method) or not isinstance(name, str) or not name.isidentifier():
             raise TypeError("A store method must be a named callable.")
@@ -242,7 +248,7 @@ class StoreAccessor:
             raise ValueError("A registered method must be a named function.")
         node.decorator_list = []
         self._obj.attrs["store_methods"] = _freeze(
-            {**self._methods, name: {"source": ast.unparse(node), "category": category}})
+            {**self._methods, name: {"source": ast.unparse(node), "category": category, "scope": scope}})
         return method
 
     def unregister_method(self, name: str) -> None:
@@ -269,6 +275,8 @@ class StoreAccessor:
                 node = self._filesystem.node(row["lf_path"])
                 return method(_NodeRow(node, fields, self._method), *args, **kwargs)
 
+            if self._methods[name]["scope"] == "table":
+                return method(self._obj, *args, **kwargs)
             if isinstance(self._obj, pd.Series):
                 return apply(self._obj)
             return pd.Series([apply(row) for _, row in self._obj.iterrows()],

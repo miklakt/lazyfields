@@ -35,6 +35,11 @@ def _cell(column, value):
     return one_line_repr(value, 80)
 
 
+def _label(heading, name):
+    """A heading's text; the ◢ marks the corner, which runs table methods."""
+    return f"◢ {name}" if heading == "#0" else name
+
+
 def _sorted(df, column, ascending):
     try:
         return df.sort_values(column, ascending=ascending, kind="stable")
@@ -46,7 +51,9 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
                  methods=DEFAULT_METHODS, view: dict | None = None):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
 
-    Right-clicking runs a registered method on the selected rows and shows its result.
+    Right-clicking runs a registered row method on the selected rows and shows its result; the
+    corner heading runs a table method on the current view: the filtered rows in shown order, with
+    lf_path and the shown columns.
 
     :param view: Initial view settings, any of ``filter`` (query expression), ``sort``
         (``[column, ascending]``), ``column_order`` and ``hidden`` (column names). Names
@@ -86,7 +93,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
     for heading, name in headings:
         table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
-        table.heading(heading, text=name, command=lambda name=name: sort_by(name))
+        table.heading(heading, text=_label(heading, name), command=lambda name=name: sort_by(name))
     xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
@@ -218,7 +225,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             values = state["shown"][name]
             texts = values.astype(str) if heading == "#0" else (_cell(name, value) for value in values)
             longest = max(texts, key=len, default="")  # Measuring every cell is slow; the longest text suffices.
-            width = max(heading_font.measure(f"{name} ▼"), cell.measure(longest)) + 24  # Padding, tree indent.
+            width = max(heading_font.measure(f"{_label(heading, name)} ▼"), cell.measure(longest)) + 24  # Padding, tree indent.
             table.column(heading, width=min(width, limit))
 
     def apply_filter(event=None):
@@ -236,7 +243,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         state["sort"] = (column, ascending)
         for heading, name in headings:
             arrow = (" ▲" if ascending else " ▼") if name == column else ""
-            table.heading(heading, text=name + arrow)
+            table.heading(heading, text=_label(heading, name) + arrow)
 
     def sort_by(column):
         set_sort(column, state["sort"] != (column, True))
@@ -252,6 +259,16 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     header_menu = tk.Menu(table, tearoff=False)
     arguments = {}
 
+    def add_methods(target, scope):
+        """Add a Run entry per registered method of scope; return whether there were any."""
+        registered = {name: method for name, method in reference_df.store._methods.items()
+                      if method["scope"] == scope}
+        submenus = {}
+        for name, method in registered.items():
+            _add_menu_command(target, submenus, method["category"],
+                              label=f"Run {name}", command=lambda name=name: run(name))
+        return bool(registered)
+
     def open_header_menu(column, x, y):
         # Treeview identifies display positions; resolve them after hiding or reordering.
         displayed = [key for key in order if key != "#0" and key in visible]
@@ -262,15 +279,24 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             show_columns()
 
         _clear_menu(header_menu)
+        if key == "#0":  # The corner runs table methods.
+            if not add_methods(header_menu, "table"):
+                header_menu.add_command(label="No table methods", state="disabled")
+            header_menu.add_separator()
         header_menu.add_command(label="Hide", command=hide)
         header_menu.tk_popup(x, y)
 
     def run(name):
-        positions = sorted(int(item) for item in table.selection())
-        rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
+        if reference_df.store._methods[name]["scope"] == "table":  # All filtered rows, shown columns.
+            rows = state["df"] if state["sort"] is None else _sorted(state["df"], *state["sort"])
+            rows = rows[["lf_path", *(names[key] for key in order if key != "#0" and key in visible)]]
+            target = f"{len(rows)} rows"
+        else:
+            positions = sorted(int(item) for item in table.selection())
+            rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
+            target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
         method = getattr(rows.store, name)
-        parameters = list(method_signature(method).parameters.values())[1:]  # Without the row.
-        target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
+        parameters = list(method_signature(method).parameters.values())[1:]  # Without the row or table.
 
         def call(args, kwargs, text):
             window.configure(cursor="watch")
@@ -294,13 +320,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             table.focus(item)
             table.selection_set(item)
         _clear_menu(menu)
-        registered = reference_df.store._methods
-        submenus = {}
-        for name, method in registered.items():
-            _add_menu_command(menu, submenus, method["category"],
-                              label=f"Run {name}", command=lambda name=name: run(name))
-        if not registered:
-            menu.add_command(label="No registered methods", state="disabled")
+        if not add_methods(menu, "row"):
+            menu.add_command(label="No row methods", state="disabled")
         menu.tk_popup(x, y)
 
     def apply_view(view):
