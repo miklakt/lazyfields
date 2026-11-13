@@ -161,7 +161,7 @@ def merge(sources: Mapping[str, Node], *, rules: _Rule | Mapping[str, _Rule]) ->
     occurrences = {}
     for name, source in inputs.items():
         for key, kind, _ in source.items():
-            occurrences.setdefault(key, {})[name] = (source.clone(key), kind)
+            occurrences.setdefault(key, {})[name] = (source._lookup(key), kind)
     unknown = rules.keys() - occurrences.keys() - {"*"}
     if unknown:
         raise KeyError(f"Merge rules reference missing keys: {sorted(unknown)}")

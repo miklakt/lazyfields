@@ -195,10 +195,6 @@ class _Composed(_ChildrenSource):
 
     origin = format = merged = None
 
-    def descendant(self, path):
-        name, _, rest = path.partition("/")
-        return self.children[name].clone(rest)
-
 
 @dataclass(frozen=True)
 class _Directory(_Composed):
@@ -387,7 +383,7 @@ class FileSystem:
             info = self._source.info()
             if info.kind != "group":
                 raise NotADirectoryError(str(self._origin or "composed dataset"))
-            self._children = {name: self._source.descendant(name) for name in info.children}
+            self._children = {name: self._source.descendant(name).clone() for name in info.children}
             self._source_children = tuple(info.children)
         return self._children
 
@@ -420,26 +416,17 @@ class FileSystem:
         origin = self._origin
         return origin is not None and origin.position != position
 
-    @staticmethod
-    def _snapshot(source: Node) -> FileSystem:
+    def mount(self, path: str | Path, source: Node, *, overwrite: bool = False) -> None:
+        """Attach a copy of source's subtree at path, creating missing parents; source is left as it was.
+
+        An occupied path raises FileExistsError unless overwrite, which rebinds it in its place in the listing.
+        """
         if not isinstance(source, Node):
             raise TypeError("Mount sources must be nodes obtained with node(path).")
-        return source._filesystem.clone(source.path)
-
-    def mount(self, path: str | Path, source: Node) -> None:
-        """Attach an independent subtree at a vacant path; create missing parents."""
-        entry = self._snapshot(source)
+        entry = source._filesystem.clone(source.path)
         parent, name = self._parent(path, create=True)
-        if name in parent._children:
+        if name in parent._children and not overwrite:
             raise FileExistsError(str(path))
-        parent._children[name] = entry
-
-    def replace(self, path: str | Path, source: Node) -> None:
-        """Atomically replace a subtree, keeping its place in its parent's listing."""
-        entry = self._snapshot(source)
-        parent, name = self._parent(path)
-        if name not in parent._children:
-            raise KeyError(str(path))
         parent._children[name] = entry
 
     def unmount(self, path: str | Path) -> None:

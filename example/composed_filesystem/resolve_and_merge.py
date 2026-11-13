@@ -21,7 +21,7 @@ def compose(root: Path) -> FileSystem:
     # Resolve stored references to source nodes.
     for name, partition in fs[f"{source}/partitions"].items():
         target = FileSystem.from_file(root / source.parent / partition["file_ref"])
-        view.replace(f"{name}/file_ref", target.node())
+        view.mount(f"{name}/file_ref", target.node(), overwrite=True)
         sources = {
             Path(reference).stem: FileSystem.from_file(root / source.parent / reference).node()
             for reference in partition["file_refs"]
@@ -32,7 +32,7 @@ def compose(root: Path) -> FileSystem:
             "coordinates": prefer(),
             "values": stack(axis=0),
         })
-        view.replace(f"{name}/file_refs", blocks.node())
+        view.mount(f"{name}/file_refs", blocks.node(), overwrite=True)
     return view
 
 

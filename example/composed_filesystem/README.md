@@ -125,7 +125,7 @@ the directory is empty. Construction does not read file contents.
 The directory keeps its patterns in `to_spec()`, so rebuilding the specification
 discovers the currently matching files; edits are kept as changes beside them.
 
-## Clone, mount, replace, unmount
+## Clone, mount, unmount
 
 ```python
 from pathlib import Path
@@ -140,23 +140,21 @@ view = fs.clone()
 
 path = "partitions.json/partitions/alpha/file_ref"
 reference = view[path]  # 'metadata/alpha.json'
-view.replace(path, fs.node(reference))
+view.mount(path, fs.node(reference), overwrite=True)
 
 view[f"{path}/coefficients", 0]  # 1.01
 fs[path]  # 'metadata/alpha.json'
 ```
 
 `mount` requires a vacant path. Mounting over an existing node raises
-`FileExistsError`; use `replace` to replace an existing entry. Missing parent groups are created,
+`FileExistsError`; pass `overwrite=True` to rebind it instead. Missing parent groups are created,
 but mounting a child beneath a scalar or dataset raises `NotADirectoryError`.
 Unmounting a group removes its whole logical subtree. Physical files are unchanged.
-Mounting, replacing, or unmounting the root is rejected; use `clone(path)` to choose a subtree root.
+Mounting or unmounting the root is rejected; use `clone(path)` to choose a subtree root.
 
-`replace(path, source)` prepares an independent mounted copy and swaps it into an
-existing path in one namespace update. Preparation failures leave the old attachment
-intact. It raises `KeyError` for a missing destination and does not create parents.
-The entry keeps its place in its parent's listing. The source can be inside the
-subtree being replaced.
+With `overwrite=True`, an existing entry keeps its place in its parent's listing, and
+the copy is prepared before it is swapped in, so a failure leaves the old attachment
+intact and the source can be inside the subtree being overwritten.
 
 Use `FileSystem()` for an empty namespace. `clone(path)` returns another
 `FileSystem` rooted at that subtree. A mount target must be a node obtained
@@ -164,14 +162,14 @@ with `node(path)` from any filesystem:
 
 ```python
 view = fs.clone("partitions.json/partitions/alpha")
-view.replace("file_ref", fs.node("metadata/alpha.json"))
+view.mount("file_ref", fs.node("metadata/alpha.json"), overwrite=True)
 
 combined = FileSystem()
 combined.mount("alpha", view.node())
 combined.mount("metadata", fs.node("metadata"))
 ```
 
-`mount`, `replace`, and `unmount` work on the original filesystem too. Cloning or mounting a
+`mount` and `unmount` work on the original filesystem too. Cloning or mounting a
 node copies its current namespace structure, including edits. Subsequent namespace
 changes are independent. Immutable physical source bindings remain shared and values
 are read afresh; dataset values are never copied. Rooted scalar and dataset clones
@@ -181,9 +179,9 @@ support the same native reads and selections as their sources.
 
 `resolve_and_merge.py` registers only `partitions.json` and clones its `partitions` subtree,
 so alpha, beta, and gamma appear directly at the view root. It reads the partition
-mapping, resolves references relative to the parent of `partitions.json`, and calls
-`replace`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
-single `file_ref` target directly. It replaces `file_refs`
+mapping, resolves references relative to the parent of `partitions.json`, and mounts
+over them with `overwrite=True`. Referenced files are wrapped with `FileSystem.from_file`. It mounts the
+single `file_ref` target directly. It overwrites `file_refs`
 with a merged group for each partition: descriptions get filename prefixes,
 block indices are collected into a list, coordinates come from the first block,
 and values are stacked along a new first axis. The values shape is `(2, 2, 3)`.
