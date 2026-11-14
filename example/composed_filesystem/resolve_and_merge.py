@@ -86,14 +86,20 @@ def weight_scatter(table, y: Literal["scalar_a", "scalar_b"] = "scalar_a"):
     return figure
 
 
+def as_is(row):
+    """Debug: the row itself, its index fields, shown with the default method for its value: the Browser."""
+    return row
+
+
 def register_methods(reference_df):
     """Install the persistent methods; return whether their saved definitions changed."""
     before = reference_df.attrs.get("store_methods", {})
-    for method, scope in ((weighted_vector, "row"), (block_values, "row"), (block_statistic, "row"),
-                          (weight_scatter, "table")):
+    for method, scope, category in ((weighted_vector, "row", "Analysis/Plots"), (block_values, "row", "Analysis/Plots"),
+                                    (block_statistic, "row", "Analysis/Plots"), (weight_scatter, "table", "Analysis/Plots"),
+                                    (as_is, "row", "Debug")):
         if method.__name__ in before:
             reference_df.store.unregister_method(method.__name__)
-        reference_df.store.register_method(method, category="Analysis/Plots", scope=scope)
+        reference_df.store.register_method(method, category=category, scope=scope)
     return before != reference_df.attrs["store_methods"]
 
 

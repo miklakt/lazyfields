@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lazyfields.browser import browse_filesystem
+from lazyfields.browser import DEFAULT_METHODS, EXTRA_VIEWERS, browse_filesystem
 from lazyfields.filesystem import FileSystem
 from lazyfields.readers import View, register_view
 
@@ -26,7 +26,7 @@ def main() -> None:
         relative_to=root,
     )
     print("frames:", fs.listdir("frames"), "first positions:", fs["frames/positions", 0, :2].tolist())
-    browse_filesystem(fs)
+    browse_filesystem(fs, methods=DEFAULT_METHODS | EXTRA_VIEWERS)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from lazyfields.readers import debug_readers
 from lazyfields.filesystem import FileSystem
-from lazyfields.browser import browse_filesystem
+from lazyfields.browser import DEFAULT_METHODS, EXTRA_VIEWERS, browse_filesystem
 
 
 def load_filesystem(*, rebuild: bool = False) -> FileSystem:
@@ -23,7 +23,7 @@ def load_filesystem(*, rebuild: bool = False) -> FileSystem:
 
 def main() -> None:
     debug_readers()
-    browse_filesystem(load_filesystem(rebuild="--rebuild" in sys.argv))
+    browse_filesystem(load_filesystem(rebuild="--rebuild" in sys.argv), methods=DEFAULT_METHODS | EXTRA_VIEWERS)
 
 
 if __name__ == "__main__":

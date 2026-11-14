@@ -135,16 +135,16 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
     suitable = methods.matching(node.info())
     if call is None:
         call = suitable[0].call
-    state = {"window": None, "content": None, "name": None, "selected": None}
+    state = {"window": None, "content": None, "name": None, "selected": None, "viewed": False}
 
-    def build_window():
+    def build_window(title):
         window = state["window"] = tk.Toplevel(master)
         window.title(title)
         menubar = tk.Menu(window, tearoff=False)
         views = [method for method in suitable if method.kind == "view"]
         actions = [method for method in suitable if method.kind == "action"]
         # A lone view (plain text, say) has nothing to switch to, nor does a rendering that is no view of this value.
-        if len(views) > 1 and any(view.name == state["name"] for view in views):
+        if len(views) > 1 and state["viewed"]:
             menu = tk.Menu(menubar, tearoff=False)
             state["selected"] = build_method_menu(
                 menu, views, lambda m: render(m.call), selected=state["name"],
@@ -161,16 +161,18 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
 
     def render(call):
         state["name"] = next((method.name for method in methods if method.call is call), "Method")
+        state["viewed"] = any(method.name == state["name"] for method in suitable if method.kind == "view")
         parameters = [parameter for parameter in list(method_signature(call).parameters.values())[1:]
                       if parameter.kind is not Parameter.POSITIONAL_ONLY]
 
         def show(args, kwargs, text=""):
+            called = f"{title}({text})" if text else title  # The arguments given in the form, if any.
             master.configure(cursor="watch")
             master.update_idletasks()
             try:
                 shown = call(node, methods) if call is _browse else call(node, *args, **kwargs)
             except Exception as exc:
-                show_error(state["window"] or master, title, exc)
+                show_error(state["window"] or master, called, exc)
                 return
             finally:
                 master.configure(cursor="")
@@ -178,13 +180,15 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
                 return
             is_figure = type(shown).__module__ == "matplotlib.figure"
             # Only a function fills a frame: a safe pickle's proxy is callable too, but it is data.
-            if not is_figure and not (isroutine(shown) or isinstance(shown, partial)):
-                # Plain data, not a rendering: a transform's result, shown by whichever method suits
-                # it in a new window so this one stays. A group result browses unless a method claims it.
-                open_value(master, title, shown, methods=methods)
+            rendering = is_figure or isroutine(shown) or isinstance(shown, partial)
+            if not rendering or is_figure and not state["viewed"]:
+                # Plain data, or a figure from a method that is no view of this value: a value of its own,
+                # shown by whichever method suits it in a new window so this one stays. A group result
+                # browses unless a method claims it.
+                open_value(master, called, shown, methods=methods)
                 return
             if state["window"] is None:
-                build_window()
+                build_window(called)
             else:
                 state["window"].geometry(state["window"].geometry())  # Keep the size across a switch.
             for child in state["content"].winfo_children():
