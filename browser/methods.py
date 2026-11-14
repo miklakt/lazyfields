@@ -123,8 +123,8 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
     Two menus list the same methods the tree offers on a node: View (the current one radio-marked)
     re-renders the value in place; Action runs a transform, opening its result in a new window that
     carries its own menu bar - so results chain. Either menu is dropped when it would be empty or
-    offer no choice. A call's keyword-only parameters after node are offered in a form first, same
-    as a registered store method's arguments.
+    offer no choice. A call's parameters after node are offered in a form first, except positional-only
+    ones, which the browser passes itself.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -143,7 +143,8 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
         menubar = tk.Menu(window, tearoff=False)
         views = [method for method in suitable if method.kind == "view"]
         actions = [method for method in suitable if method.kind == "action"]
-        if len(views) > 1:  # A lone view (plain text, say) has nothing to switch to.
+        # A lone view (plain text, say) has nothing to switch to, nor does a rendering that is no view of this value.
+        if len(views) > 1 and any(view.name == state["name"] for view in views):
             menu = tk.Menu(menubar, tearoff=False)
             state["selected"] = build_method_menu(
                 menu, views, lambda m: render(m.call), selected=state["name"],
@@ -161,14 +162,18 @@ def open_value(master, title, value, call=None, methods=DEFAULT_METHODS):
     def render(call):
         state["name"] = next((method.name for method in methods if method.call is call), "Method")
         parameters = [parameter for parameter in list(method_signature(call).parameters.values())[1:]
-                      if parameter.kind is Parameter.KEYWORD_ONLY]
+                      if parameter.kind is not Parameter.POSITIONAL_ONLY]
 
         def show(args, kwargs, text=""):
+            master.configure(cursor="watch")
+            master.update_idletasks()
             try:
                 shown = call(node, methods) if call is _browse else call(node, *args, **kwargs)
             except Exception as exc:
                 show_error(state["window"] or master, title, exc)
                 return
+            finally:
+                master.configure(cursor="")
             if shown is None:  # The method opened a window of its own.
                 return
             is_figure = type(shown).__module__ == "matplotlib.figure"

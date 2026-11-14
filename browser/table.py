@@ -1,33 +1,35 @@
 """Read-only Tk browser for reference tables; a selected row opens its group."""
 
 import argparse
-import inspect
 import sys
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from functools import partial
+from functools import partial, update_wrapper
 from pathlib import Path
 
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
-from .arguments import ask_arguments, method_signature
 from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes, type_name
 from . import view_settings
-from .methods import DEFAULT_METHODS, open_value, show_error
+from .methods import DEFAULT_METHODS, Method, open_value
 
 
-def _run_and_show(master, title, call, methods):
-    """Show a call's result with its preferred method; None opens no window.
+def _store_method(name, function, category):
+    """A registered store method as a node method on a group whose lf_rows hint holds the rows it runs on.
 
-    A Series, one value per selected row, shows as a group of them named by row label.
+    A result per row shows as a group of them named by row label, or nothing when all are None.
+    It wraps function, so the form asks for function's own settings.
     """
-    result = call()
-    if isinstance(result, pd.Series):
-        result = None if all(value is None for value in result) else {
-            str(label): value for label, value in result.items()}
-    if result is not None:
-        open_value(master, title, result, methods=methods)
+    def call(group, *args, **kwargs):
+        result = getattr(group.runtime_attrs["lf_rows"].store, name)(*args, **kwargs)
+        if isinstance(result, pd.Series):
+            result = None if all(value is None for value in result) else {
+                str(label): value for label, value in result.items()}
+        return result
+
+    update_wrapper(call, function)
+    return Method(name, lambda info: "lf_rows" in info.runtime_attrs, call, kind="action", category=category)
 
 
 def _cell(value):
@@ -332,7 +334,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
 
     menu = tk.Menu(table, tearoff=False)
     header_menu = tk.Menu(table, tearoff=False)
-    arguments = {}
+    store_methods = {name: _store_method(name, reference_df.store._method(name), entry["category"])
+                     for name, entry in reference_df.store._methods.items()}
 
     def add_methods(target, scope):
         """Add a Run entry per registered method of scope, or a note that there is none."""
@@ -380,25 +383,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             positions = sorted(int(item) for item in table.selection())
             rows = state["shown"].iloc[positions[0] if len(positions) == 1 else positions]
             target = rows["lf_path"] if len(positions) == 1 else f"{len(positions)} rows"
-        method = getattr(rows.store, name)
-        parameters = list(method_signature(method).parameters.values())[1:]  # Without the row or table.
-
-        def call(args, kwargs, text):
-            window.configure(cursor="watch")
-            window.update_idletasks()
-            try:
-                _run_and_show(window, f"{target} · {name}({text})",
-                              lambda: method(*args, **kwargs), methods)
-            except Exception as exc:
-                show_error(window, name, exc)
-            finally:
-                window.configure(cursor="")
-
-        if parameters:
-            ask_arguments(window, name, parameters, arguments.setdefault(name, {}), call,
-                          doc=inspect.getdoc(method))
-        else:
-            call([], {}, "")
+        group = filesystem.node().with_runtime_attrs(lf_rows=rows)
+        open_value(window, f"{target} · {name}", group, store_methods[name].call, methods)
 
     def open_menu(widget, item, x, y):
         if item not in table.selection():

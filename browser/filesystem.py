@@ -357,7 +357,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
     return set_root
 
 
-def _browse(node, methods=DEFAULT_METHODS):
+def _browse(node, methods=DEFAULT_METHODS, /):
     """Browse a clone of the node's subtree, so later edits leave this window as it was."""
     source = node._filesystem.clone(node.path)
     root = source.node().with_runtime_attrs(**node.runtime_attrs)
