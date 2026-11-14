@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 _KEEP = 100  # Most recently saved table views to keep.
+_FIELDS = {"filter": str, "sort": list, "column_order": list, "hidden": list}
 
 
 def _file() -> Path:
@@ -27,18 +28,28 @@ def table_key(table: pd.DataFrame) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _conformant(view) -> bool:
+    """Whether view has the shape the table browser saves: a filter, [column, ascending] sort
+    levels with column "#0" for the index, and lists of column names."""
+    return (isinstance(view, dict) and set(view) <= set(_FIELDS)
+            and all(isinstance(view.get(field, kind()), kind) for field, kind in _FIELDS.items())
+            and all(isinstance(level, list) and len(level) == 2 and isinstance(level[0], str)
+                    and isinstance(level[1], bool) for level in view.get("sort", []))
+            and all(isinstance(name, str) for field in ("column_order", "hidden") for name in view.get(field, [])))
+
+
 def _read() -> dict:
+    """Saved views by key, without those of any other shape, which the next save purges."""
     try:
         tables = json.loads(_file().read_text())
     except (OSError, ValueError):
         return {}
-    return tables if isinstance(tables, dict) else {}
+    return {key: view for key, view in tables.items() if _conformant(view)} if isinstance(tables, dict) else {}
 
 
 def load(key: str) -> dict:
     """The view saved under key, or an empty one."""
-    view = _read().get(key)
-    return view if isinstance(view, dict) else {}
+    return _read().get(key, {})
 
 
 def save(key: str, view: dict) -> None:

@@ -3,13 +3,16 @@
 import argparse
 import inspect
 import sys
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
 
 from .. import store  # noqa: F401  Registers the store accessor.
 from .arguments import ask_arguments, method_signature
-from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes
+from .filesystem import _add_menu_command, _clear_menu, bind_context_menu, one_line_repr, panes, type_name
 from . import view_settings
 from .methods import DEFAULT_METHODS, open_value, show_error
 
@@ -27,39 +30,50 @@ def _run_and_show(master, title, call, methods):
         open_value(master, title, result, methods=methods)
 
 
-def _cell(column, value):
-    if column == "lf_mtime":
-        return "" if pd.isna(value) else pd.Timestamp(value).isoformat(sep=" ", timespec="seconds")
-    if column == "lf_store_keys" and isinstance(value, (list, tuple)):
-        return f"{len(value)} keys"
+def _cell(value):
+    """A cell's text: an array's dtype and shape, a datetime to the second, other dates, times,
+    durations and decimals as their own text, anything else a short repr."""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, (date, time, timedelta, Decimal)):
+        return str(value)
+    if getattr(value, "ndim", 0):
+        return type_name(value)
     return one_line_repr(value, 80)
 
 
-def _label(heading, name):
-    """A heading's text; the ◢ marks the corner, which runs table methods."""
-    return f"◢ {name}" if heading == "#0" else name
-
-
-def _sorted(df, column, ascending):
+def _sorted(df, levels):
+    """Sort df by levels, {column: ascending} in order, each within the groups of those before; "#0" is the index."""
+    if not levels:
+        return df
+    keys = pd.concat([df.index.to_frame(index=False) if column == "#0" else df[[column]].reset_index(drop=True)
+                      for column in levels], axis=1, ignore_index=True)
+    ascending = [up for column, up in levels.items() for _ in range(df.index.nlevels if column == "#0" else 1)]
+    sort = partial(keys.sort_values, list(keys), ascending=ascending, kind="stable")
     try:
-        return df.sort_values(column, ascending=ascending, kind="stable")
-    except TypeError:  # Mixed types in an object column.
-        return df.sort_values(column, ascending=ascending, kind="stable", key=lambda s: s.astype(str))
+        return df.iloc[sort().index]
+    except (TypeError, ValueError):  # Mixed or incomparable values in an object column; compare as text.
+        return df.iloc[sort(key=lambda s: s.astype(str) if s.dtype == object else s).index]
 
 
 def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
                  methods=DEFAULT_METHODS, view: dict | None = None):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
 
+    The first column is the index. Shift+clicking a heading, or a column in the Columns dialog,
+    cycles its sort level ▲, ▼, off; each level sorts within the groups of the levels before it,
+    and the first level's groups are shaded alternately.
+
     Right-clicking runs a registered row method on the selected rows and shows its result; the
-    corner heading runs a table method on the current view: the filtered rows in shown order, with
+    Table menu runs a table method on the current view: the filtered rows in shown order, with
     lf_path and the shown columns.
 
     :param view: Initial view settings, any of ``filter`` (query expression), ``sort``
-        (``[column, ascending]``), ``column_order`` and ``hidden`` (column names). Names
-        missing from the table are ignored; columns missing from ``column_order`` follow
-        in table order. None restores the view last shown for a table over the same
-        filesystem specification, root and column names, pickled or not.
+        (``[[column, ascending], ...]`` from the first level, column "#0" for the index),
+        ``column_order`` and ``hidden`` (column names). Names missing from the table are
+        ignored; columns missing from ``column_order`` follow in table order. None restores
+        the view last shown for a table over the same filesystem specification, root and
+        column names, pickled or not.
     """
     import tkinter as tk
     from tkinter import ttk
@@ -84,26 +98,29 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     status = ttk.Label(bar)
     status.pack(side="right", padx=6)
 
-    columns = [column for column in reference_df.columns if column != "lf_path"]
-    ids = [f"c{i}" for i in range(len(columns))]
-    headings = [("#0", "lf_path"), *zip(ids, columns)]
-    table = ttk.Treeview(top, columns=ids, show="tree headings")
+    # Treeview columns are named by the table's columns; its tree column "#0" shows the index.
+    columns = ["lf_path", *(column for column in reference_df.columns if column != "lf_path")]
+    headings = ["#0", *columns]
+    index_label = ", ".join(str(name) for name in reference_df.index.names if name is not None) or "index"
+    table = ttk.Treeview(top, columns=columns, show="tree headings")
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
     xscroll = ttk.Scrollbar(top, orient="horizontal", command=table.xview)
     table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
-    for heading, name in headings:
+    for heading in headings:
         table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
-        table.heading(heading, text=_label(heading, name), command=lambda name=name: sort_by(name))
+    style = ttk.Style(window)
+    field, text = (window.winfo_rgb(style.lookup("Treeview", option) or default)
+                   for option, default in (("fieldbackground", "white"), ("foreground", "black")))
+    # Shaded rows are a tenth of the way from the theme's background to its text colour.
+    table.tag_configure("shaded", background="#" + "".join(f"{(9 * a + b) // 10 >> 8:02x}" for a, b in zip(field, text)))
     xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
-    column_ids = [key for key, _ in headings]
-    visible, order, names = set(column_ids), list(column_ids), dict(headings)
+    visible, order = set(columns), list(columns)
 
     def show_columns():
-        table.configure(displaycolumns=[key for key in order if key != "#0" and key in visible],
-                        show="tree headings" if "#0" in visible else "headings")
+        table.configure(displaycolumns=[column for column in order if column in visible])
         save_view()
 
     def choose_columns():
@@ -117,6 +134,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         field.pack(fill="x", padx=6, pady=6)
         buttons = ttk.Frame(dialog)
         buttons.pack(side="bottom", fill="x", padx=6, pady=6)
+        ttk.Label(dialog, foreground="gray", text="Click: show or hide · Shift+click: sort · Alt+↑/↓: move").pack(
+            side="bottom", anchor="w", padx=6)
         choices = tk.Listbox(dialog, selectmode="multiple", exportselection=False, activestyle="dotbox")
         scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=choices.yview)
         choices.configure(yscrollcommand=scrollbar.set)
@@ -124,16 +143,16 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         choices.pack(fill="both", expand=True)
         shown = []
 
-        def refresh(all_columns=None):
-            if all_columns is not None:
-                visible.clear()
-                visible.update(column_ids if all_columns else ())
-            shown[:] = [key for key in order if search.get().casefold() in str(names[key]).casefold()]
+        def refresh(active=None):
+            shown[:] = [column for column in order if search.get().casefold() in str(column).casefold()]
             choices.delete(0, "end")
-            for position, key in enumerate(shown):
-                choices.insert("end", str(names[key]))
-                if key in visible:
+            for position, column in enumerate(shown):
+                choices.insert("end", heading_text(column))
+                if column in visible:
                     choices.selection_set(position)
+            if active is not None:
+                choices.activate(active)
+                choices.see(active)
             show_columns()
 
         def apply_selection(event):
@@ -145,38 +164,45 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             """Move the focused column past its neighbour in the list, keeping its place in the order."""
             position = choices.index("active")
             if 0 <= position + step < len(shown):
-                key = shown[position]
-                order.remove(key)
-                order.insert(order.index(shown[position + step]) + (step > 0), key)
-                refresh()
-                choices.activate(position + step)
-                choices.see(position + step)
+                column = shown[position]
+                order.remove(column)
+                order.insert(order.index(shown[position + step]) + (step > 0), column)
+                refresh(active=position + step)
             return "break"  # Not also the plain arrow's focus move.
+
+        def cycle_at(position):
+            if 0 <= position < len(shown):
+                cycle_sort(shown[position])
+                refresh(active=position)
+            return "break"  # Not also a show or hide.
+
+        def cycle_at_pointer(event):
+            position = choices.nearest(event.y)
+            _, y, _, height = choices.bbox(position) or (0, 0, 0, 0)
+            return cycle_at(position if y <= event.y < y + height else -1)  # Not below the last item.
 
         def hide_constant():
             """Hide columns holding one value in every filtered row; a missing value counts as another."""
             df = state["df"]
             # As text, since lists such as lf_store_keys cannot be counted directly.
-            visible.difference_update(key for key in column_ids if df[names[key]].astype(str).nunique(dropna=False) <= 1)
+            visible.difference_update(column for column in columns if df[column].astype(str).nunique(dropna=False) <= 1)
             refresh()
 
-        ttk.Button(buttons, text="Show all", command=lambda: refresh(True)).pack(side="left")
-        ttk.Button(buttons, text="Hide all", command=lambda: refresh(False)).pack(side="left")
+        ttk.Button(buttons, text="Show all", command=lambda: (visible.update(columns), refresh())).pack(side="left")
+        ttk.Button(buttons, text="Hide all", command=lambda: (visible.clear(), refresh())).pack(side="left")
         ttk.Button(buttons, text="Hide constant", command=hide_constant).pack(side="left")
         ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
         choices.bind("<<ListboxSelect>>", apply_selection)
         choices.bind("<Alt-Up>", lambda event: move(-1))
         choices.bind("<Alt-Down>", lambda event: move(1))
+        choices.bind("<Shift-Button-1>", cycle_at_pointer)
+        choices.bind("<Shift-space>", lambda event: cycle_at(choices.index("active")))
         field.bind("<Down>", lambda event: choices.focus_set())
         search.trace_add("write", lambda *_: refresh())
         dialog.bind("<Escape>", lambda event: dialog.destroy())
         dialog.grab_set()
         refresh()
         field.focus_set()
-
-    menubar = tk.Menu(window, tearoff=False)
-    menubar.add_command(label="Columns", command=choose_columns)
-    window.configure(menu=menubar)
 
     bottom = ttk.Frame(split)
     filesystem = reference_df.store._filesystem  # Fails first for a table without a specification.
@@ -187,109 +213,168 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    state = {"df": reference_df, "sort": None, "filter": "", "restored": False, "saved": None}
+    state = {"df": reference_df, "sort": {}, "filter": "", "saved": None}
 
     def save_view():
         """Save the view at every change, so a killed or suspended browser loses nothing.
 
         Calls that change nothing, such as typing in the column search, write nothing.
         """
-        if not state["restored"]:  # Not while apply_view is still restoring the saved one.
-            return
-        current = {
-            "filter": state["filter"], "sort": state["sort"],
-            "column_order": [names[key] for key in order],
-            "hidden": [names[key] for key in column_ids if key not in visible]}
+        current = {"filter": state["filter"], "sort": [list(level) for level in state["sort"].items()],
+                   "column_order": list(order), "hidden": [column for column in columns if column not in visible]}
         if current != state["saved"]:
             view_settings.save(view_key, current)
             state["saved"] = current
 
+    def label(column):
+        return index_label if column == "#0" else column
+
+    def heading_text(column):
+        """The column's label with its sort direction, numbered by level when there are several."""
+        levels = state["sort"]
+        if column not in levels:
+            return label(column)
+        number = list(levels).index(column) + 1 if len(levels) > 1 else ""
+        return f"{label(column)} {'▲' if levels[column] else '▼'}{number}"
+
+    def shading(shown):
+        """Whether each row is shaded: the groups of the first sort level alternate."""
+        if not state["sort"]:
+            return [False] * len(shown)
+        column = next(iter(state["sort"]))
+        # As text, since lists cannot be compared directly.
+        values = pd.Series((shown.index.to_flat_index() if column == "#0" else shown[column]).astype(str).to_numpy())
+        return ((values != values.shift()).cumsum() % 2 == 1).tolist()
+
     def render():
-        df = state["df"]
-        if state["sort"] is not None:
-            df = _sorted(df, *state["sort"])
-        state["shown"] = df.head(max_rows)
+        """Show the filtered rows in sort order, keeping the selected and focused rows."""
+        paths = state.get("shown", reference_df.head(0))["lf_path"]
+        selected, focused = {paths.iloc[int(item)] for item in table.selection()}, table.focus()
+        focused = paths.iloc[int(focused)] if focused else None
+        df = _sorted(state["df"], state["sort"])
+        shown = state["shown"] = df.head(max_rows)
         table.delete(*table.get_children())
-        for position, (_, row) in enumerate(state["shown"].iterrows()):
-            table.insert("", "end", iid=str(position), text=row["lf_path"],
-                         values=[_cell(column, row[column]) for column in columns])
-        shown = f" (showing {max_rows})" if len(df) > max_rows else ""
-        status.configure(text=f"{len(df)} / {len(reference_df)} rows{shown}")
+        rows = shown[columns].itertuples(index=False, name=None)
+        for position, (index, row, shaded) in enumerate(zip(shown.index, rows, shading(shown))):
+            table.insert("", "end", iid=str(position), text=_cell(index), tags="shaded" if shaded else "",
+                         values=[_cell(value) for value in row])
+        items = {path: str(position) for position, path in enumerate(shown["lf_path"])}
+        table.selection_set([items[path] for path in selected if path in items])
+        if focused in items:
+            table.focus(items[focused])
+        more = f" (showing {max_rows})" if len(df) > max_rows else ""
+        status.configure(text=f"{len(df)} / {len(reference_df)} rows{more}")
 
     def fit_columns(limit=300):
         """Size each column to its heading and longest shown cell, up to limit pixels."""
         from tkinter import font
 
         cell, heading_font = font.nametofont("TkDefaultFont"), font.nametofont("TkHeadingFont")
-        for heading, name in headings:
-            values = state["shown"][name]
-            texts = values.astype(str) if heading == "#0" else (_cell(name, value) for value in values)
-            longest = max(texts, key=len, default="")  # Measuring every cell is slow; the longest text suffices.
-            width = max(heading_font.measure(f"{_label(heading, name)} ▼"), cell.measure(longest)) + 24  # Padding, tree indent.
+        shown = state["shown"]
+        for heading in headings:
+            values = shown.index if heading == "#0" else shown[heading]
+            longest = max(map(_cell, values), key=len, default="")  # Measuring every cell is slow.
+            width = max(heading_font.measure(f"{label(heading)} ▼9"), cell.measure(longest)) + 24  # Padding, tree indent.
             table.column(heading, width=min(width, limit))
 
     def apply_filter(event=None):
-        expression = state["filter"] = query.get().strip()
+        """Filter by the query; a failing one keeps the previous rows and filter, reporting the error."""
+        expression = query.get().strip()
         try:
             state["df"] = reference_df.query(expression) if expression else reference_df
         except Exception as exc:
             status.configure(text=f"Error: {exc}")
             return
+        state["filter"] = expression
         render()
         fit_columns()
         save_view()
 
-    def set_sort(column, ascending):
-        state["sort"] = (column, ascending)
-        for heading, name in headings:
-            arrow = (" ▲" if ascending else " ▼") if name == column else ""
-            table.heading(heading, text=_label(heading, name) + arrow)
+    def set_sort(levels):
+        state["sort"] = levels
+        for heading in headings:
+            table.heading(heading, text=heading_text(heading))
 
-    def sort_by(column):
-        set_sort(column, state["sort"] != (column, True))
+    def sort(levels):
+        set_sort(levels)
         render()
         save_view()
 
+    def cycle_sort(column):
+        """Cycle column's sort level ▲, ▼, off; a new level comes last."""
+        levels = dict(state["sort"])
+        if column not in levels:
+            levels[column] = True
+        elif levels[column]:
+            levels[column] = False
+        else:
+            del levels[column]
+        sort(levels)
+
+    def heading_at(display):
+        """The heading at a Treeview display column such as "#2", which counts shown columns only."""
+        return display if display == "#0" else [column for column in order if column in visible][int(display[1:]) - 1]
+
+    def click_heading(event):
+        if table.identify_region(event.x, event.y) != "heading":
+            return None
+        if event.state & 0x0001:  # Shift.
+            cycle_sort(heading_at(table.identify_column(event.x)))
+        return "break"
+
     def open_row(event=None):
+        """Open the focused row's group below, unless it is already open."""
         item = table.focus()
-        if item:
-            set_root("/" + state["shown"].iloc[int(item)]["lf_path"].lstrip("/"))
+        path = item and "/" + state["shown"].iloc[int(item)]["lf_path"].lstrip("/")
+        if path and path != state.get("opened"):
+            state["opened"] = path
+            set_root(path)
 
     menu = tk.Menu(table, tearoff=False)
     header_menu = tk.Menu(table, tearoff=False)
     arguments = {}
 
     def add_methods(target, scope):
-        """Add a Run entry per registered method of scope; return whether there were any."""
+        """Add a Run entry per registered method of scope, or a note that there is none."""
         registered = {name: method for name, method in reference_df.store._methods.items()
                       if method["scope"] == scope}
         submenus = {}
         for name, method in registered.items():
             _add_menu_command(target, submenus, method["category"],
                               label=f"Run {name}", command=lambda name=name: run(name))
-        return bool(registered)
+        if not registered:
+            target.add_command(label=f"No {scope} methods", state="disabled")
 
-    def open_header_menu(column, x, y):
-        # Treeview identifies display positions; resolve them after hiding or reordering.
-        displayed = [key for key in order if key != "#0" and key in visible]
-        key = "#0" if column == "#0" else displayed[int(column[1:]) - 1]
+    def fill_table_menu():
+        _clear_menu(table_menu)
+        add_methods(table_menu, "table")
+        table_menu.add_separator()
+        table_menu.add_command(label="Clear sort", command=lambda: sort({}),
+                               state="normal" if state["sort"] else "disabled")
+
+    menubar = tk.Menu(window, tearoff=False)
+    menubar.add_command(label="Columns", command=choose_columns)
+    table_menu = tk.Menu(menubar, tearoff=False, postcommand=fill_table_menu)
+    menubar.add_cascade(label="Table", menu=table_menu)
+    window.configure(menu=menubar)
+
+    def open_header_menu(display, x, y):
+        column = heading_at(display)
+        if column == "#0":  # The index always shows.
+            return
 
         def hide():
-            visible.discard(key)
+            visible.discard(column)
             show_columns()
 
         _clear_menu(header_menu)
-        if key == "#0":  # The corner runs table methods.
-            if not add_methods(header_menu, "table"):
-                header_menu.add_command(label="No table methods", state="disabled")
-            header_menu.add_separator()
         header_menu.add_command(label="Hide", command=hide)
         header_menu.tk_popup(x, y)
 
     def run(name):
         if reference_df.store._methods[name]["scope"] == "table":  # All filtered rows, shown columns.
-            rows = state["df"] if state["sort"] is None else _sorted(state["df"], *state["sort"])
-            rows = rows[["lf_path", *(names[key] for key in order if key != "#0" and key in visible)]]
+            rows = _sorted(state["df"], state["sort"])
+            rows = rows[["lf_path", *(column for column in order if column in visible and column != "lf_path")]]
             target = f"{len(rows)} rows"
         else:
             positions = sorted(int(item) for item in table.selection())
@@ -320,32 +405,27 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             table.focus(item)
             table.selection_set(item)
         _clear_menu(menu)
-        if not add_methods(menu, "row"):
-            menu.add_command(label="No row methods", state="disabled")
+        add_methods(menu, "row")
         menu.tk_popup(x, y)
 
     def apply_view(view):
         """Restore columns, sort and filter from view, skipping what the table no longer has."""
-        key_of = {name: key for key, name in headings}
-        saved = [key_of[name] for name in view.get("column_order", ()) if name in key_of]
-        order[:] = saved + [key for key in column_ids if key not in saved]
-        visible.difference_update(key_of[name] for name in view.get("hidden", ()) if name in key_of)
+        saved = [column for column in view.get("column_order", ()) if column in columns]
+        order[:] = saved + [column for column in columns if column not in saved]
+        visible.difference_update(view.get("hidden", ()))
         show_columns()
-        sort = view.get("sort")
-        if sort and sort[0] in key_of:
-            set_sort(sort[0], bool(sort[1]))
+        set_sort({column: bool(ascending) for column, ascending in view.get("sort") or () if column in headings})
         query.set(view.get("filter") or "")
-        state["filter"] = query.get().strip()
 
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
+    table.bind("<Button-1>", click_heading)
     bind_context_menu(table, open_menu, on_heading=open_header_menu)
     apply_view(view)
-    state["restored"] = True
     render()
     fit_columns()
     if query.get().strip():
-        apply_filter()  # On error the unfiltered rows stay, with the error in the status.
+        apply_filter()  # On error the unfiltered rows stay, with the error in the status, and the filter is dropped.
     entry.focus_set()
     save_view()  # A view passed in replaces the saved one even if nothing changes.
     window.mainloop()
