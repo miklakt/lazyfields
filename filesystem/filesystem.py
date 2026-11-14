@@ -220,6 +220,19 @@ class Node:
 
     _filesystem: FileSystem = field(repr=False)
     path: str
+    # Attributes of this handle alone: never stored in the filesystem, its specification or a pickle.
+    _runtime_attrs: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def with_runtime_attrs(self, **attrs: Any) -> Node:
+        """This handle with attributes of its own, kept as long as it is; the filesystem is unchanged.
+
+        Descendants, clones and mounts do not inherit them.
+        """
+        return replace(self, _runtime_attrs={**self._runtime_attrs, **attrs})
+
+    @property
+    def runtime_attrs(self) -> dict[str, Any]:
+        return dict(self._runtime_attrs)
 
     def node(self, path: str | PurePath = "") -> Node:
         """Bind a descendant using a path relative to this node."""
@@ -247,7 +260,8 @@ class Node:
         return self._filesystem.digest(self.path)
 
     def info(self, *, full: bool = True) -> NodeInfo:
-        return self._filesystem.info(self.path, full=full)
+        info = self._filesystem.info(self.path, full=full)
+        return replace(info, runtime_attrs=self.runtime_attrs) if self._runtime_attrs else info
 
     @property
     def origin(self) -> SourceLocator | None:

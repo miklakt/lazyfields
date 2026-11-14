@@ -75,7 +75,8 @@ def _mapping_items(value):
 
 @dataclass(frozen=True)
 class NodeInfo:
-    """Facts derived from a node's source; attrs holds the metadata given to it."""
+    """Facts derived from a node's source; attrs holds the metadata given to it, runtime_attrs the
+    attributes of the node handle it was asked through."""
 
     kind: NodeKind
     children: tuple[str, ...] = ()
@@ -91,6 +92,7 @@ class NodeInfo:
     merged: str | None = None
     axis: int | None = None
     attrs: Mapping[str, Any] = field(default_factory=dict)
+    runtime_attrs: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _h5():

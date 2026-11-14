@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime
 from reprlib import repr as short_repr
 
+from ..filesystem import Node
 from ..filesystem.specification import add_spec_arguments, filesystem_from_arguments
 from .methods import DEFAULT_METHODS, Method, open_value, show_error
 
@@ -188,6 +189,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
     ttk.Label(details, text="   ".join(f"{marker} {name}" for name, marker in {**_KINDS, **_FLAGS}.items())).place(
         relx=1, rely=1, anchor="se", x=-6, y=-3)
     infos, children, previews = {}, {}, {}
+    root = {"path": None, "node": None}  # The shown root, whose node handle keeps its runtime attributes.
 
     def insert(parent, path, name, kind=None, value=None):
         info = infos[path] = filesystem.info(path, full=False)
@@ -211,9 +213,12 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
                                    for name, kind, value in filesystem.items(item))
         return children[item]
 
+    def node_at(path):
+        return root["node"] if path == root["path"] else filesystem.node(path)
+
     def described(path):
         """Info with a dataset's dtype and shape; a group's children are listed by the tree instead."""
-        return filesystem.info(path, full=infos[path].kind != "group")
+        return node_at(path).info(full=infos[path].kind != "group")
 
     def columns(path):
         """Type and value preview for a node."""
@@ -244,11 +249,11 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
             details.insert("", "end", iid="error", text="Error", values=("", str(exc)))
             return
         facts = ((name, getattr(info, name)) for name in _FACTS if getattr(info, name) is not None)
-        rows = [*facts, *info.attrs.items()]
-        if rows:
-            details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
-            for name, value in rows:
-                details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
+        for rows in ([*facts, *info.attrs.items()], info.runtime_attrs.items()):
+            if rows:
+                details.insert("", "end", text="─" * 40, values=("─" * 20, "─" * 60), tags=("attribute", "separator"))
+                for name, value in rows:
+                    details.insert("", "end", text=name, values=_cells(value), tags=("attribute",))
 
     def select(item):
         tree.selection_set(item)
@@ -282,7 +287,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
         return "break"
 
     def open_node(path, call=None):
-        open_value(master, path, filesystem.node(path), call, methods=methods)
+        open_value(master, path, node_at(path), call, methods=methods)
 
     def enter(event):
         item = event.widget.identify_row(event.y)
@@ -294,14 +299,18 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
             tree.item(tree.parent(item), open=True)
             select(item)
 
-    def set_root(path):
+    def set_root(target):
+        """Root the tree at a path, or at a node of this filesystem, whose runtime attributes the root keeps."""
+        node = target if isinstance(target, Node) else filesystem.node(target)
+        path = "/" + node.path
+        root.update(path=path, node=node)
         tree.delete(*tree.get_children())
         details.delete(*details.get_children())
         for cache in (infos, children, previews):
             cache.clear()
-        root = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
-        tree.item(root, open=True)
-        select(root)
+        item = insert("", path, path.rstrip("/").rsplit("/", 1)[-1] or "/")
+        tree.item(item, open=True)
+        select(item)
 
     menu = tk.Menu(details, tearoff=False)
     double_click_font = tkfont.nametofont("TkMenuFont", root=master).copy()
@@ -351,7 +360,8 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
 def _browse(node, methods=DEFAULT_METHODS):
     """Browse a clone of the node's subtree, so later edits leave this window as it was."""
     source = node._filesystem.clone(node.path)
-    return lambda window: panes(window, source, collapse=False, methods=methods)("/")
+    root = source.node().with_runtime_attrs(**node.runtime_attrs)
+    return lambda window: panes(window, source, collapse=False, methods=methods)(root)
 
 
 # Matches any group, and any dataset still reporting the children of what it's really built from
