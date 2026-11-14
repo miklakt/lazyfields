@@ -120,8 +120,11 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     table.pack(fill="both", expand=True)
 
     visible, order = set(columns), list(columns)
+    chosen = []  # Headings selected by clicking, in the order selected; "#0" is the index.
 
     def show_columns():
+        chosen[:] = [column for column in chosen if column == "#0" or column in visible]  # Hidden: no longer selected.
+        show_headings()
         table.configure(displaycolumns=[column for column in order if column in visible])
         save_view()
 
@@ -232,12 +235,17 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         return index_label if column == "#0" else column
 
     def heading_text(column):
-        """The column's label with its sort direction, numbered by level when there are several."""
-        levels = state["sort"]
+        """The column's label, marked when selected, with its sort direction, numbered by level when there are several.
+
+        Several selected columns are numbered, circled, in the order selected.
+        """
+        number, levels = chosen.index(column) + 1 if column in chosen else 0, state["sort"]
+        mark = "▣" if len(chosen) == 1 else chr(0x245F + number) if number <= 20 else f"({number})"
+        text = f"{mark} {label(column)}" if number else label(column)
         if column not in levels:
-            return label(column)
+            return text
         number = list(levels).index(column) + 1 if len(levels) > 1 else ""
-        return f"{label(column)} {'▲' if levels[column] else '▼'}{number}"
+        return f"{text} {'▲' if levels[column] else '▼'}{number}"
 
     def shading(shown):
         """Whether each row is shaded: the groups of the first sort level alternate."""
@@ -276,7 +284,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         for heading in headings:
             values = shown.index if heading == "#0" else shown[heading]
             longest = max(map(_cell, values), key=len, default="")  # Measuring every cell is slow.
-            width = max(heading_font.measure(f"{label(heading)} ▼9"), cell.measure(longest)) + 24  # Padding, tree indent.
+            width = max(heading_font.measure(f"⑳ {label(heading)} ▼9"), cell.measure(longest)) + 24  # Padding, tree indent.
             table.column(heading, width=min(width, limit))
 
     def apply_filter(event=None):
@@ -292,10 +300,13 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         fit_columns()
         save_view()
 
-    def set_sort(levels):
-        state["sort"] = levels
+    def show_headings():
         for heading in headings:
             table.heading(heading, text=heading_text(heading))
+
+    def set_sort(levels):
+        state["sort"] = levels
+        show_headings()
 
     def sort(levels):
         set_sort(levels)
@@ -320,12 +331,26 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     def click_heading(event):
         if table.identify_region(event.x, event.y) != "heading":
             return None
-        if event.state & 0x0001:  # Shift.
-            cycle_sort(heading_at(table.identify_column(event.x)))
+        column = heading_at(table.identify_column(event.x))
+        if event.state & 0x0001:  # Shift sorts.
+            cycle_sort(column)
+        elif event.state & 0x0004:  # Control adds or removes the column.
+            choose([other for other in chosen if other != column] + ([] if column in chosen else [column]))
+        else:  # A click selects the column alone, or deselects it when it already is.
+            choose([] if chosen == [column] else [column])
         return "break"
 
+    def choose(selection):
+        """Select columns, in the order given, instead of rows: opening them uses every filtered row."""
+        chosen[:] = selection
+        table.selection_remove(table.selection())
+        show_headings()
+
     def open_row(event=None):
-        """Open the focused row's group below, unless it is already open."""
+        """Open the focused row's group below, unless it is already open; selecting rows deselects columns."""
+        if table.selection() and chosen:
+            chosen.clear()
+            show_headings()
         item = table.focus()
         path = item and "/" + state["shown"].iloc[int(item)]["lf_path"].lstrip("/")
         if path and path != state.get("opened"):
@@ -363,16 +388,26 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
 
     def open_header_menu(display, x, y):
         column = heading_at(display)
-        if column == "#0":  # The index always shows.
-            return
+        if column not in chosen:
+            choose([column])
 
         def hide():
             visible.discard(column)
             show_columns()
 
         _clear_menu(header_menu)
-        header_menu.add_command(label="Hide", command=hide)
+        if column != "#0":  # The index always shows.
+            header_menu.add_command(label="Hide", command=hide)
+        header_menu.add_command(label="Open selected columns", command=open_columns)
         header_menu.tk_popup(x, y)
+
+    def open_columns():
+        """Open the index and the selected columns, in the order selected, as a group of their values over
+        every filtered row in shown order."""
+        rows = _sorted(state["df"], state["sort"])
+        values = {label(column): (rows.index if column == "#0" else rows[column]).to_numpy()
+                  for column in ["#0", *chosen]}
+        open_value(window, ", ".join(map(str, values)), values, methods=methods)
 
     def run(name):
         if reference_df.store._methods[name]["scope"] == "table":  # All filtered rows, shown columns.
