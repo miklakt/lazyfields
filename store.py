@@ -98,13 +98,6 @@ def _row_value(node: Node, key: Any) -> Any:
         return pd.NA
 
 
-def _validate_keys(keys):
-    """A pipe's field names become column names read as paths, so none may contain '/'."""
-    invalid = next((key for key in keys if isinstance(key, str) and "/" in key), None)
-    if invalid is not None:
-        raise ValueError(f"Key {invalid!r} contains '/', which is reserved for nested paths.")
-
-
 def _modification_time(node):
     try:
         return datetime.fromtimestamp(max(path.stat().st_mtime for path in node.files()))
@@ -127,7 +120,6 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
             print(f"Failed to apply pipe to {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return None
         if row is False: return None
-        _validate_keys(row)
         scalars = {key: value for key, value in row.items() if pd.api.types.is_scalar(value)}
     if columns is not None: scalars = {key: value for key, value in scalars.items() if key in columns}
     if scalars.keys() & _RESERVED:
