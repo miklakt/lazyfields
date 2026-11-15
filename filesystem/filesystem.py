@@ -90,7 +90,10 @@ def _metadata(view: View, obj: Any, key: str | None, version: tuple | None, what
     if version is not None and view.inspect is None and view.inspect_node is None:
         view, obj = MAPPING, _loaded(view, obj, version)  # Whole-file views: every key from one load.
     if what == "items":
-        return tuple((str(name), kind, value) for name, kind, value in view.items(obj, key))
+        # A cached listing keeps scalar values only; any other value is file data, which an entry per
+        # file would keep in memory. Uncached listings (version None) keep every value.
+        return tuple((str(name), kind, value if version is None or kind == "scalar" else None)
+                     for name, kind, value in view.items(obj, key))
     return value_info(view.get(obj, key)) if what == "loaded" else view.info(obj, key)
 
 
