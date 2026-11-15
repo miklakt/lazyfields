@@ -6,11 +6,12 @@ import hashlib
 import os
 import sys
 from collections import OrderedDict
+from collections.abc import Mapping
 from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable
 
 from ..readers import (MAPPING, NodeInfo, NodeKind, View, _reader_match, registered_view,
                        require_reader, value_info)
@@ -82,6 +83,7 @@ class SourceLocator:
 
 
 _SCALAR = NodeInfo("scalar")  # Most nodes are scalars; they share one info.
+_ENTRY_BYTES = 100  # A description entry's dict slot and (info, value) pair.
 
 
 class _Descriptions:
@@ -102,9 +104,9 @@ class _Descriptions:
         for key, info, value in view.nodes(path):
             info = _SCALAR if info == _SCALAR else info
             nodes[key] = info, value
-            # An estimate: the entry, its key and value, and an info of its own with its child names.
-            size += 256 + sys.getsizeof(key) + sys.getsizeof(value)
-            size += 0 if info is _SCALAR else 512 + 64 * len(info.children)
+            # The entry, its key and value, and an info of its own with its child names.
+            size += _ENTRY_BYTES + sys.getsizeof(key) + sys.getsizeof(value)
+            size += 0 if info is _SCALAR else sum(map(sys.getsizeof, (info, info.children, *info.children)))
         with self._lock:
             if version not in self._files:
                 self._files[version] = nodes, size

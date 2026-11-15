@@ -9,7 +9,9 @@ from numbers import Number
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
-from typing import Any, Callable, Iterable, Iterator, Literal, Mapping
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Callable, Iterable, Iterator, Literal
 
 try:
     import orjson as json
@@ -103,7 +105,10 @@ def _describe_value(value: Any, depth: int | None = None):
     return walk(value, (), depth, frozenset())
 
 
-@dataclass(frozen=True)
+_NO_ATTRS = MappingProxyType({})  # Shared by every info without attributes.
+
+
+@dataclass(frozen=True, slots=True)
 class NodeInfo:
     """Facts derived from a node's source; attrs holds the metadata given to it, runtime_attrs the
     attributes of the node handle it was asked through."""
@@ -121,8 +126,8 @@ class NodeInfo:
     # The merge rule that computed this node, such as "stack", or "keys" for a group, and its axis.
     merged: str | None = None
     axis: int | None = None
-    attrs: Mapping[str, Any] = field(default_factory=dict)
-    runtime_attrs: Mapping[str, Any] = field(default_factory=dict)
+    attrs: Mapping[str, Any] = _NO_ATTRS
+    runtime_attrs: Mapping[str, Any] = _NO_ATTRS
 
 
 def _h5():

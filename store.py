@@ -4,12 +4,13 @@ import inspect
 import sys
 import textwrap
 import typing
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime
 from functools import cache, wraps
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 import pandas as pd
 
