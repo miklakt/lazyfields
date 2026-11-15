@@ -98,18 +98,11 @@ def _row_value(node: Node, key: Any) -> Any:
         return pd.NA
 
 
-def _validate_keys(value):
-    pending, seen = [value], set()
-    while pending:
-        current = pending.pop()
-        if not isinstance(current, (Mapping, list, tuple)) or id(current) in seen:
-            continue
-        seen.add(id(current))
-        mapping = isinstance(current, Mapping)
-        invalid = next((key for key in current if isinstance(key, str) and "/" in key), None) if mapping else None
-        if invalid is not None:
-            raise ValueError(f"Key {invalid!r} contains '/', which is reserved for nested paths.")
-        pending.extend(current.values() if mapping else current)
+def _validate_keys(keys):
+    """Names become column names and path segments, so none may contain '/'."""
+    invalid = next((key for key in keys if isinstance(key, str) and "/" in key), None)
+    if invalid is not None:
+        raise ValueError(f"Key {invalid!r} contains '/', which is reserved for nested paths.")
 
 
 def _modification_time(node):
@@ -124,7 +117,7 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
         items = list(node.items())
     except Exception as exc:
         print(f"Failed to load {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr); return None
-    _validate_keys({key: value for key, _, value in items})
+    _validate_keys(key for key, _, _ in items)
     scalars = {key: value for key, kind, value in items if kind == "scalar"}
     store_keys = [key for key, kind, _ in items if kind != "scalar"]
     if pipe:
