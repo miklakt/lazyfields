@@ -15,6 +15,7 @@ data/
 !example/composed_filesystem/data/**/
 !example/composed_filesystem/data/**/*.json
 tests/benchmark_json_data/
+tests/benchmark_cache_data/
 example/large_arrays/json/
 results/
 
