@@ -41,8 +41,8 @@ SIZES = (100, 500)
 # Targets
 READS_PER_FILE = 1  # opens of each file per workload
 RETAINED_KIB_PER_FILE = 32  # memory kept per indexed file: metadata, never data
-# Memory kept regardless of file count, in parsed files: no whole file stays loaded. Versions with no data
-# cache at all measure up to 2 here for list-heavy formats: the allocator keeps memory freed after parsing.
+# Memory kept regardless of file count, in parsed files: no whole file stays loaded. The allocator alone
+# keeps up to 2 here for list-heavy formats, holding memory freed after parsing.
 KEPT_FILES = 2.5
 TRANSIENT_FILES = 2.0  # peak above what is retained, in parsed files: one file at a time, plus parsing
 MEMORY_LIMIT = 8 * 1024 * MiB  # address space of each run, so a leaking version fails instead of swapping

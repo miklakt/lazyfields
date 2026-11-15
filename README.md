@@ -137,7 +137,8 @@ Indexed fields named like the four columns above are rejected as well.
 
 You can register methods for use on one row or a selection of rows.
 Each method receives a row as its first argument, like a pipe callback: a dict of the
-row's columns, backed by its group, so other fields are read on demand with `row["key"]`.
+row's columns, backed by its group, so other fields are read on demand with `row["key"]`,
+and `row.node["key"]` reads the source even where a column shadows it.
 On a DataFrame, its result is a Series with the same index.
 
 ```python
@@ -254,8 +255,12 @@ Use `pipe=[...]` to process each file as the reference table is built, compute a
 Callbacks receive a dict of the row's indexed scalars, backed by its group: any
 other field is read on demand, including nested paths and selections such as
 `row["group/array", :10]`. HDF5 selections read only the requested part of the
-dataset. Assigning a field changes the reference row and shadows a source field of
-the same name.
+dataset. Assigning a field changes the reference row; the source is read-only.
+A field shadows the source under its name and everything below it, so after
+`row["config"] = {"a": 1}`, `row["config/a"]` is `1`; a warning names each field
+that shadows source data, once. `row.node` reads the source as stored, shadowed or
+not: `row.node["config/a"]`. Values read from the source belong to it: copy one
+before changing it.
 Pipe errors skip the affected file by default and print a one-line error.
 Pass `pipe_error_skip=False` to `create_reference_table` or `update_reference_table`
 to raise the original exception instead.

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from .pipe import _NodeRow, _apply_pipe
+from .pipe import _NodeRow, _apply_pipe, _warn_shadowing
 from .filesystem import FileSystem, Node
 
 # Columns added to every row; indexed fields cannot use these names.
@@ -121,6 +121,7 @@ def _reference_row_from_node(node: Node, *, columns=None, pipe=None, pipe_error_
             print(f"Failed to apply pipe to {node.path}: {type(exc).__name__}: {exc}", file=sys.stderr)
             return None
         if row is False: return None
+        _warn_shadowing(row, scalars)
         scalars = {key: value for key, value in row.items() if pd.api.types.is_scalar(value)}
     if columns is not None: scalars = {key: value for key, value in scalars.items() if key in columns}
     if scalars.keys() & _RESERVED:

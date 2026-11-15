@@ -149,14 +149,14 @@ def run_case(root, layout, directory, warmup, workload):
     import inspect
     import lazyfields
 
-    # Versions before filesystem specifications index a directory's files only, and have no browser.
-    legacy = "directory" in inspect.signature(lazyfields.create_reference_table).parameters
-    if legacy and (layout in ("one_file_rows", "run_dirs") or workload == "browse"):
+    # A version indexing only a directory's files has no specifications and no browser.
+    directory_only = "directory" in inspect.signature(lazyfields.create_reference_table).parameters
+    if directory_only and (layout in ("one_file_rows", "run_dirs") or workload == "browse"):
         return {"skipped": "not in this version"}
     resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
 
     def table(directory, **kwargs):
-        if legacy:
+        if directory_only:
             return lazyfields.create_reference_table(str(directory), **kwargs)
         source, relative_to, _ = source_of(layout, directory)
         options = {"relative_to": relative_to} if relative_to else {}
@@ -182,7 +182,7 @@ def run_case(root, layout, directory, warmup, workload):
         reference = table(directory)
         if workload == "update":
             measured()
-            return lazyfields.update_reference_table(reference, *([str(directory)] if legacy else []))
+            return lazyfields.update_reference_table(reference, *([str(directory)] if directory_only else []))
         measured()
         if workload == "browse":
             fs = reference.attrs["filesystem"].filesystem
