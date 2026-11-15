@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reads versus RAM of metadata caching, over many JSON and pickle files.
 
-Many files are spawned "virtually": one template file per format is hard-linked N times, so every
-path is a real, distinct file the readers parse, while the disk holds one copy. Each workload runs
+Many files are spawned "virtually": one template file per format is symlinked N times, so every
+path is a distinct file the readers parse, while the disk holds one copy. Each workload runs
 in a fresh process, at two file counts, and is checked against two targets that pull opposite ways:
 
 1. reads: every file is opened once to fill in its structure (index, browse, or both together), and
@@ -68,7 +68,7 @@ def _write(path, fmt, size=SIGNAL):
 
 
 def prepare(data_dir, fmt, n):
-    """A directory of n hard links to the format's template; the template is written once.
+    """A directory of n symlinks to the format's template; the template is written once.
 
     A tiny file of the same shape goes in a warmup directory beside it, for the imports and setup a
     first run does once, so they are not counted as retained.
@@ -82,7 +82,7 @@ def prepare(data_dir, fmt, n):
         for file in directory.iterdir():
             file.unlink()
         for i in range(n):
-            os.link(source, directory / f"r{i:05d}{suffix}")
+            (directory / f"r{i:05d}{suffix}").symlink_to(os.path.relpath(source, directory))
     return directory, source
 
 
