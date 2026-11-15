@@ -11,11 +11,11 @@ import types
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import cache, lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import NodeInfo, NodeKind, Reader, _group_entries, _path_get, value_info, value_kind
+from . import NodeInfo, NodeKind, Reader, _group_entries, _path_get, _child_key, value_info, value_kind
 
 _ALLOWED = frozenset({
     *(("builtins", name) for name in ("bytearray", "complex", "getattr", "object", "range", "slice")),
@@ -487,11 +487,6 @@ def _load(path: str | Path, trust=frozenset()) -> Any:
             raise
 
 
-def pickle_load(path: str | Path) -> Any:
-    """Load modern pickle data using the safe built-in allowlist."""
-    return _load(path)
-
-
 @dataclass(eq=False)
 class _Ref:
     """A global, or what calling it builds, as the scan records it without building; args is None until called."""
@@ -594,18 +589,6 @@ def _scan(file, trust=frozenset()):
     raise ValueError("Pickle ends without STOP.")
 
 
-@lru_cache(maxsize=16)
-def _scanned(path: str, size: int, modified: int, trust):
-    with open(path, "rb") as file:
-        return _scan(file, trust)
-
-
-def _structure(path, key, trust=frozenset()):
-    """The structure at key, scanned once per file version."""
-    stat = Path(path).stat()
-    return _path_get(_scanned(str(path), stat.st_size, stat.st_mtime_ns, trust), key or "")
-
-
 def _parts(node) -> Iterable:
     if isinstance(node, _Ref):
         return node.args, node.state
@@ -654,19 +637,15 @@ def _array(node) -> NodeInfo | None:
                                                           type="numpy.ndarray")
 
 
-def _inspect_node(path, key=None, *, trust=frozenset()) -> NodeInfo:
-    node = _structure(path, key, trust)
-    kind = _kind(node)
-    if kind == "group":
-        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)),
-                        type=node.type if isinstance(node, _Proxy) else None)
+def _info(node, kind) -> NodeInfo:
     if kind == "scalar":
         return NodeInfo(kind)
-    if isinstance(node, _Proxy):
-        # A registered reconstructor recognized this as a dataset - independent of _plain()/_array(),
-        # which only make sense for a _Ref's own already-scanned content, not a proxy's parts. Its
-        # children are listed anyway, so Browse still reaches the pickle internals underneath.
-        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)), type=node.type)
+    if kind == "group" or isinstance(node, _Proxy):
+        # A proxy a registered reconstructor recognized as a dataset - independent of _plain()/_array(),
+        # which only make sense for a _Ref's own already-scanned content, not a proxy's parts - lists its
+        # children anyway, so Browse still reaches the pickle internals underneath.
+        return NodeInfo(kind, tuple(str(name) for name, _ in _group_entries(node)),
+                        type=node.type if isinstance(node, _Proxy) else None)
     if (array := _array(node)) is not None:
         return array
     if _plain(node):
@@ -674,24 +653,31 @@ def _inspect_node(path, key=None, *, trust=frozenset()) -> NodeInfo:
     return NodeInfo(kind, type=".".join(node.name) if isinstance(node, _Ref) else None)
 
 
-def _inspect(path, key=None, *, trust=frozenset()) -> Iterable[tuple[str, NodeKind, Any]]:
-    node = _structure(path, key, trust)
-    if _kind(node) != "group":
-        raise NotADirectoryError(key)
-    loaded = None
-    for name, child in _group_entries(node):
-        kind = _kind(child)
-        if kind == "scalar" and not _plain(child):  # Dates, decimals and skipped bytes show their loaded value.
-            loaded = _path_get(_load(path, trust), key or "") if loaded is None else loaded
-            child = _path_get(loaded, str(name))
-        yield str(name), kind, child if kind == "scalar" else None
+def _describe(path, *, trust=frozenset()) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+    """Every node from one scan; the file is loaded only for dates, decimals and skipped bytes, which show
+    their loaded value."""
+    with open(path, "rb") as file:
+        root = _scan(file, trust)
+    loaded = cache(lambda: _load(path, trust))
+
+    def walk(node, key, ancestors):
+        kind = _kind(node)
+        info = _info(node, kind)
+        if kind == "scalar" and not _plain(node):
+            node = _path_get(loaded(), key or "")
+        yield key, info, node if kind == "scalar" else None
+        if info.children and id(node) not in ancestors:
+            for name, child in _group_entries(node):
+                yield from walk(child, _child_key(key, name), ancestors | {id(node)})
+
+    yield from walk(root, None, frozenset())
 
 
 def pickle_reader(*, trust=None) -> Reader:
     """A protocol 4/5 reader whose trusted classes and module prefixes are local to the reader."""
     trust = _trust(trust)
-    return Reader(partial(_load, trust=trust), inspect=partial(_inspect, trust=trust),
-                  inspect_node=partial(_inspect_node, trust=trust), suffixes=(".pkl", ".pickle"), format="pickle")
+    return Reader(partial(_load, trust=trust), describe=partial(_describe, trust=trust), suffixes=(".pkl", ".pickle"),
+                  format="pickle")
 
 
 PICKLE = pickle_reader()

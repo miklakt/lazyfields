@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from . import Reader
+from . import NodeInfo, Reader
 
 
 # Zero-based slices for the fixed-width PDB ATOM and HETATM records.
@@ -65,13 +65,11 @@ def _pdb_read(path, key, selection=None):
     return value if selection is None else value[selection]
 
 
-def _pdb_inspect(path, key=None):
-    if key is not None:
-        if not any(name == key for name, _, _ in _pdb_inspect(path)):
-            raise KeyError(key)
-        raise NotADirectoryError(key)
-    yield from ((key, "scalar", value) for key, value in _pdb_metadata(path).items())
-    yield from ((key, "dataset", None) for key in (*_PDB_COLUMNS, "bonds"))
+def _pdb_describe(path):
+    metadata, columns = _pdb_metadata(path), (*_PDB_COLUMNS, "bonds")
+    yield None, NodeInfo("group", (*metadata, *columns)), None
+    yield from ((key, NodeInfo("scalar"), value) for key, value in metadata.items())
+    yield from ((key, NodeInfo("dataset"), None) for key in columns)
 
 
-PROTEIN_DATA_BANK = Reader(_pdb_load, _pdb_read, _pdb_inspect, suffixes=(".pdb", ".ent"), format="pdb")
+PROTEIN_DATA_BANK = Reader(_pdb_load, _pdb_read, describe=_pdb_describe, suffixes=(".pdb", ".ent"), format="pdb")

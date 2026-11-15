@@ -193,7 +193,7 @@ def panes(master, filesystem, *, navigation_widgets=(), collapse=True, methods=D
 
     def insert(parent, path, name, kind=None, value=None):
         info = infos[path] = filesystem.info(path, full=False)
-        if kind == "scalar" or kind == "dataset" and value is not None:
+        if kind == "scalar":
             previews[path] = _cells(value)
         if info.format == "directory":
             previews[path] = ("directory", f"{len(filesystem.listdir(path))} entries")

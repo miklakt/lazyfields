@@ -77,7 +77,7 @@ def mount(filesystem: FileSystem, mountpoint: str | Path, *, presenters=(), fore
             self.contents = {}
             # Sizes are known once rendered; until then files report zero.
             self.sizes = {}
-            # Whole-file readers reload per lookup, so keep each group's entries
+            # Each file's getattr resolves through its parent's entries, so keep each group's
             # {os name: (path, kind, render)} together with the group's digest.
             self.groups = {}
 

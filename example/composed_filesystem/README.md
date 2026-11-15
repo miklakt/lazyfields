@@ -98,11 +98,14 @@ is shorthand for wrapping and mounting each relative filename this way. Repeated
 filenames are registered once; overlapping file paths are rejected before mounting.
 
 Every source is an object interpreted by a `View`: its `load`, and optionally
-`read`, `inspect` and `inspect_node`, answer for the object at a key. A `Reader`
-is a `View` whose object is a file's path, selected by its `suffixes`.
+`read`, answer for the object at a key, and its optional `describe` gives every
+node's kind, children, dtype and shape, and scalar values in one pass without
+loading the data. A `Reader` is a `View` whose object is a file's path, selected
+by its `suffixes`. A file is described once per version, so listing and
+browsing it do not read it again; its data is read on each access and not kept.
 `FileSystem.from_value(value)` roots a filesystem at an in-memory object, by
 default with `MAPPING`, which treats mappings and lists of mappings as groups.
-Pass `view=` to interpret other objects; give it `inspect_node` to decide which
+Pass `view=` to interpret other objects; give it `describe` to decide which
 nodes are groups. In-memory sources have no files to locate and cannot be
 exported with `to_spec()`.
 

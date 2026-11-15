@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from operator import index
 from typing import Mapping
 
-from .filesystem import FileSystem, Node, _Composed, _digest, _is_name
+from .filesystem import FileSystem, Node, _ChildrenSource, _digest, _is_name
 from ..readers import NodeInfo, value_info
 
 __all__ = ["merge", "collect", "prefer", "prefix", "stack", "concatenate", "vstack", "hstack"]
@@ -122,7 +122,7 @@ class _MergedDataset:
 
 
 @dataclass(frozen=True)
-class _MergedGroup(_Composed):
+class _MergedGroup(_ChildrenSource):
     """Keys of the sources, resolved by rules when merged."""
 
     merged = "keys"

@@ -17,7 +17,7 @@ except ImportError:
     import json
 
 
-def json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
+def _json_load(path: str | Path) -> Mapping[str, Any]: return json.loads(Path(path).read_bytes())
 
 
 NodeKind = Literal["scalar", "dataset", "group"]
@@ -68,9 +68,23 @@ def value_info(value: Any) -> NodeInfo:
     return NodeInfo(kind)
 
 
-def _mapping_items(value):
-    if value_kind(value) != "group": raise NotADirectoryError("items requires a group.")
-    return ((name, value_kind(item), item) for name, item in _group_entries(value))
+def _child_key(key: str | None, name: Any) -> str:
+    return f"{key}/{name}" if key else str(name)
+
+
+def _describe_value(value: Any, key: str | None = None, depth: int | None = None):
+    """(key, info, scalar value or None) for value and its descendants, depth levels down or all.
+
+    Nodes at the depth limit are given their kind only; a group containing itself is not entered again.
+    """
+    def walk(value, key, depth, ancestors):
+        info = value_info(value) if depth != 0 else NodeInfo(value_kind(value))
+        yield key, info, value if info.kind == "scalar" else None
+        if info.kind == "group" and depth != 0 and id(value) not in ancestors:
+            for name, item in _group_entries(value):
+                yield from walk(item, _child_key(key, name), depth and depth - 1, ancestors | {id(value)})
+
+    return walk(value, key, depth, frozenset())
 
 
 @dataclass(frozen=True)
@@ -142,10 +156,7 @@ def _open_hdf5(path: str | Path) -> Any:
 def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
     """Open an HDF5 file and yield the selected node."""
     with _open_hdf5(path) as file:
-        node = file
-        for part in filter(None, (key or "").split("/")):
-            node = node[part]
-        yield node
+        yield file[key] if key else file
 
 
 def _read(node: Any) -> Any:
@@ -153,7 +164,7 @@ def _read(node: Any) -> Any:
     return {key: _read(node[key]) for key in node.keys()}
 
 
-def hdf5_load(path: str | Path) -> Mapping[str, Any]:
+def _hdf5_load(path: str | Path) -> Mapping[str, Any]:
     with _hdf5_node(path) as file: return _read(file)
 
 
@@ -173,20 +184,21 @@ def _hdf5_kind(node: Any) -> NodeKind:
     return "group" if isinstance(node, _h5().Group) else "scalar" if node.shape == () else "dataset"
 
 
-def hdf5_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
-    with _hdf5_node(path, key) as group:
-        if not isinstance(group, _h5().Group): raise NotADirectoryError(key)
-        for name, node in group.items():
-            kind = _hdf5_kind(node)
-            yield name, kind, _dataset_value(node) if kind == "scalar" else None
-
-
-def hdf5_info(path: str | Path, key: str | None = None) -> NodeInfo:
-    with _hdf5_node(path, key) as node:
+def hdf5_describe(path: str | Path) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+    def walk(node, key, ancestors):
         kind = _hdf5_kind(node)
-        if kind == "dataset":
-            return NodeInfo(kind, dtype=str(node.dtype), shape=node.shape)
-        return NodeInfo(kind, tuple(node.keys()) if kind == "group" else ())
+        if kind == "group":
+            yield key, NodeInfo(kind, tuple(node.keys())), None
+            if node.id not in ancestors:  # A hard link back to an ancestor is listed, not entered.
+                for name, child in node.items():
+                    yield from walk(child, _child_key(key, name), ancestors | {node.id})
+        elif kind == "dataset":
+            yield key, NodeInfo(kind, dtype=str(node.dtype), shape=node.shape), None
+        else:
+            yield key, NodeInfo(kind), _dataset_value(node)
+
+    with _open_hdf5(path) as file:
+        yield from walk(file, None, frozenset())
 
 
 def _path_get(value: Any, key: str) -> Any:
@@ -213,16 +225,14 @@ def _check_key(key: Any) -> None:
 
 @dataclass(frozen=True)
 class View:
-    """Interprets one object: its value, and the kinds, children and values at keys below it."""
+    """Interprets one object: its value, and the kinds, children and scalar values of the nodes in it."""
 
     # Returns the object's complete value
     load: Callable[..., Any]
     # Optional read(obj, key, selection): one key or selection directly, without loading everything
     read: Callable[..., Any] | None = None
-    # Optional inspect(obj, key=None): immediate children; non-scalar values may be omitted.
-    inspect: Callable[..., Iterable[tuple[str, NodeKind, Any]]] | None = None
-    # Optional inspect_node(obj, key=None): kind and children, or dataset metadata, at any key.
-    inspect_node: Callable[..., NodeInfo] | None = field(default=None, kw_only=True)
+    # Optional describe(obj): every node in one pass, as nodes() gives them, without loading the data.
+    describe: Callable[..., Iterable[tuple[str | None, NodeInfo, Any]]] | None = field(default=None, kw_only=True)
     # Format of the object's root, such as "pdb".
     format: str | None = field(default=None, kw_only=True, compare=False)
 
@@ -240,34 +250,12 @@ class View:
             value = as_array(value)
         return value if selection is None else value[selection]
 
-    def info(self, obj: Any, key: str | None = None) -> NodeInfo:
-        """Use metadata when supported, otherwise classify one loaded value."""
-        if self.inspect_node is not None: return self.inspect_node(obj, key)
-        if self.inspect is not None:
-            if key is None:
-                return NodeInfo("group", tuple(str(name) for name, _, _ in self.items(obj)))
-            if key and "/" not in key:
-                for name, kind, _ in self.items(obj):
-                    if name == key:
-                        if kind != "group": return NodeInfo(kind)
-                        break
-        return value_info(self.get(obj, key))
+    def nodes(self, obj: Any) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+        """Every node as (key, info, scalar value or None): the root as key None, each parent before its children.
 
-    def items(self, obj: Any, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
-        """Inspect immediate group children as (name, kind, value)"""
-        _check_key(key)
-        key = key.strip("/") or None if key else None
-        if self.inspect is not None:
-            yield from self.inspect(obj, key)
-        elif self.inspect_node is not None:
-            info = self.info(obj, key)
-            if info.kind != "group": raise NotADirectoryError(key)
-            for name in info.children:
-                child = f"{key}/{name}" if key else name
-                kind = self.info(obj, child).kind
-                yield name, kind, self.get(obj, child) if kind == "scalar" else None
-        else:
-            yield from _mapping_items(self.get(obj, key))
+        A dataset's info may leave dtype and shape out, for reading its value to tell.
+        """
+        return self.describe(obj) if self.describe is not None else _describe_value(self.load(obj))
 
 
 @dataclass(frozen=True)
@@ -283,10 +271,12 @@ class Reader(View):
 MAPPING = View(lambda value: value)
 
 
+@dataclass(frozen=True)
 class DebugReader(Reader):
-    """Decorate a Reader with timestamped stdout logs of backend requests."""
+    """A Reader whose backend requests are logged to stdout with timestamps; of(reader) decorates one."""
 
-    def __init__(self, reader: Reader):
+    @classmethod
+    def of(cls, reader: Reader) -> DebugReader:
         logger = logging.getLogger("lazyfields.DebugReader")
         if not logger.handlers:
             handler = logging.StreamHandler(sys.stdout)
@@ -302,11 +292,8 @@ class DebugReader(Reader):
                 return callback(*args, **kwargs)
             return call
 
-        super().__init__(
-            suffixes=reader.suffixes, format=reader.format,
-            **{name: logged(name, getattr(reader, name))
-               for name in ("load", "read", "inspect", "inspect_node")},
-        )
+        hooks = {name: logged(name, getattr(reader, name)) for name in ("load", "read", "describe")}
+        return cls(**hooks, suffixes=reader.suffixes, format=reader.format)
 
 
 _ARCHIVE_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip")
@@ -344,7 +331,7 @@ def debug_readers() -> None:
     """Enable debug logging for registered readers; call before creating filesystems."""
     for reader in _READERS.values():
         if not isinstance(reader, DebugReader):
-            debug = DebugReader(reader)
+            debug = DebugReader.of(reader)
             for suffix in reader.suffixes:
                 _READERS[suffix.lower()] = debug
 
@@ -428,7 +415,7 @@ def unpacked_archive_member(path: str | Path) -> Iterator[Path]:
             yield _copy_member(source, cache_dir / inner_name)
 
 
-def archive_load(path: str | Path) -> Mapping[str, Any]:
+def _archive_load(path: str | Path) -> Mapping[str, Any]:
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).load(inner_path)
 
 
@@ -436,20 +423,16 @@ def archive_get(path: str | Path, key: str, selection: Any | None = None) -> Any
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).get(inner_path, key, selection)
 
 
-def archive_inspect(path: str | Path, key: str | None = None) -> Iterable[tuple[str, NodeKind, Any]]:
-    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).items(inner_path, key)
+def archive_describe(path: str | Path) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).nodes(inner_path)
 
 
-def archive_info(path: str | Path, key: str | None = None) -> NodeInfo:
-    with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).info(inner_path, key)
-
-
-from .pickled import PICKLE, pickle_load, pickle_reader  # noqa: E402  Builds on the names above.
+from .pickled import PICKLE, pickle_reader  # noqa: E402  Builds on the names above.
 
 for _reader in (
     PICKLE,
-    Reader(json_load, suffixes=(".json",), format="json"),
-    Reader(hdf5_load, hdf5_get, hdf5_inspect, inspect_node=hdf5_info, suffixes=(".h5", ".hdf5"), format="hdf5"),
-    Reader(archive_load, archive_get, archive_inspect, inspect_node=archive_info, suffixes=_ARCHIVE_SUFFIXES,
+    Reader(_json_load, suffixes=(".json",), format="json"),
+    Reader(_hdf5_load, hdf5_get, describe=hdf5_describe, suffixes=(".h5", ".hdf5"), format="hdf5"),
+    Reader(_archive_load, archive_get, describe=archive_describe, suffixes=_ARCHIVE_SUFFIXES,
            format="archive")
     ): register_reader(_reader)

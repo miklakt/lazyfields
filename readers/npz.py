@@ -6,16 +6,24 @@ from numpy.lib import format as npy_format
 from . import NodeInfo, Reader, _normalize
 
 
-def _npz_headers(path):
+def _npz_describe(path):
+    """Every array's dtype and shape from its header; only scalars are read."""
+    entries = []
     with ZipFile(path) as archive:
         for member in archive.infolist():
             if not member.filename.endswith(".npy"): continue
             with archive.open(member) as file:
                 version = npy_format.read_magic(file)
-                read_header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
-                shape, _, dtype = read_header(file)
-            if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
-            yield member.filename[:-4], "scalar" if shape == () else "dataset", {"dtype": str(dtype), "shape": shape}
+                header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
+                shape, _, dtype = header(file)
+                if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
+                if shape == ():
+                    file.seek(0)
+                    entries.append((member.filename[:-4], NodeInfo("scalar"), _normalize(npy_format.read_array(file))))
+                else:
+                    entries.append((member.filename[:-4], NodeInfo("dataset", dtype=str(dtype), shape=shape), None))
+    yield None, NodeInfo("group", tuple(name for name, _, _ in entries)), None
+    yield from entries
 
 
 def _npz_load(path):
@@ -30,23 +38,5 @@ def _npz_read(path, key, selection=None):
         return _normalize(value)
 
 
-def _npz_inspect(path, key=None):
-    if key is not None:
-        _npz_info(path, key)
-        raise NotADirectoryError(key)
-    with np.load(path, allow_pickle=False) as archive:
-        for key, kind, _ in _npz_headers(path):
-            yield key, kind, _normalize(archive[key]) if kind == "scalar" else None
-
-
-def _npz_info(path, key=None):
-    if key is None:
-        return NodeInfo("group", tuple(name for name, _, _ in _npz_headers(path)))
-    for name, kind, attrs in _npz_headers(path):
-        if name == key:
-            return NodeInfo(kind, **(attrs if kind == "dataset" else {}))
-    raise KeyError(key)
-
-
-NUMPY_ARCHIVE = Reader(_npz_load, _npz_read, _npz_inspect, inspect_node=_npz_info, suffixes=(".npz",),
+NUMPY_ARCHIVE = Reader(_npz_load, _npz_read, describe=_npz_describe, suffixes=(".npz",),
                        format="npz")

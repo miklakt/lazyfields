@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
+from collections import OrderedDict
 from copy import copy
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
 from pathlib import Path, PurePath
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import MAPPING, NodeInfo, NodeKind, View, _reader_match, registered_view, require_reader, value_info
+from ..readers import (MAPPING, NodeInfo, NodeKind, View, _child_key, _describe_value, _reader_match, registered_view,
+                       require_reader, value_info)
 
 if TYPE_CHECKING:
     from .merge import _MergedDataset, _MergedGroup
@@ -78,23 +81,40 @@ class SourceLocator:
         return self.file_path / (self.infile_path or "")
 
 
-@lru_cache(maxsize=2)
-def _loaded(view: View, obj: Any, version: tuple) -> Any:
-    """A whole-file view's value, for metadata only; reads load their own."""
-    return view.load(obj)
+_SCALAR = NodeInfo("scalar")  # Most nodes are scalars; they share one info.
 
 
-@lru_cache(maxsize=4096)
-def _metadata(view: View, obj: Any, key: str | None, version: tuple | None, what: str) -> Any:
-    """A node's info, info from its loaded value, or items; cached per file version by the caller."""
-    if version is not None and view.inspect is None and view.inspect_node is None:
-        view, obj = MAPPING, _loaded(view, obj, version)  # Whole-file views: every key from one load.
-    if what == "items":
-        # A cached listing keeps scalar values only; any other value is file data, which an entry per
-        # file would keep in memory. Uncached listings (version None) keep every value.
-        return tuple((str(name), kind, value if version is None or kind == "scalar" else None)
-                     for name, kind, value in view.items(obj, key))
-    return value_info(view.get(obj, key)) if what == "loaded" else view.info(obj, key)
+class _Descriptions:
+    """Files' nodes, described once per file version and kept within a memory budget: metadata, never data."""
+
+    def __init__(self, budget: int):
+        self._files: OrderedDict[tuple, tuple[dict, int]] = OrderedDict()
+        self._size, self._budget, self._lock = 0, budget, Lock()
+
+    def __call__(self, view: View, path: Path) -> dict[str | None, tuple[NodeInfo, Any]]:
+        stat = path.stat()
+        version = (view, path, stat.st_size, stat.st_mtime_ns)
+        with self._lock:
+            if version in self._files:
+                self._files.move_to_end(version)
+                return self._files[version][0]
+        nodes, size = {}, 0
+        for key, info, value in view.nodes(path):
+            info = _SCALAR if info == _SCALAR else info
+            nodes[key] = info, value
+            # An estimate: the entry, its key and value, and an info of its own with its child names.
+            size += 256 + sys.getsizeof(key) + sys.getsizeof(value)
+            size += 0 if info is _SCALAR else 512 + 64 * len(info.children)
+        with self._lock:
+            if version not in self._files:
+                self._files[version] = nodes, size
+                self._size += size
+                while self._size > self._budget and len(self._files) > 1:
+                    self._size -= self._files.popitem(last=False)[1][1]
+        return nodes
+
+
+_described = _Descriptions(64 * 1024 * 1024)
 
 
 @dataclass(frozen=True, eq=False)
@@ -129,19 +149,33 @@ class _Source:
     def info(self, *, full=True):
         if self.key is None and not full and isinstance(self.obj, (Path, FileSystem)):
             return NodeInfo("group")  # A file's root, or an interpreted node, is a group; saying so reads nothing.
-        info = self._metadata("info")
-        # Views without metadata describe a dataset only by loading it.
-        return self._metadata("loaded") if full and info.kind == "dataset" and info.dtype is None else info
+        nodes = self._nodes()
+        info = nodes[self.key][0]
+        if full and info.kind == "dataset" and info.dtype is None:  # Left for the value to tell, and remembered.
+            info = value_info(self.read())
+            nodes[self.key] = info, None
+        return info
 
     def items(self):
-        return iter(self._metadata("items"))
+        nodes = self._nodes()
+        info = nodes[self.key][0]
+        if info.kind != "group":
+            raise NotADirectoryError(self.key)
+        children = [nodes[_child_key(self.key, name)] for name in info.children]
+        return iter([(name, child.kind, value) for name, (child, value) in zip(info.children, children)])
 
-    def _metadata(self, what):
-        """Cached while a file's size and mtime stay; in-memory and interpreted objects are asked each time."""
+    def scalar(self):
+        """This scalar node's value, as described with it."""
+        return self._nodes()[self.key][1]
+
+    def _nodes(self):
+        """Nodes by key: all of a file's, described once per version; another object's at this key, each time."""
         if isinstance(self.obj, Path):
-            stat = self.obj.stat()
-            return _metadata(self.view, self.obj, self.key, (stat.st_size, stat.st_mtime_ns), what)
-        return _metadata.__wrapped__(self.view, self._object, self.key, None, what)
+            return _described(self.view, self.obj)
+        if self.view.describe is not None:
+            return {key: (info, value) for key, info, value in self.view.describe(self._object)}
+        value = self.view.get(self._object, self.key)
+        return {key: (info, value) for key, info, value in _describe_value(value, self.key, depth=1)}
 
     def locate(self, selection=None):
         if selection is not None and self.key is None:
@@ -168,6 +202,8 @@ class _Source:
 class _ChildrenSource:
     """A group answering from its namespace children."""
 
+    origin = format = merged = None
+
     children: dict[str, FileSystem]
 
     def read(self, selection=None):
@@ -180,8 +216,9 @@ class _ChildrenSource:
 
     def items(self):
         for name, child in self.children.items():
-            kind = child._backing.info(full=False).kind
-            yield name, kind, child[:] if kind == "scalar" else None
+            backing = child._backing
+            kind = backing.info(full=False).kind
+            yield name, kind, backing.scalar() if kind == "scalar" else None  # Only a source's node is a scalar.
 
     def locate(self, selection=None):
         if selection is not None:
@@ -197,14 +234,7 @@ class _ChildrenSource:
 
 
 @dataclass(frozen=True)
-class _Composed(_ChildrenSource):
-    """Children resolved once, when built; editing works on copies, keeping these for export."""
-
-    origin = format = merged = None
-
-
-@dataclass(frozen=True)
-class _Directory(_Composed):
+class _Directory(_ChildrenSource):
     """A directory with the supported files its glob patterns matched."""
 
     format = "directory"
