@@ -12,7 +12,7 @@ from pathlib import Path, PurePath
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from ..readers import (MAPPING, NodeInfo, NodeKind, View, _child_key, _describe_value, _reader_match, registered_view,
+from ..readers import (MAPPING, NodeInfo, NodeKind, View, _reader_match, registered_view,
                        require_reader, value_info)
 
 if TYPE_CHECKING:
@@ -161,7 +161,7 @@ class _Source:
         info = nodes[self.key][0]
         if info.kind != "group":
             raise NotADirectoryError(self.key)
-        children = [nodes[_child_key(self.key, name)] for name in info.children]
+        children = [nodes[_join(self.key, name)] for name in info.children]  # Names are path segments.
         return iter([(name, child.kind, value) for name, (child, value) in zip(info.children, children)])
 
     def scalar(self):
@@ -172,10 +172,7 @@ class _Source:
         """Nodes by key: all of a file's, described once per version; another object's at this key, each time."""
         if isinstance(self.obj, Path):
             return _described(self.view, self.obj)
-        if self.view.describe is not None:
-            return {key: (info, value) for key, info, value in self.view.describe(self._object)}
-        value = self.view.get(self._object, self.key)
-        return {key: (info, value) for key, info, value in _describe_value(value, self.key, depth=1)}
+        return {key: (info, value) for key, info, value in self.view.nodes(self._object, self.key, depth=1)}
 
     def locate(self, selection=None):
         if selection is not None and self.key is None:

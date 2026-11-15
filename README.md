@@ -9,7 +9,8 @@ By default, each file contains a dictionary of named fields and becomes one row 
 the DataFrame. Scalar fields become columns you can use to inspect and filter the
 data. Larger or nested values, such as arrays and dictionaries, stay in the source
 files and are loaded only when requested through the DataFrame's `.store` accessor,
-for example `reference_df.store["path/to/value"]`.
+for example `reference_df.store["path/to/value"]`. A key that itself holds `/` or `~`
+is written escaped as in JSON Pointer (RFC 6901): `~1` for `/`, `~0` for `~`.
 
 > **Note:** Numbers, strings, booleans, dates, times, and `None` are scalar; lists, dictionaries, and arrays are not.
 

@@ -15,7 +15,7 @@ from functools import cache, lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import NodeInfo, NodeKind, Reader, _group_entries, _path_get, _child_key, value_info, value_kind
+from . import NodeInfo, NodeKind, Reader, _group_entries, _path_get, value_info, value_kind
 
 _ALLOWED = frozenset({
     *(("builtins", name) for name in ("bytearray", "complex", "getattr", "object", "range", "slice")),
@@ -653,24 +653,24 @@ def _info(node, kind) -> NodeInfo:
     return NodeInfo(kind, type=".".join(node.name) if isinstance(node, _Ref) else None)
 
 
-def _describe(path, *, trust=frozenset()) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+def _describe(path, *, trust=frozenset()) -> Iterable[tuple[tuple[str, ...], NodeInfo, Any]]:
     """Every node from one scan; the file is loaded only for dates, decimals and skipped bytes, which show
     their loaded value."""
     with open(path, "rb") as file:
         root = _scan(file, trust)
     loaded = cache(lambda: _load(path, trust))
 
-    def walk(node, key, ancestors):
+    def walk(node, names, ancestors):
         kind = _kind(node)
         info = _info(node, kind)
         if kind == "scalar" and not _plain(node):
-            node = _path_get(loaded(), key or "")
-        yield key, info, node if kind == "scalar" else None
+            node = _path_get(loaded(), names)
+        yield names, info, node if kind == "scalar" else None
         if info.children and id(node) not in ancestors:
             for name, child in _group_entries(node):
-                yield from walk(child, _child_key(key, name), ancestors | {id(node)})
+                yield from walk(child, (*names, str(name)), ancestors | {id(node)})
 
-    yield from walk(root, None, frozenset())
+    yield from walk(root, (), frozenset())
 
 
 def pickle_reader(*, trust=None) -> Reader:

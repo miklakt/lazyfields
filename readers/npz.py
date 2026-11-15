@@ -17,12 +17,13 @@ def _npz_describe(path):
                 header = npy_format.read_array_header_1_0 if version == (1, 0) else npy_format.read_array_header_2_0
                 shape, _, dtype = header(file)
                 if dtype.hasobject: raise ValueError("NPZ object arrays are not supported.")
+                names = (member.filename[:-4],)
                 if shape == ():
                     file.seek(0)
-                    entries.append((member.filename[:-4], NodeInfo("scalar"), _normalize(npy_format.read_array(file))))
+                    entries.append((names, NodeInfo("scalar"), _normalize(npy_format.read_array(file))))
                 else:
-                    entries.append((member.filename[:-4], NodeInfo("dataset", dtype=str(dtype), shape=shape), None))
-    yield None, NodeInfo("group", tuple(name for name, _, _ in entries)), None
+                    entries.append((names, NodeInfo("dataset", dtype=str(dtype), shape=shape), None))
+    yield (), NodeInfo("group", tuple(name for (name,), _, _ in entries)), None
     yield from entries
 
 
@@ -31,9 +32,9 @@ def _npz_load(path):
         return {key: _normalize(archive[key]) for key in archive.files}
 
 
-def _npz_read(path, key, selection=None):
+def _npz_read(path, names, selection=None):
     with np.load(path, allow_pickle=False) as archive:
-        value = archive[key]
+        value = archive["/".join(names)]  # Flat: one name, which may hold "/".
         if selection is not None: value = value[selection]
         return _normalize(value)
 

@@ -92,6 +92,11 @@ alpha.info()                             # metadata only
 Paths in `[]` may also be `PurePath` objects, so
 `fs[PurePosixPath("metadata") / "alpha.json" / "coefficients", 0]` reads the same element.
 
+A name inside a file that holds `/` or `~` is written escaped in paths, as JSON
+Pointer (RFC 6901) does: `~` as `~0`, then `/` as `~1`. A JSON key `"a/b"` is listed
+as `a~1b` and read with `fs["file.json/a~1b"]`, while `fs["file.json/a/b"]` reads key
+`b` inside group `a`.
+
 The reader is inferred from the filename unless supplied explicitly. Neither
 `from_file` nor mounting reads file contents. `FileSystem(paths, relative_to=root)`
 is shorthand for wrapping and mounting each relative filename this way. Repeated

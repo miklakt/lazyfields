@@ -56,7 +56,8 @@ def _pdb_load(path):
     return {**_pdb_metadata(path), **columns, "bonds": _pdb_bonds(path)}
 
 
-def _pdb_read(path, key, selection=None):
+def _pdb_read(path, names, selection=None):
+    key = "/".join(names)
     if key in _PDB_COLUMNS:
         with Path(path).open() as file:
             value = [_pdb_value(line, _PDB_COLUMNS[key]) for line in file if line[:6].strip() in {"ATOM", "HETATM"}]
@@ -67,9 +68,9 @@ def _pdb_read(path, key, selection=None):
 
 def _pdb_describe(path):
     metadata, columns = _pdb_metadata(path), (*_PDB_COLUMNS, "bonds")
-    yield None, NodeInfo("group", (*metadata, *columns)), None
-    yield from ((key, NodeInfo("scalar"), value) for key, value in metadata.items())
-    yield from ((key, NodeInfo("dataset"), None) for key in columns)
+    yield (), NodeInfo("group", (*metadata, *columns)), None
+    yield from (((name,), NodeInfo("scalar"), value) for name, value in metadata.items())
+    yield from (((name,), NodeInfo("dataset"), None) for name in columns)
 
 
 PROTEIN_DATA_BANK = Reader(_pdb_load, _pdb_read, describe=_pdb_describe, suffixes=(".pdb", ".ent"), format="pdb")

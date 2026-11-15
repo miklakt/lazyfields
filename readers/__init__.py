@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib, logging, shutil, sys, tarfile, warnings, zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, time, timedelta
 from decimal import Decimal
 from numbers import Number
@@ -68,23 +68,39 @@ def value_info(value: Any) -> NodeInfo:
     return NodeInfo(kind)
 
 
-def _child_key(key: str | None, name: Any) -> str:
-    return f"{key}/{name}" if key else str(name)
+_warned_slash = False  # A name holding "/" is warned about once, however many there are.
 
 
-def _describe_value(value: Any, key: str | None = None, depth: int | None = None):
-    """(key, info, scalar value or None) for value and its descendants, depth levels down or all.
+def _segment(name: str) -> str:
+    """A name as one path segment, escaped as JSON Pointer does (RFC 6901): "~" as "~0", then "/" as "~1"."""
+    segment = name.replace("~", "~0").replace("/", "~1")
+    global _warned_slash
+    if "/" in name and not _warned_slash:
+        _warned_slash = True
+        warnings.warn(f"Name {name!r} holds '/', which separates path segments; it is read as {segment!r}, "
+                      "with '/' escaped as '~1'. Names without '/' are easier to address. "
+                      "Further such names are not reported.", stacklevel=2)
+    return segment
+
+
+def _names(key: str | None) -> tuple[str, ...]:
+    """The names a path's segments stand for: _segment reversed."""
+    return tuple(part.replace("~1", "/").replace("~0", "~") for part in (key or "").split("/") if part)
+
+
+def _describe_value(value: Any, depth: int | None = None):
+    """(names, info, scalar value or None) for value and its descendants, depth levels down or all.
 
     Nodes at the depth limit are given their kind only; a group containing itself is not entered again.
     """
-    def walk(value, key, depth, ancestors):
+    def walk(value, names, depth, ancestors):
         info = value_info(value) if depth != 0 else NodeInfo(value_kind(value))
-        yield key, info, value if info.kind == "scalar" else None
+        yield names, info, value if info.kind == "scalar" else None
         if info.kind == "group" and depth != 0 and id(value) not in ancestors:
             for name, item in _group_entries(value):
-                yield from walk(item, _child_key(key, name), depth and depth - 1, ancestors | {id(value)})
+                yield from walk(item, (*names, str(name)), depth and depth - 1, ancestors | {id(value)})
 
-    return walk(value, key, depth, frozenset())
+    return walk(value, (), depth, frozenset())
 
 
 @dataclass(frozen=True)
@@ -153,10 +169,10 @@ def _open_hdf5(path: str | Path) -> Any:
 
 
 @contextmanager
-def _hdf5_node(path: str | Path, key: str | None = None) -> Iterator[Any]:
+def _hdf5_node(path: str | Path, names: tuple[str, ...] = ()) -> Iterator[Any]:
     """Open an HDF5 file and yield the selected node."""
     with _open_hdf5(path) as file:
-        yield file[key] if key else file
+        yield file["/".join(names)] if names else file  # HDF5 names never hold "/" themselves.
 
 
 def _read(node: Any) -> Any:
@@ -168,8 +184,8 @@ def _hdf5_load(path: str | Path) -> Mapping[str, Any]:
     with _hdf5_node(path) as file: return _read(file)
 
 
-def hdf5_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
-    with _hdf5_node(path, key) as node:
+def hdf5_get(path: str | Path, names: tuple[str, ...], selection: Any | None = None) -> Any:
+    with _hdf5_node(path, names) as node:
         if selection is None:
             return _read(node)
         if isinstance(node, _h5().Dataset):
@@ -184,25 +200,25 @@ def _hdf5_kind(node: Any) -> NodeKind:
     return "group" if isinstance(node, _h5().Group) else "scalar" if node.shape == () else "dataset"
 
 
-def hdf5_describe(path: str | Path) -> Iterable[tuple[str | None, NodeInfo, Any]]:
-    def walk(node, key, ancestors):
+def hdf5_describe(path: str | Path) -> Iterable[tuple[tuple[str, ...], NodeInfo, Any]]:
+    def walk(node, names, ancestors):
         kind = _hdf5_kind(node)
         if kind == "group":
-            yield key, NodeInfo(kind, tuple(node.keys())), None
+            yield names, NodeInfo(kind, tuple(node.keys())), None
             if node.id not in ancestors:  # A hard link back to an ancestor is listed, not entered.
                 for name, child in node.items():
-                    yield from walk(child, _child_key(key, name), ancestors | {node.id})
+                    yield from walk(child, (*names, name), ancestors | {node.id})
         elif kind == "dataset":
-            yield key, NodeInfo(kind, dtype=str(node.dtype), shape=node.shape), None
+            yield names, NodeInfo(kind, dtype=str(node.dtype), shape=node.shape), None
         else:
-            yield key, NodeInfo(kind), _dataset_value(node)
+            yield names, NodeInfo(kind), _dataset_value(node)
 
     with _open_hdf5(path) as file:
-        yield from walk(file, None, frozenset())
+        yield from walk(file, (), frozenset())
 
 
-def _path_get(value: Any, key: str) -> Any:
-    for part in filter(None, key.split("/")):
+def _path_get(value: Any, names: Iterable[str]) -> Any:
+    for part in names:
         quoted = len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}
         if quoted: part = part[1:-1]
         try:
@@ -225,14 +241,18 @@ def _check_key(key: Any) -> None:
 
 @dataclass(frozen=True)
 class View:
-    """Interprets one object: its value, and the kinds, children and scalar values of the nodes in it."""
+    """Interprets one object: its value, and the kinds, children and scalar values of the nodes in it.
+
+    Keys are paths: "/"-joined segments, a name holding "/" or "~" escaped as in JSON Pointer (RFC 6901).
+    read and describe deal in the object's own names instead, a node's as a tuple: () for the root.
+    """
 
     # Returns the object's complete value
     load: Callable[..., Any]
-    # Optional read(obj, key, selection): one key or selection directly, without loading everything
+    # Optional read(obj, names, selection): one node or selection directly, without loading everything
     read: Callable[..., Any] | None = None
-    # Optional describe(obj): every node in one pass, as nodes() gives them, without loading the data.
-    describe: Callable[..., Iterable[tuple[str | None, NodeInfo, Any]]] | None = field(default=None, kw_only=True)
+    # Optional describe(obj): every node in one pass as (names, info, scalar value or None), without loading the data.
+    describe: Callable[..., Iterable[tuple[tuple[str, ...], NodeInfo, Any]]] | None = field(default=None, kw_only=True)
     # Format of the object's root, such as "pdb".
     format: str | None = field(default=None, kw_only=True, compare=False)
 
@@ -241,20 +261,34 @@ class View:
         _check_key(key)
         if selection is not None and key is None:
             raise ValueError("selection requires a single key.")
-        if key is None: return self.load(obj)
-        if self.read is not None: return self.read(obj, key, selection)
-        value = _path_get(self.load(obj), key)
+        return self._get(obj, _names(key), selection)
+
+    def nodes(self, obj: Any, key: str | None = None,
+              depth: int | None = None) -> Iterable[tuple[str | None, NodeInfo, Any]]:
+        """Nodes as (key, info, scalar value or None), each parent before its children: all of the object's, or
+        without describe, those of the value at key, depth levels down. Children are listed as path segments.
+
+        A dataset's info may leave dtype and shape out, for reading its value to tell.
+        """
+        whole = self.describe is not None or key is None and depth is None
+        entries = self._entries(obj) if whole else _describe_value(self.get(obj, key), depth)
+        prefix = () if whole else _names(key)
+        for names, info, value in entries:
+            children = tuple(map(_segment, info.children))
+            info = info if children == info.children else replace(info, children=children)
+            yield "/".join(map(_segment, prefix + tuple(names))) or None, info, value
+
+    def _get(self, obj: Any, names: tuple[str, ...], selection: Any | None = None) -> Any:
+        if not names: return self.load(obj)
+        if self.read is not None: return self.read(obj, names, selection)
+        value = _path_get(self.load(obj), names)
         if isinstance(selection, tuple) and not (hasattr(value, "shape") and getattr(value, "dtype", object) != object):
             # Only a real array already supports indexing by a tuple of slices, one per axis; anything
             # else - a JSON list, a DataFrame missing a single dtype - needs converting to one first.
             value = as_array(value)
         return value if selection is None else value[selection]
 
-    def nodes(self, obj: Any) -> Iterable[tuple[str | None, NodeInfo, Any]]:
-        """Every node as (key, info, scalar value or None): the root as key None, each parent before its children.
-
-        A dataset's info may leave dtype and shape out, for reading its value to tell.
-        """
+    def _entries(self, obj: Any) -> Iterable[tuple[tuple[str, ...], NodeInfo, Any]]:
         return self.describe(obj) if self.describe is not None else _describe_value(self.load(obj))
 
 
@@ -419,12 +453,13 @@ def _archive_load(path: str | Path) -> Mapping[str, Any]:
     with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).load(inner_path)
 
 
-def archive_get(path: str | Path, key: str, selection: Any | None = None) -> Any:
-    with unpacked_archive_member(path) as inner_path: return require_reader(inner_path).get(inner_path, key, selection)
+def archive_get(path: str | Path, names: tuple[str, ...], selection: Any | None = None) -> Any:
+    with unpacked_archive_member(path) as inner_path:
+        return require_reader(inner_path)._get(inner_path, names, selection)
 
 
-def archive_describe(path: str | Path) -> Iterable[tuple[str | None, NodeInfo, Any]]:
-    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path).nodes(inner_path)
+def archive_describe(path: str | Path) -> Iterable[tuple[tuple[str, ...], NodeInfo, Any]]:
+    with unpacked_archive_member(path) as inner_path: yield from require_reader(inner_path)._entries(inner_path)
 
 
 from .pickled import PICKLE, pickle_reader  # noqa: E402  Builds on the names above.
