@@ -58,13 +58,31 @@ def _sorted(df, levels):
         return df.iloc[sort(key=lambda s: s.astype(str) if s.dtype == object else s).index]
 
 
+def _boundaries(df, levels):
+    """Per row, the first sort level whose value differs from the row before, or None; levels whose groups,
+    within those of the levels before, are all single rows mark nothing, since every row would be marked."""
+    if not levels or len(df) < 2:
+        return [None] * len(df)
+    # As text, since lists cannot be compared directly.
+    keys = pd.DataFrame({level: (df.index.to_flat_index() if column == "#0" else df[column]).astype(str).to_numpy()
+                         for level, column in enumerate(levels)})
+    changed = (keys != keys.shift()).to_numpy()[1:]
+    depth = next((level for level in range(len(levels)) if changed[:, :level + 1].any(axis=1).all()), len(levels))
+    return [None] + [next((level for level in range(depth) if row[level]), None) for row in changed]
+
+
 def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
                  methods=DEFAULT_METHODS, view: dict | None = None):
     """Show a table, or its pickle, with filtering and sorting; browse the selected row's group below.
 
     The first column is the index. Shift+clicking a heading, or a column in the Columns dialog,
-    cycles its sort level ▲, ▼, off; each level sorts within the groups of the levels before it,
-    and the first level's groups are shaded alternately.
+    cycles its sort level ▲, ▼, off, a new level coming last; each level sorts within the groups
+    of the levels before it. Lines separate the groups of each level, the first level's the strongest.
+
+    Clicking a heading selects its column alone, Ctrl+click adds or removes it, and Esc clears the
+    column and row selection; Alt+←/→ moves the selected columns, as Alt+↑/↓ does in the Columns
+    dialog. Right-clicking a heading selects its column unless it is already selected, then offers
+    these for the selection, with their shortcuts.
 
     Right-clicking runs a registered row method on the selected rows and shows its result; the
     Table menu runs a table method on the current view: the filtered rows in shown order, with
@@ -107,20 +125,70 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     table = ttk.Treeview(top, columns=columns, show="tree headings")
     scroll = ttk.Scrollbar(top, orient="vertical", command=table.yview)
     xscroll = ttk.Scrollbar(top, orient="horizontal", command=table.xview)
-    table.configure(yscrollcommand=scroll.set, xscrollcommand=xscroll.set)
+    table.configure(yscrollcommand=lambda *view: (scroll.set(*view), draw_lines()), xscrollcommand=xscroll.set)
     for heading in headings:
         table.column(heading, stretch=False)  # Stretching columns would never overflow, so nothing to scroll.
     style = ttk.Style(window)
     field, text = (window.winfo_rgb(style.lookup("Treeview", option) or default)
                    for option, default in (("fieldbackground", "white"), ("foreground", "black")))
-    # Shaded rows are a tenth of the way from the theme's background to its text colour.
-    table.tag_configure("shaded", background="#" + "".join(f"{(9 * a + b) // 10 >> 8:02x}" for a, b in zip(field, text)))
+
+    def blend(tenths):
+        """A colour tenths of the way from the theme's background to its text colour."""
+        return "#" + "".join(f"{((10 - tenths) * a + tenths * b) // 10 >> 8:02x}" for a, b in zip(field, text))
+
+    state = {"df": reference_df, "sort": {}, "filter": "", "saved": None}
+    lines = []  # Frames over the table marking group boundaries, reused as it scrolls.
+
+    def draw_lines():
+        """Line the top of each shown row that starts a group: Treeview has no row borders, so frames overlay it."""
+        boundaries = state.get("boundaries", ())
+        count = len(boundaries)
+        first, last = table.yview()
+        drawn = 0
+        for position in range(int(first * count), min(count, int(last * count) + 2)):
+            level = boundaries[position]
+            box = level is not None and table.bbox(str(position))
+            if not box:
+                continue
+            if drawn == len(lines):
+                lines.append(tk.Frame(table, borderwidth=0, highlightthickness=0))
+            lines[drawn].configure(background=blend(6 if level == 0 else 3), height=2 if level == 0 else 1)
+            lines[drawn].place(x=0, y=box[1] - 1, relwidth=1)
+            drawn += 1
+        for line in lines[drawn:]:
+            line.place_forget()
+
+    table.bind("<Configure>", lambda event: table.after_idle(draw_lines), add="+")
     xscroll.pack(side="bottom", fill="x")
     scroll.pack(side="right", fill="y")
     table.pack(fill="both", expand=True)
 
     visible, order = set(columns), list(columns)
     chosen = []  # Headings selected by clicking, in the order selected; "#0" is the index.
+
+    def move_column(column, neighbours, step):
+        """Move column past its neighbour step away in neighbours, a part of order; whether it moved."""
+        position = neighbours.index(column) + step
+        if not 0 <= position < len(neighbours):
+            return False
+        order.remove(column)
+        order.insert(order.index(neighbours[position]) + (step > 0), column)
+        return True
+
+    def chosen_positions():
+        """The shown positions of the selected columns, in order, and how many columns show; the index has none."""
+        shown = [column for column in order if column in visible]
+        return sorted(shown.index(column) for column in chosen if column in shown), len(shown)
+
+    def move_chosen(step):
+        """Move the selected columns one shown column left or right together."""
+        shown = [column for column in order if column in visible]
+        moving = [shown[position] for position in chosen_positions()[0]]
+        for column in moving[::-1] if step > 0 else moving:
+            if not move_column(column, [column for column in order if column in visible], step):
+                break  # The leading one is at the end; the rest stay beside it.
+        show_columns()
+        return "break"  # Not also the Treeview's horizontal scroll.
 
     def show_columns():
         chosen[:] = [column for column in chosen if column == "#0" or column in visible]  # Hidden: no longer selected.
@@ -166,12 +234,9 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
             show_columns()
 
         def move(step):
-            """Move the focused column past its neighbour in the list, keeping its place in the order."""
+            """Move the focused column past its neighbour in the list."""
             position = choices.index("active")
-            if 0 <= position + step < len(shown):
-                column = shown[position]
-                order.remove(column)
-                order.insert(order.index(shown[position + step]) + (step > 0), column)
+            if position < len(shown) and move_column(shown[position], shown, step):
                 refresh(active=position + step)
             return "break"  # Not also the plain arrow's focus move.
 
@@ -218,8 +283,6 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     split.add(top, weight=1)
     split.add(bottom, weight=2)
 
-    state = {"df": reference_df, "sort": {}, "filter": "", "saved": None}
-
     def save_view():
         """Save the view at every change, so a killed or suspended browser loses nothing.
 
@@ -247,15 +310,6 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         number = list(levels).index(column) + 1 if len(levels) > 1 else ""
         return f"{text} {'▲' if levels[column] else '▼'}{number}"
 
-    def shading(shown):
-        """Whether each row is shaded: the groups of the first sort level alternate."""
-        if not state["sort"]:
-            return [False] * len(shown)
-        column = next(iter(state["sort"]))
-        # As text, since lists cannot be compared directly.
-        values = pd.Series((shown.index.to_flat_index() if column == "#0" else shown[column]).astype(str).to_numpy())
-        return ((values != values.shift()).cumsum() % 2 == 1).tolist()
-
     def render():
         """Show the filtered rows in sort order, keeping the selected and focused rows."""
         paths = state.get("shown", reference_df.head(0))["lf_path"]
@@ -263,17 +317,18 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         focused = paths.iloc[int(focused)] if focused else None
         df = _sorted(state["df"], state["sort"])
         shown = state["shown"] = df.head(max_rows)
+        state["boundaries"] = _boundaries(shown, state["sort"])
         table.delete(*table.get_children())
         rows = shown[columns].itertuples(index=False, name=None)
-        for position, (index, row, shaded) in enumerate(zip(shown.index, rows, shading(shown))):
-            table.insert("", "end", iid=str(position), text=_cell(index), tags="shaded" if shaded else "",
-                         values=[_cell(value) for value in row])
+        for position, (index, row) in enumerate(zip(shown.index, rows)):
+            table.insert("", "end", iid=str(position), text=_cell(index), values=[_cell(value) for value in row])
         items = {path: str(position) for position, path in enumerate(shown["lf_path"])}
         table.selection_set([items[path] for path in selected if path in items])
         if focused in items:
             table.focus(items[focused])
         more = f" (showing {max_rows})" if len(df) > max_rows else ""
         status.configure(text=f"{len(df)} / {len(reference_df)} rows{more}")
+        table.after_idle(draw_lines)
 
     def fit_columns(limit=300):
         """Size each column to its heading and longest shown cell, up to limit pixels."""
@@ -284,7 +339,8 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         for heading in headings:
             values = shown.index if heading == "#0" else shown[heading]
             longest = max(map(_cell, values), key=len, default="")  # Measuring every cell is slow.
-            width = max(heading_font.measure(f"⑳ {label(heading)} ▼9"), cell.measure(longest)) + 24  # Padding, tree indent.
+            # 24 pixels for padding and the tree indent.
+            width = max(heading_font.measure(f"⑳ {label(heading)} ▼9"), cell.measure(longest)) + 24
             table.column(heading, width=min(width, limit))
 
     def apply_filter(event=None):
@@ -344,6 +400,7 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
         """Select columns, in the order given, instead of rows: opening them uses every filtered row."""
         chosen[:] = selection
         table.selection_remove(table.selection())
+        table.focus_set()  # For Alt+←/→.
         show_headings()
 
     def open_row(event=None):
@@ -387,18 +444,36 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     window.configure(menu=menubar)
 
     def open_header_menu(display, x, y):
+        """The heading's menu, for the selection: right-clicking a column outside it selects that column alone."""
         column = heading_at(display)
         if column not in chosen:
             choose([column])
+        hidable = [column for column in chosen if column != "#0"]  # The index always shows.
 
         def hide():
-            visible.discard(column)
+            visible.difference_update(hidable)
             show_columns()
 
         _clear_menu(header_menu)
-        if column != "#0":  # The index always shows.
-            header_menu.add_command(label="Hide", command=hide)
+        if hidable:
+            header_menu.add_command(label="Hide" if len(hidable) == 1 else f"Hide {len(hidable)} columns", command=hide)
         header_menu.add_command(label="Open selected columns", command=open_columns)
+        header_menu.add_separator()
+        header_menu.add_command(label="Select only this column", accelerator="Click", command=lambda: choose([column]),
+                                state="normal" if len(chosen) > 1 else "disabled")
+        header_menu.add_command(label="Remove from selection", accelerator="Ctrl+Click",
+                                command=lambda: choose([other for other in chosen if other != column]))
+        header_menu.add_command(label="Clear selection", accelerator="Esc", command=lambda: choose([]))
+        header_menu.add_separator()
+        sorting = {None: "Sort ascending", True: "Sort descending", False: "Remove from sort"}
+        header_menu.add_command(label=sorting[state["sort"].get(column)], accelerator="Shift+Click",
+                                command=lambda: cycle_sort(column))
+        header_menu.add_separator()
+        positions, count = chosen_positions()
+        for text, key, step, possible in (("Move left", "Alt+←", -1, positions and positions[0] > 0),
+                                          ("Move right", "Alt+→", 1, positions and positions[-1] < count - 1)):
+            header_menu.add_command(label=text, accelerator=key, command=lambda step=step: move_chosen(step),
+                                    state="normal" if possible else "disabled")
         header_menu.tk_popup(x, y)
 
     def open_columns():
@@ -441,6 +516,9 @@ def browse_table(reference_df: pd.DataFrame | str | Path, max_rows: int = 5000,
     entry.bind("<Return>", apply_filter)
     table.bind("<<TreeviewSelect>>", open_row)
     table.bind("<Button-1>", click_heading)
+    table.bind("<Alt-Left>", lambda event: move_chosen(-1))
+    table.bind("<Alt-Right>", lambda event: move_chosen(1))
+    window.bind("<Escape>", lambda event: choose([]))  # Columns and rows; the sort stays.
     bind_context_menu(table, open_menu, on_heading=open_header_menu)
     apply_view(view)
     render()
